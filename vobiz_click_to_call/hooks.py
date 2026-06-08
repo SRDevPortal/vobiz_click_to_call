@@ -23,6 +23,7 @@ doc_events = {
     },
     "Vobiz Call Log": {
         "on_trash": "vobiz_click_to_call.services.delete_cleanup.cleanup_call_log_reverse_links",
+        "on_update": "vobiz_click_to_call.services.ai.on_vobiz_call_log_update",
     },
 }
 

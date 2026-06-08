@@ -10,6 +10,7 @@ DISPOSITION = APP / "services" / "disposition.py"
 AI = APP / "services" / "ai.py"
 SETTINGS = APP / "services" / "settings.py"
 CONSOLE = APP / "api" / "console.py"
+HOOKS = APP / "hooks.py"
 
 
 class TestSRLeadDispositionIntegration(unittest.TestCase):
@@ -20,6 +21,7 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         cls.ai = AI.read_text(encoding="utf-8")
         cls.settings = SETTINGS.read_text(encoding="utf-8")
         cls.console = CONSOLE.read_text(encoding="utf-8")
+        cls.hooks = HOOKS.read_text(encoding="utf-8")
 
     def test_sr_lead_disposition_is_source_of_truth(self):
         self.assertIn('SR_LEAD_DISPOSITION = "SR Lead Disposition"', self.lead_disposition)
@@ -40,6 +42,13 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         self.assertIn("sync_call_disposition_to_lead(doc, disposition)", self.ai)
         self.assertIn("doc.disposition = disposition", self.ai)
         self.assertIn("settings.auto_apply_ai_disposition", self.ai)
+
+    def test_vobiz_ai_receive_transcript_can_trigger_click_to_call_ai(self):
+        self.assertIn("on_update", self.hooks)
+        self.assertIn("vobiz_click_to_call.services.ai.on_vobiz_call_log_update", self.hooks)
+        self.assertIn("def maybe_enqueue_from_vobiz_ai_update", self.ai)
+        self.assertIn('doc.get("transcription_text")', self.ai)
+        self.assertIn("enqueue_ai_disposition(doc.name, commit=False)", self.ai)
 
 
 if __name__ == "__main__":

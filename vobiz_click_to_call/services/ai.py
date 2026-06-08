@@ -19,7 +19,7 @@ from vobiz_click_to_call.services.settings import (
 )
 
 
-def enqueue_ai_disposition(call_log: str) -> None:
+def enqueue_ai_disposition(call_log: str, commit: bool = True) -> None:
     settings = get_settings()
     if not settings.enable_ai_disposition:
         return
@@ -33,7 +33,8 @@ def enqueue_ai_disposition(call_log: str) -> None:
         },
         update_modified=False,
     )
-    frappe.db.commit()
+    if commit:
+        frappe.db.commit()
 
     try:
         frappe.enqueue(
@@ -41,6 +42,7 @@ def enqueue_ai_disposition(call_log: str) -> None:
             queue="short",
             timeout=180,
             call_log=call_log,
+            enqueue_after_commit=not commit,
         )
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Vobiz AI disposition enqueue failed")
@@ -53,9 +55,14 @@ def classify_call_log(call_log: str) -> None:
 
     settings = get_settings()
     doc = frappe.get_doc("Vobiz Call Log", call_log)
-    if not settings.enable_ai_disposition or not doc.transcript_text:
+    transcript = get_call_transcript(doc)
+    if not settings.enable_ai_disposition or not transcript:
         return
 
+    if not doc.get("transcript_text") and frappe.get_meta("Vobiz Call Log").has_field("transcript_text"):
+        doc.transcript_text = transcript
+    if frappe.get_meta("Vobiz Call Log").has_field("transcript_status"):
+        doc.transcript_status = doc.transcript_status or "Completed"
     doc.ai_disposition_status = "Processing"
     doc.ai_error_message = ""
     doc.save(ignore_permissions=True)
@@ -174,8 +181,38 @@ Call status: {doc.status or ""}
 Duration seconds: {doc.duration or doc.recording_duration or ""}
 
 Transcript:
-{doc.transcript_text}
+{get_call_transcript(doc)}
 """.strip()
+
+
+def on_vobiz_call_log_update(doc, method: str | None = None) -> None:
+    try:
+        maybe_enqueue_from_vobiz_ai_update(doc)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Vobiz click-to-call AI disposition hook failed")
+
+
+def maybe_enqueue_from_vobiz_ai_update(doc) -> None:
+    if not get_settings().enable_ai_disposition:
+        return
+    transcript = get_call_transcript(doc)
+    if not transcript:
+        return
+    if doc.get("ai_disposition_status") in {"Queued", "Processing", "Completed", "Review Required"}:
+        return
+
+    values = {"ai_disposition_status": "Queued", "ai_error_message": ""}
+    meta = frappe.get_meta("Vobiz Call Log")
+    if not doc.get("transcript_text") and meta.has_field("transcript_text"):
+        values["transcript_text"] = transcript
+    if meta.has_field("transcript_status") and not doc.get("transcript_status"):
+        values["transcript_status"] = "Completed"
+    frappe.db.set_value("Vobiz Call Log", doc.name, values, update_modified=False)
+    enqueue_ai_disposition(doc.name, commit=False)
+
+
+def get_call_transcript(doc) -> str:
+    return (doc.get("transcript_text") or doc.get("transcription_text") or "").strip()
 
 
 def parse_response_json(data: dict[str, Any]) -> dict[str, Any]:
