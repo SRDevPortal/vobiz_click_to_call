@@ -5,8 +5,6 @@ app_description = "Vobiz.ai click-to-call integration for Frappe/ERPNext"
 app_email = "webdevelopersriaas@gmail.com"
 app_license = "MIT"
 
-required_apps = ["vobiz_ai"]
-
 after_install = "vobiz_click_to_call.install.after_install"
 after_migrate = "vobiz_click_to_call.install.after_migrate"
 

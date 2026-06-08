@@ -1,15 +1,24 @@
 from __future__ import annotations
 
 import frappe
+from frappe import _
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 
 def after_install():
+    ensure_dependencies()
     ensure_defaults()
 
 
 def after_migrate():
+    ensure_dependencies()
     ensure_defaults()
+
+
+def ensure_dependencies():
+    installed_apps = set(frappe.get_installed_apps())
+    if "vobiz_ai" not in installed_apps:
+        frappe.throw(_("Install Vobiz AI before installing Vobiz Click To Call."))
 
 
 def ensure_defaults():
