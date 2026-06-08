@@ -86,6 +86,7 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("matching_active_call(row)", update_source)
         self.assertIn("Stop Call", update_source)
         self.assertIn("Start Call", update_source)
+        self.assertIn(".btn-modal-primary", update_source)
         self.assertIn("btn-danger", update_source)
         self.assertIn("update_workdesk_header_call_action", update_source)
         self.assertIn('data-workdesk-action="call"', self.source)

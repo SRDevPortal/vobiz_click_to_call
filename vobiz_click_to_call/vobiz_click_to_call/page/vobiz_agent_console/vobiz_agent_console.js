@@ -897,7 +897,8 @@ class VobizAgentConsole {
 
 		const call = this.matching_active_call(row);
 		const isActive = Boolean(call && call.name && !this.is_terminal_status(call.status));
-		dialog.get_primary_btn()
+		const $buttons = dialog.get_primary_btn().add(dialog.$wrapper.find('.btn-modal-primary'));
+		$buttons
 			.toggleClass('btn-primary', !isActive)
 			.toggleClass('btn-danger', isActive)
 			.prop('disabled', false)
