@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import ipaddress
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import frappe
+from frappe import _
 
 from vobiz_click_to_call.services.numbers import normalize_phone_number
 
@@ -112,7 +114,9 @@ def get_webhook_base_url(settings=None) -> str:
         or frappe.utils.get_url()
         or ""
     )
-    return normalize_public_callback_base_url(base_url)
+    base_url = normalize_public_callback_base_url(base_url)
+    validate_public_callback_base_url(base_url)
+    return base_url
 
 
 def normalize_public_callback_base_url(base_url: str) -> str:
@@ -135,6 +139,28 @@ def normalize_public_callback_base_url(base_url: str) -> str:
         base_url = urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
 
     return base_url.rstrip("/")
+
+
+def validate_public_callback_base_url(base_url: str) -> None:
+    parsed = urlsplit(base_url or "")
+    hostname = parsed.hostname or ""
+    if parsed.scheme != "https" or not hostname:
+        frappe.throw(
+            _(
+                "Vobiz Webhook Base URL must be a public HTTPS URL. "
+                "Set Vobiz Settings > Webhook Base URL, for example https://dev-sr.butest.tech."
+            )
+        )
+
+    if hostname in {"localhost", "127.0.0.1", "::1"} or hostname.endswith(".localhost") or hostname.endswith(".local"):
+        frappe.throw(_("Vobiz Webhook Base URL cannot be localhost or a private/internal host."))
+
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            frappe.throw(_("Vobiz Webhook Base URL must use a public internet reachable host."))
+    except ValueError:
+        pass
 
 
 def build_callback_url(method_path: str, call_log: str, token: str, settings=None) -> str:

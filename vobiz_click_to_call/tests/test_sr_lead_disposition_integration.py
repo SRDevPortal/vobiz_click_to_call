@@ -60,6 +60,14 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         self.assertIn('"read_only": 1', self.vobiz_settings_json)
         self.assertIn("Synced from active SR Lead Disposition", self.vobiz_settings_json)
         self.assertIn('"Vobiz Settings": "public/js/vobiz_settings.js"', self.hooks)
+        self.assertIn("validate_public_callback_base_url", self.vobiz_settings)
+
+    def test_callback_urls_require_public_https_base_url(self):
+        self.assertIn("def validate_public_callback_base_url", self.settings)
+        self.assertIn('parsed.scheme != "https"', self.settings)
+        self.assertIn("localhost", self.settings)
+        self.assertIn("ip.is_private", self.settings)
+        self.assertIn("Vobiz Webhook Base URL must be a public HTTPS URL", self.settings)
 
     def test_call_log_disposition_field_uses_sr_lead_disposition_selector(self):
         self.assertIn("ensure_vobiz_call_log_disposition_field()", self.install)

@@ -6,6 +6,7 @@ from frappe.model.document import Document
 
 from vobiz_click_to_call.services.ai import DEFAULT_AI_DISPOSITION_SYSTEM_PROMPT
 from vobiz_click_to_call.services.numbers import normalize_phone_number
+from vobiz_click_to_call.services.settings import normalize_public_callback_base_url, validate_public_callback_base_url
 
 
 class VobizSettings(Document):
@@ -19,6 +20,8 @@ class VobizSettings(Document):
             )
         self.allowed_doctypes = (self.allowed_doctypes or "CRM Lead\nContact\nPatient\nCustomer").strip()
         self.default_call_flow = self.default_call_flow or "Customer First"
+        if self.webhook_base_url:
+            self.webhook_base_url = normalize_public_callback_base_url(self.webhook_base_url)
         self.manual_disposition_options = (
             self.manual_disposition_options
             or "Connected\nNo Answer\nBusy\nFailed\nWrong Number\nNot Interested\nInterested\n"
@@ -59,6 +62,8 @@ class VobizSettings(Document):
 
         if not (self.default_caller_id or frappe.conf.get("vobiz_default_caller_id")):
             frappe.throw(_("Default Caller ID is required when Vobiz Settings is enabled."))
+
+        validate_public_callback_base_url(self.webhook_base_url or frappe.conf.get("vobiz_webhook_base_url") or frappe.utils.get_url())
 
     def sync_ai_disposition_options(self) -> list[str]:
         options = get_sr_lead_disposition_options()
