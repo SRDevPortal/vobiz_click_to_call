@@ -59,9 +59,10 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
 
     def test_call_log_disposition_field_uses_sr_lead_disposition_selector(self):
         self.assertIn("ensure_vobiz_call_log_disposition_field()", self.install)
-        self.assertIn('"Vobiz Call Log", "disposition", "fieldtype", "Link"', self.install)
-        self.assertIn('"Vobiz Call Log", "disposition", "options", "SR Lead Disposition"', self.install)
+        self.assertIn('"Vobiz Call Log", "disposition", "fieldtype", "Select"', self.install)
+        self.assertIn("get_vobiz_call_log_disposition_options", self.install)
         self.assertIn('"Vobiz Call Log", "disposition", "reqd", "0"', self.install)
+        self.assertIn("sync_call_log_disposition_options(disposition)", self.disposition)
 
     def test_ai_uses_existing_sr_lead_dispositions(self):
         self.assertIn("get_lead_disposition_rows(doc.reference_doctype, doc.reference_name)", self.ai)

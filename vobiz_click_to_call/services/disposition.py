@@ -40,6 +40,7 @@ def save_call_disposition(
     if allowed_dispositions and disposition not in allowed_dispositions:
         frappe.throw(_("Invalid disposition."))
 
+    sync_call_log_disposition_options(disposition)
     doc.disposition = disposition
     doc.disposition_notes = notes
     doc.follow_up_datetime = follow_up_datetime
@@ -74,6 +75,15 @@ def save_call_disposition(
         "dnd_marked": bool(doc.dnd_marked),
         "lead_sync": lead_sync,
     }
+
+
+def sync_call_log_disposition_options(disposition: str | None = None) -> None:
+    try:
+        from vobiz_click_to_call.install import ensure_vobiz_call_log_disposition_field
+
+        ensure_vobiz_call_log_disposition_field(extra_options=[disposition] if disposition else None)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Vobiz Call Log disposition selector sync failed")
 
 
 def assert_user_can_update_disposition(doc) -> None:

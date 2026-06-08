@@ -7,7 +7,7 @@ from typing import Any
 import frappe
 
 from vobiz_ai.api.call_log import sync_linked_summaries
-from vobiz_click_to_call.services.disposition import update_reference_call_metrics
+from vobiz_click_to_call.services.disposition import sync_call_log_disposition_options, update_reference_call_metrics
 from vobiz_click_to_call.services.lead_disposition import (
     get_lead_disposition_rows,
     sync_call_disposition_to_lead,
@@ -410,6 +410,7 @@ def apply_ai_result(call_log: str, result: dict[str, Any], settings=None) -> Non
     doc.ai_error_message = ""
     doc.ai_raw_json = json.dumps(result, indent=2, default=str)
     if auto_applied:
+        sync_call_log_disposition_options(disposition)
         doc.disposition = disposition
         doc.disposition_notes = _ai_disposition_notes(result)
         doc.follow_up_datetime = _safe_date(result.get("follow_up_date")) or doc.follow_up_datetime
