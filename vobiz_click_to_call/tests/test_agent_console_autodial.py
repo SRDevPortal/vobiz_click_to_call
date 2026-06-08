@@ -54,6 +54,19 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("lite: 1", select_row_source)
         self.assertIn("this.open_detail_dialog(row", call_row_source)
 
+    def test_details_button_shows_loader_and_blocks_repeat_clicks(self):
+        row_html_source = self.method_source("row_html", "update_selected_count")
+        call_row_source = self.method_source("call_row", "detail_key")
+        loading_source = self.method_source("set_detail_loading", "open_detail_dialog")
+
+        self.assertIn("detail_loading_key", self.source)
+        self.assertIn("fa-spinner fa-spin", row_html_source)
+        self.assertIn("disabled", row_html_source)
+        self.assertIn("if (this.state.detail_loading_key) return", call_row_source)
+        self.assertIn("this.set_detail_loading(row, true)", call_row_source)
+        self.assertIn("request.always(() => this.set_detail_loading(row, false))", call_row_source)
+        self.assertIn("this.render_queue()", loading_source)
+
     def test_workdesk_heavy_tabs_are_lazy_loaded(self):
         load_tab_source = self.method_source("load_workdesk_tab", "workdesk_lead_html")
 

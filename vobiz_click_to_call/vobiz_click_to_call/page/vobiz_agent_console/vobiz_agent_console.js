@@ -27,6 +27,7 @@ class VobizAgentConsole {
 			active_workdesk_key: null,
 			active_workdesk_body: null,
 			active_workdesk_row: null,
+			detail_loading_key: null,
 			workdesk_live_call: null,
 			workdesk_live_call_log: null,
 			workdesk_live_polling: false,
@@ -399,6 +400,7 @@ class VobizAgentConsole {
 	row_html(row) {
 		const initials = (row.title || row.name || '?').trim().slice(0, 1).toUpperCase();
 		const statusClass = String(row.status || '').split(' ')[0];
+		const loading = this.state.detail_loading_key === this.detail_key(row);
 		return `
 			<tr data-index="${row.index}" data-action="select-row">
 				<td><input type="checkbox" data-role="row-check"></td>
@@ -407,7 +409,11 @@ class VobizAgentConsole {
 				<td>${frappe.utils.escape_html(row.phone || '')}</td>
 				<td><span class="vobiz-status ${frappe.utils.escape_html(statusClass)}">${frappe.utils.escape_html(row.status || '')}</span></td>
 				<td>${frappe.utils.escape_html(row.next_action || '')}</td>
-				<td><button class="btn btn-xs btn-primary" data-action="call-row"><i class="fa fa-phone"></i> ${__('Details')}</button></td>
+				<td>
+					<button class="btn btn-xs btn-primary" data-action="call-row" ${loading ? 'disabled' : ''}>
+						<i class="fa ${loading ? 'fa-spinner fa-spin' : 'fa-phone'}"></i> ${loading ? __('Loading') : __('Details')}
+					</button>
+				</td>
 			</tr>
 		`;
 	}
@@ -668,16 +674,38 @@ class VobizAgentConsole {
 	call_row(index) {
 		const row = this.state.queue[index];
 		if (!row) return;
+		if (this.state.detail_loading_key) return;
 		this.state.selected = row;
 		this.render_focus(row);
-		frappe.call('vobiz_click_to_call.api.console.get_reference_context', {
-			reference_doctype: row.doctype,
-			reference_name: row.name,
-			lite: 1
-		}).then((r) => {
+		this.set_detail_loading(row, true);
+		const request = frappe.call({
+			method: 'vobiz_click_to_call.api.console.get_reference_context',
+			args: {
+				reference_doctype: row.doctype,
+				reference_name: row.name,
+				lite: 1
+			}
+		});
+		request.then((r) => {
 			this.state.context = r.message || {};
 			this.open_detail_dialog(row, r.message || {});
 		});
+		request.always(() => this.set_detail_loading(row, false));
+	}
+
+	detail_key(row) {
+		return row && row.doctype && row.name ? `${row.doctype}::${row.name}` : '';
+	}
+
+	set_detail_loading(row, loading) {
+		const key = this.detail_key(row);
+		if (!key) return;
+		if (loading) {
+			this.state.detail_loading_key = key;
+		} else if (this.state.detail_loading_key === key) {
+			this.state.detail_loading_key = null;
+		}
+		this.render_queue();
 	}
 
 	open_detail_dialog(row, context) {
