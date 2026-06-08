@@ -9,6 +9,9 @@ LEAD_DISPOSITION = APP / "services" / "lead_disposition.py"
 DISPOSITION = APP / "services" / "disposition.py"
 AI = APP / "services" / "ai.py"
 SETTINGS = APP / "services" / "settings.py"
+VOBIZ_SETTINGS = APP / "vobiz_click_to_call" / "doctype" / "vobiz_settings" / "vobiz_settings.py"
+VOBIZ_SETTINGS_JSON = APP / "vobiz_click_to_call" / "doctype" / "vobiz_settings" / "vobiz_settings.json"
+VOBIZ_SETTINGS_JS = APP / "public" / "js" / "vobiz_settings.js"
 CONSOLE = APP / "api" / "console.py"
 HOOKS = APP / "hooks.py"
 
@@ -20,6 +23,9 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         cls.disposition = DISPOSITION.read_text(encoding="utf-8")
         cls.ai = AI.read_text(encoding="utf-8")
         cls.settings = SETTINGS.read_text(encoding="utf-8")
+        cls.vobiz_settings = VOBIZ_SETTINGS.read_text(encoding="utf-8")
+        cls.vobiz_settings_json = VOBIZ_SETTINGS_JSON.read_text(encoding="utf-8")
+        cls.vobiz_settings_js = VOBIZ_SETTINGS_JS.read_text(encoding="utf-8")
         cls.console = CONSOLE.read_text(encoding="utf-8")
         cls.hooks = HOOKS.read_text(encoding="utf-8")
 
@@ -37,6 +43,16 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         self.assertIn("reference_name=doc.reference_name", self.disposition)
         self.assertIn("lead_status=lead_status", self.disposition)
         self.assertIn("lead_sync", self.disposition)
+
+    def test_vobiz_settings_ai_options_sync_from_sr_lead_disposition(self):
+        self.assertIn("self.sync_ai_disposition_options()", self.vobiz_settings)
+        self.assertIn("def get_sr_lead_disposition_options", self.vobiz_settings)
+        self.assertIn("get_lead_disposition_rows()", self.vobiz_settings)
+        self.assertIn("@frappe.whitelist()", self.vobiz_settings)
+        self.assertIn("sync_ai_disposition_options", self.vobiz_settings_js)
+        self.assertIn('"read_only": 1', self.vobiz_settings_json)
+        self.assertIn("Synced from active SR Lead Disposition", self.vobiz_settings_json)
+        self.assertIn('"Vobiz Settings": "public/js/vobiz_settings.js"', self.hooks)
 
     def test_ai_uses_existing_sr_lead_dispositions(self):
         self.assertIn("get_lead_disposition_rows(doc.reference_doctype, doc.reference_name)", self.ai)

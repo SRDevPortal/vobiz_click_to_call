@@ -15,7 +15,9 @@ app_include_js = [
     "public/js/call_log.js",
 ]
 
-doctype_js = {}
+doctype_js = {
+    "Vobiz Settings": "public/js/vobiz_settings.js",
+}
 
 doc_events = {
     "Issue": {

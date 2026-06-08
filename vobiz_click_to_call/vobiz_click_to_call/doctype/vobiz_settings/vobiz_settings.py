@@ -36,10 +36,7 @@ class VobizSettings(Document):
         self.transcription_type = self.transcription_type or "auto"
         self.openai_model = self.openai_model or "gpt-4.1-mini"
         self.ai_confidence_threshold = self.ai_confidence_threshold or 0.75
-        self.ai_disposition_options = (
-            self.ai_disposition_options
-            or "Interested\nNot Interested\nFollow Up\nCallback Requested\nWrong Number\nNo Requirement\nConverted\nComplaint\nDo Not Call\nUnknown"
-        )
+        self.sync_ai_disposition_options()
 
         if not self.enabled:
             return
@@ -58,3 +55,40 @@ class VobizSettings(Document):
 
         if not (self.default_caller_id or frappe.conf.get("vobiz_default_caller_id")):
             frappe.throw(_("Default Caller ID is required when Vobiz Settings is enabled."))
+
+    def sync_ai_disposition_options(self) -> list[str]:
+        options = get_sr_lead_disposition_options()
+        if options:
+            self.ai_disposition_options = "\n".join(options)
+        else:
+            self.ai_disposition_options = (
+                self.ai_disposition_options
+                or "Interested\nNot Interested\nFollow Up\nCallback Requested\nWrong Number\nNo Requirement\nConverted\nComplaint\nDo Not Call\nUnknown"
+            )
+        return options
+
+
+def get_sr_lead_disposition_options() -> list[str]:
+    try:
+        from vobiz_click_to_call.services.lead_disposition import get_lead_disposition_rows
+
+        rows = get_lead_disposition_rows()
+        return [row["name"] for row in rows if row.get("name")]
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Vobiz Settings SR Lead Disposition sync failed")
+        return []
+
+
+@frappe.whitelist()
+def sync_ai_disposition_options() -> dict:
+    if "System Manager" not in frappe.get_roles():
+        frappe.throw(_("Not permitted."))
+
+    settings = frappe.get_single("Vobiz Settings")
+    options = settings.sync_ai_disposition_options()
+    settings.save(ignore_permissions=True)
+    frappe.db.commit()
+    return {
+        "count": len(options),
+        "options": settings.ai_disposition_options or "",
+    }

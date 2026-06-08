@@ -283,10 +283,11 @@
   {
    "default": "Interested\nNot Interested\nFollow Up\nCallback Requested\nWrong Number\nNo Requirement\nConverted\nComplaint\nDo Not Call\nUnknown",
    "depends_on": "eval:doc.enable_ai_disposition",
-   "description": "One allowed disposition per line.",
+   "description": "Synced from active SR Lead Disposition records. Edit SR Lead Disposition to control AI choices.",
    "fieldname": "ai_disposition_options",
    "fieldtype": "Small Text",
-   "label": "Disposition Options"
+   "label": "Disposition Options",
+   "read_only": 1
   },
   {
    "default": "0",
