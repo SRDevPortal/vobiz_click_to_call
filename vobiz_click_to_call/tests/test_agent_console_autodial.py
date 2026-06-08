@@ -29,6 +29,13 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
             with self.subTest(status=status):
                 self.assertIn(f"'{status}'", self.source)
 
+    def test_api_terminal_statuses_include_vobiz_ai_canceled_spelling(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "api" / "call.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('"Canceled"', source)
+
     def test_final_autodial_call_clears_live_state_and_timer(self):
         finish_source = self.method_source("finish_auto_dial_call", "auto_call_outcome")
 

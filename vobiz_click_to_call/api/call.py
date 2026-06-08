@@ -41,7 +41,7 @@ PREFERRED_PHONE_FIELDS = (
     "alternate_phone",
 )
 
-TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled"}
+TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
 USER_SET_AVAILABILITY_STATUSES = {"Available", "Away", "Offline"}
 
 
@@ -262,7 +262,7 @@ def get_call_status(call_log: str) -> dict[str, Any]:
         "recording_status": doc.recording_status,
         "recording_error": doc.recording_error,
         "transcript_status": doc.transcript_status,
-        "transcript_text": doc.transcript_text,
+        "transcript_text": doc.transcript_text or doc.transcription_text,
         "transcript_error": doc.transcript_error,
         "ai_disposition_status": doc.ai_disposition_status,
         "ai_disposition": doc.ai_disposition,

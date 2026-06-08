@@ -50,6 +50,13 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         self.assertIn('doc.get("transcription_text")', self.ai)
         self.assertIn("enqueue_ai_disposition(doc.name, commit=False)", self.ai)
 
+    def test_vobiz_ai_provider_log_updates_restore_click_to_call_call(self):
+        self.assertIn("def sync_provider_update_to_click_to_call_log", self.ai)
+        self.assertIn('"source_app": "vobiz_click_to_call"', self.ai)
+        self.assertIn("restore_mapping_for_call_log(target)", self.ai)
+        self.assertIn("enqueue_ai_disposition(target, commit=False)", self.ai)
+        self.assertIn('"transcription_text"', self.ai)
+
 
 if __name__ == "__main__":
     unittest.main()

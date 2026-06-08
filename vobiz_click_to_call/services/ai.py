@@ -19,6 +19,9 @@ from vobiz_click_to_call.services.settings import (
 )
 
 
+TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
+
+
 def enqueue_ai_disposition(call_log: str, commit: bool = True) -> None:
     settings = get_settings()
     if not settings.enable_ai_disposition:
@@ -187,9 +190,109 @@ Transcript:
 
 def on_vobiz_call_log_update(doc, method: str | None = None) -> None:
     try:
+        sync_provider_update_to_click_to_call_log(doc)
+        restore_mapping_for_terminal_call(doc)
         maybe_enqueue_from_vobiz_ai_update(doc)
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Vobiz click-to-call AI disposition hook failed")
+
+
+def sync_provider_update_to_click_to_call_log(doc) -> None:
+    if doc.get("source_app") == "vobiz_click_to_call":
+        return
+    if not frappe.db.exists("DocType", "Vobiz Call Log"):
+        return
+
+    target = find_click_to_call_log_for_provider_update(doc)
+    if not target:
+        return
+
+    values = provider_update_values(doc)
+    if not values:
+        return
+
+    frappe.db.set_value("Vobiz Call Log", target, values, update_modified=False)
+    if values.get("status") in TERMINAL_STATUSES:
+        restore_mapping_for_call_log(target)
+    if get_call_transcript(doc):
+        enqueue_ai_disposition(target, commit=False)
+
+
+def find_click_to_call_log_for_provider_update(doc) -> str | None:
+    meta = frappe.get_meta("Vobiz Call Log")
+    for fieldname in ("call_uuid", "request_uuid", "recording_id", "transcription_id"):
+        value = doc.get(fieldname)
+        if not value or not meta.has_field(fieldname):
+            continue
+        rows = frappe.get_all(
+            "Vobiz Call Log",
+            filters={
+                "name": ["!=", doc.name],
+                "source_app": "vobiz_click_to_call",
+                fieldname: value,
+            },
+            pluck="name",
+            order_by="creation desc",
+            limit=1,
+        )
+        if rows:
+            return rows[0]
+    return None
+
+
+def provider_update_values(doc) -> dict[str, Any]:
+    meta = frappe.get_meta("Vobiz Call Log")
+    values: dict[str, Any] = {}
+    for fieldname in (
+        "event",
+        "status",
+        "call_status",
+        "dial_status",
+        "hangup_cause",
+        "error_message",
+        "end_time",
+        "duration",
+        "billsec",
+        "recording_url",
+        "recording_status",
+        "recording_id",
+        "recording_duration",
+        "recording_completed_at",
+        "transcription_id",
+        "transcription_duration_sec",
+        "sentiment",
+        "transcript_hash",
+    ):
+        value = doc.get(fieldname)
+        if value not in (None, "") and meta.has_field(fieldname):
+            values[fieldname] = value
+
+    transcript = get_call_transcript(doc)
+    if transcript:
+        if meta.has_field("transcript_text"):
+            values["transcript_text"] = transcript
+        if meta.has_field("transcription_text"):
+            values["transcription_text"] = transcript
+        if meta.has_field("transcript_status"):
+            values["transcript_status"] = "Completed"
+        if meta.has_field("transcript_received_at"):
+            values["transcript_received_at"] = doc.get("transcript_received_at") or frappe.utils.now()
+    return values
+
+
+def restore_mapping_for_terminal_call(doc) -> None:
+    if doc.get("status") not in TERMINAL_STATUSES:
+        return
+    restore_mapping_for_call_log(doc.name)
+
+
+def restore_mapping_for_call_log(call_log: str) -> None:
+    try:
+        from vobiz_click_to_call.api.call import restore_mapping_after_call
+
+        restore_mapping_after_call(call_log)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Vobiz click-to-call mapping restore failed")
 
 
 def maybe_enqueue_from_vobiz_ai_update(doc) -> None:
