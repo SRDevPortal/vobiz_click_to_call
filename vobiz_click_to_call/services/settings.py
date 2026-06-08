@@ -66,12 +66,34 @@ def get_openai_api_key(settings=None) -> str:
 
 
 def get_disposition_options(settings=None) -> list[str]:
+    try:
+        from vobiz_click_to_call.services.lead_disposition import get_lead_disposition_options
+
+        options = get_lead_disposition_options()
+        if options:
+            return options
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Vobiz SR Lead Disposition options failed")
+
     settings = settings or get_settings()
     raw = settings.ai_disposition_options or "Interested\nNot Interested\nFollow Up\nUnknown"
     return [row.strip() for row in raw.replace(",", "\n").splitlines() if row.strip()]
 
 
-def get_manual_disposition_options(settings=None) -> list[str]:
+def get_manual_disposition_options(
+    settings=None,
+    reference_doctype: str | None = None,
+    reference_name: str | None = None,
+) -> list[str]:
+    try:
+        from vobiz_click_to_call.services.lead_disposition import get_lead_disposition_options
+
+        options = get_lead_disposition_options(reference_doctype, reference_name)
+        if options:
+            return options
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Vobiz manual SR Lead Disposition options failed")
+
     settings = settings or get_settings()
     raw = settings.manual_disposition_options or (
         "Connected\nNo Answer\nBusy\nFailed\nWrong Number\nNot Interested\nInterested\n"

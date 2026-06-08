@@ -91,6 +91,19 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
                 self.assertIn(f"'{tab}'", load_tab_source)
         self.assertIn("context.loaded_workdesk_tabs[tab] = true", load_tab_source)
 
+    def test_lead_dispositions_are_contextual_in_console(self):
+        select_source = self.method_source("select_row", "render_focus")
+        call_row_source = self.method_source("call_row", "detail_key")
+        apply_source = self.method_source("apply_context_dispositions", "show_tab")
+        workdesk_source = self.method_source("workdesk_lead_disposition_html", "render_workdesk_live_call")
+
+        self.assertIn("this.apply_context_dispositions(this.state.context)", select_source)
+        self.assertIn("this.apply_context_dispositions(this.state.context)", call_row_source)
+        self.assertIn("lead_disposition", apply_source)
+        self.assertIn("this.render_dispositions()", apply_source)
+        self.assertIn("Lead Disposition", workdesk_source)
+        self.assertIn("Available for this lead", workdesk_source)
+
 
 if __name__ == "__main__":
     unittest.main()

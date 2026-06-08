@@ -10,6 +10,7 @@ from vobiz_click_to_call.api.call import get_call_capability, get_call_status, r
 from vobiz_click_to_call.api.recording import recording_proxy_url
 from vobiz_click_to_call.api.disposition import get_disposition_options_api
 from vobiz_click_to_call.services.disposition import CONNECTED_STATUSES, MISSED_STATUSES
+from vobiz_click_to_call.services.lead_disposition import get_reference_lead_disposition
 
 
 TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
@@ -492,6 +493,7 @@ def _workdesk_context(
     context = {
         "agent": _agent_context(),
         "lead": _lead_details(reference_doctype, reference_name, doc, include_conversation_ai=not lite),
+        "lead_disposition": get_reference_lead_disposition(reference_doctype, reference_name),
         "patient": patient,
         "vobiz": _vobiz_summary_from_history(history) if history is not None else _vobiz_summary(reference_doctype, reference_name),
         "whatsapp": _whatsapp_deferred(reference_doctype, reference_name),

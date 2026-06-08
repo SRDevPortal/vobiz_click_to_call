@@ -491,6 +491,7 @@ class VobizAgentConsole {
 			lite: 1
 		}).then((r) => {
 			this.state.context = r.message || {};
+			this.apply_context_dispositions(this.state.context);
 			this.show_tab('call_summary');
 			this.render_focus(row);
 		});
@@ -572,6 +573,15 @@ class VobizAgentConsole {
 		this.page.main.find('[data-role="disposition"]').html(options.map(value =>
 			`<option value="${frappe.utils.escape_html(value)}">${frappe.utils.escape_html(value || __('Select Status'))}</option>`
 		).join(''));
+	}
+
+	apply_context_dispositions(context) {
+		const leadDisposition = ((context || {}).workdesk || {}).lead_disposition || {};
+		const options = (leadDisposition.options || []).map(row => row.name).filter(Boolean);
+		if (options.length) {
+			this.state.dispositions = options;
+			this.render_dispositions();
+		}
 	}
 
 	show_tab(tab) {
@@ -689,6 +699,7 @@ class VobizAgentConsole {
 		});
 		request.then((r) => {
 			this.state.context = r.message || {};
+			this.apply_context_dispositions(this.state.context);
 			this.open_detail_dialog(row, r.message || {});
 		});
 		request.always(() => this.set_detail_loading(row, false));
@@ -891,11 +902,41 @@ class VobizAgentConsole {
 							${fields.map(field => this.workdesk_field_html(field.label, field.value)).join('') || `<div class="vobiz-empty">${__('No CRM fields found for this record.')}</div>`}
 						</div>
 					</div>
+					${this.workdesk_lead_disposition_html(workdesk)}
 					<div class="vobiz-workdesk-card">
 						<h4>${__('Guidance')}</h4>
 						<div data-workdesk-live-call>${this.workdesk_live_call_html(row)}</div>
 						<ul class="vobiz-guidance-list">${((context.guidance || {}).script || []).map(line => `<li>${frappe.utils.escape_html(line)}</li>`).join('')}</ul>
 					</div>
+				</div>
+			</div>
+		`;
+	}
+
+	workdesk_lead_disposition_html(workdesk) {
+		const leadDisposition = workdesk.lead_disposition || {};
+		const options = leadDisposition.options || [];
+		if (!leadDisposition.name && !leadDisposition.status && !options.length) {
+			return '';
+		}
+		return `
+			<div class="vobiz-workdesk-card">
+				<h4>${__('Lead Disposition')}</h4>
+				<div class="vobiz-field-grid">
+					${this.workdesk_field_html(__('CRM Status'), leadDisposition.status || '-')}
+					${this.workdesk_field_html(__('Lead Disposition'), leadDisposition.disposition || '-')}
+				</div>
+				<hr>
+				<div class="vobiz-related-meta">${__('Available for this lead')}</div>
+				<div class="vobiz-info-list">
+					${options.slice(0, 8).map(row => `
+						<div class="vobiz-related-row">
+							<div>
+								<div class="vobiz-related-title">${frappe.utils.escape_html(row.name || '')}</div>
+								<div class="vobiz-related-meta">${frappe.utils.escape_html(row.status || __('Any CRM Status'))}</div>
+							</div>
+						</div>
+					`).join('') || `<div class="vobiz-empty">${__('No active SR Lead Disposition found for this status.')}</div>`}
 				</div>
 			</div>
 		`;

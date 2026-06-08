@@ -4,6 +4,7 @@ import frappe
 from frappe import _
 
 from vobiz_ai.api.call_log import sync_linked_summaries
+from vobiz_click_to_call.services.lead_disposition import sync_call_disposition_to_lead
 from vobiz_click_to_call.services.safety import block_number
 from vobiz_click_to_call.services.settings import get_manual_disposition_options
 
@@ -31,7 +32,10 @@ def save_call_disposition(
         frappe.throw(_("Disposition is required."))
     if not notes:
         frappe.throw(_("Call notes are required."))
-    allowed_dispositions = get_manual_disposition_options()
+    allowed_dispositions = get_manual_disposition_options(
+        reference_doctype=doc.reference_doctype,
+        reference_name=doc.reference_name,
+    )
     if allowed_dispositions and disposition not in allowed_dispositions:
         frappe.throw(_("Invalid disposition."))
 
@@ -56,6 +60,7 @@ def save_call_disposition(
         doc.follow_up_todo = upsert_follow_up_todo(doc, follow_up_datetime)
 
     doc.save(ignore_permissions=True)
+    lead_sync = sync_call_disposition_safely(doc, disposition)
     update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
     sync_linked_summaries(doc)
     add_disposition_comment(doc)
@@ -66,6 +71,7 @@ def save_call_disposition(
         "disposition": doc.disposition,
         "follow_up_todo": doc.follow_up_todo,
         "dnd_marked": bool(doc.dnd_marked),
+        "lead_sync": lead_sync,
     }
 
 
@@ -74,6 +80,14 @@ def assert_user_can_update_disposition(doc) -> None:
         return
     if doc.user != frappe.session.user:
         frappe.throw(_("Not permitted."))
+
+
+def sync_call_disposition_safely(doc, disposition: str) -> dict:
+    try:
+        return sync_call_disposition_to_lead(doc, disposition)
+    except Exception as exc:
+        frappe.log_error(frappe.get_traceback(), "Vobiz CRM Lead disposition sync failed")
+        return {"synced": False, "reason": str(exc)}
 
 
 def upsert_follow_up_todo(call_log_doc, follow_up_datetime: str) -> str:

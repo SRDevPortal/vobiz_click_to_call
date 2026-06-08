@@ -126,6 +126,7 @@ def dial_action(call_log: str | None = None, token: str | None = None):
     if doc.status in {"Completed", "Failed", "Busy", "No Answer", "Cancelled"}:
         update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
         sync_linked_summaries(doc)
+        _enqueue_ai_if_ready(doc)
     frappe.db.commit()
     if doc.status == "Connected":
         _start_recording_safely(doc.name)
@@ -163,6 +164,7 @@ def hangup(call_log: str | None = None, token: str | None = None):
     restore_mapping_after_call(doc.name)
     update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
     sync_linked_summaries(doc)
+    _enqueue_ai_if_ready(doc)
     frappe.db.commit()
     return _plain_response("OK")
 
@@ -185,6 +187,7 @@ def fallback(call_log: str | None = None, token: str | None = None):
     restore_mapping_after_call(doc.name)
     update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
     sync_linked_summaries(doc)
+    _enqueue_ai_if_ready(doc)
     frappe.db.commit()
     return _plain_response("OK")
 
@@ -249,6 +252,13 @@ def transcription_callback(call_log: str | None = None, token: str | None = None
         enqueue_ai_disposition(doc.name)
 
     return _plain_response("OK")
+
+
+def _enqueue_ai_if_ready(doc) -> None:
+    if not get_settings().enable_ai_disposition:
+        return
+    if doc.transcript_status == "Completed" and doc.transcript_text:
+        enqueue_ai_disposition(doc.name)
 
 
 def _validate_callback(call_log: str | None, token: str | None):

@@ -11,8 +11,11 @@ from vobiz_click_to_call.services.settings import get_disposition_options, get_m
 
 
 @frappe.whitelist()
-def get_disposition_options_api() -> list[str]:
-    return get_manual_disposition_options()
+def get_disposition_options_api(reference_doctype: str | None = None, reference_name: str | None = None) -> list[str]:
+    return get_manual_disposition_options(
+        reference_doctype=reference_doctype,
+        reference_name=reference_name,
+    )
 
 
 @frappe.whitelist()
