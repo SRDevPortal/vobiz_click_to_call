@@ -11,6 +11,7 @@ from vobiz_click_to_call.api.recording import recording_proxy_url
 from vobiz_click_to_call.api.disposition import get_disposition_options_api
 from vobiz_click_to_call.services.disposition import CONNECTED_STATUSES, MISSED_STATUSES
 from vobiz_click_to_call.services.lead_disposition import get_lead_disposition_context
+from vobiz_click_to_call.services.settings import get_settings
 
 
 TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
@@ -24,12 +25,14 @@ def get_agent_console_data(limit: int | str = 25) -> dict[str, Any]:
         frappe.throw(_("Login required."))
 
     limit = max(5, min(frappe.utils.cint(limit) or 25, 100))
+    settings = get_settings()
     return {
         "summary": _call_summary(),
         "availability": get_call_capability(),
         "active_call": _active_call(),
         "queue": _lead_queue(limit),
         "dispositions": get_disposition_options_api(),
+        "ai_disposition_enabled": bool(settings.enable_ai_disposition),
     }
 
 

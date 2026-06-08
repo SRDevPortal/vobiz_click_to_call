@@ -74,7 +74,8 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         self.assertNotIn("frappe.get_doc({\"doctype\": \"SR Lead Disposition\"", self.ai)
         self.assertIn("sync_call_disposition_to_lead(doc, disposition)", self.ai)
         self.assertIn("doc.disposition = disposition", self.ai)
-        self.assertIn("settings.auto_apply_ai_disposition", self.ai)
+        self.assertIn("auto_disposed = bool(settings.enable_ai_disposition and not review_required)", self.ai)
+        self.assertIn("lead_auto_applied = bool(settings.auto_apply_ai_disposition and auto_disposed)", self.ai)
 
     def test_ai_disposition_system_prompt_is_editable_in_settings(self):
         self.assertIn("DEFAULT_AI_DISPOSITION_SYSTEM_PROMPT", self.ai)

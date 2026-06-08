@@ -397,7 +397,8 @@ def apply_ai_result(call_log: str, result: dict[str, Any], settings=None) -> Non
         confidence = min(confidence, 0.49)
 
     review_required = confidence < threshold
-    auto_applied = bool(settings.auto_apply_ai_disposition and not review_required)
+    auto_disposed = bool(settings.enable_ai_disposition and not review_required)
+    lead_auto_applied = bool(settings.auto_apply_ai_disposition and auto_disposed)
     doc.ai_summary = result.get("summary") or ""
     doc.ai_disposition = disposition
     doc.ai_confidence = confidence
@@ -409,7 +410,7 @@ def apply_ai_result(call_log: str, result: dict[str, Any], settings=None) -> Non
     doc.ai_disposition_status = "Review Required" if review_required else "Completed"
     doc.ai_error_message = ""
     doc.ai_raw_json = json.dumps(result, indent=2, default=str)
-    if auto_applied:
+    if auto_disposed:
         sync_call_log_disposition_options(disposition)
         doc.disposition = disposition
         doc.disposition_notes = _ai_disposition_notes(result)
@@ -419,8 +420,9 @@ def apply_ai_result(call_log: str, result: dict[str, Any], settings=None) -> Non
     doc.save(ignore_permissions=True)
 
     lead_sync = None
-    if auto_applied:
+    if lead_auto_applied:
         lead_sync = sync_ai_disposition_safely(doc, disposition)
+    if auto_disposed:
         update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
         sync_linked_summaries(doc)
 

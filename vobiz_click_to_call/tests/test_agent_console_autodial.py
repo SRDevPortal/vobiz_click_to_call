@@ -139,13 +139,24 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
 
     def test_manual_disposition_saves_status_and_sr_lead_disposition(self):
         render_source = self.method_source("render_dispositions", "apply_context_dispositions")
+        visibility_source = self.method_source("render_manual_disposition_visibility", "apply_context_dispositions")
         save_source = self.method_source("save_disposition", "open_reference")
 
         self.assertIn("Select CRM Status", render_source)
         self.assertIn("Select SR Lead Disposition", render_source)
+        self.assertIn("manual-disposition-section", self.source)
+        self.assertIn("ai_disposition_enabled", visibility_source)
         self.assertIn("leadStatus", save_source)
         self.assertIn("lead_status: leadStatus", save_source)
         self.assertIn("Select CRM status and SR lead disposition", save_source)
+
+    def test_ai_mode_hides_manual_disposition_prompt(self):
+        prompt_source = self.method_source("maybe_prompt_workdesk_disposition", "open_post_call_disposition_dialog")
+        dialog_source = self.method_source("open_post_call_disposition_dialog", "save_disposition")
+
+        self.assertIn("if (this.state.ai_disposition_enabled) return", prompt_source)
+        self.assertIn("if (this.state.ai_disposition_enabled) return", dialog_source)
+        self.assertIn("render_manual_disposition_visibility", self.source)
 
 
 if __name__ == "__main__":

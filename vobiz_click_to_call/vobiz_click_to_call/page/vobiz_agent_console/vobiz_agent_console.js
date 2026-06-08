@@ -23,6 +23,7 @@ class VobizAgentConsole {
 			call_started_at: null,
 			dispositions: [],
 			lead_disposition_context: {},
+			ai_disposition_enabled: false,
 			restore_checked: false,
 			restore_in_flight: false,
 			active_workdesk_key: null,
@@ -139,7 +140,7 @@ class VobizAgentConsole {
 							<div class="vobiz-auto-live" data-role="auto-live"></div>
 						</section>
 
-						<section class="vobiz-band">
+						<section class="vobiz-band" data-role="manual-disposition-section">
 							<div class="vobiz-section-title">
 								<h3>${__('Call Disposition')}</h3>
 							</div>
@@ -338,6 +339,7 @@ class VobizAgentConsole {
 			this.state.queue = data.queue || [];
 			this.state.active_call = data.active_call || null;
 			this.state.dispositions = data.dispositions || [];
+			this.state.ai_disposition_enabled = Boolean(data.ai_disposition_enabled);
 			if (!this.state.lead_disposition_context || !this.state.lead_disposition_context.name) {
 				this.state.lead_disposition_context = { options: (data.dispositions || []).map(value => ({ name: value })) };
 			}
@@ -345,6 +347,7 @@ class VobizAgentConsole {
 			this.render_availability(data.availability || {}, data.active_call || {});
 			this.render_queue();
 			this.render_dispositions();
+			this.render_manual_disposition_visibility();
 			this.render_active_call();
 			this.refresh_workdesk_live_call();
 			this.render_auto_toggle();
@@ -588,6 +591,10 @@ class VobizAgentConsole {
 		this.page.main.find('[data-role="disposition"]').html(options.map(value =>
 			`<option value="${frappe.utils.escape_html(value)}">${frappe.utils.escape_html(value || __('Select SR Lead Disposition'))}</option>`
 		).join('')).val(currentDisposition);
+	}
+
+	render_manual_disposition_visibility() {
+		this.page.main.find('[data-role="manual-disposition-section"]').toggle(!this.state.ai_disposition_enabled);
 	}
 
 	apply_context_dispositions(context) {
@@ -2394,6 +2401,7 @@ class VobizAgentConsole {
 
 	maybe_prompt_workdesk_disposition(call) {
 		if (!call || !call.name || !this.is_terminal_status(call.status)) return;
+		if (this.state.ai_disposition_enabled) return;
 		if (this.state.disposition_prompted_call_log === call.name) return;
 
 		const row = this.state.active_workdesk_row || this.state.selected || {};
@@ -2407,6 +2415,7 @@ class VobizAgentConsole {
 	}
 
 	open_post_call_disposition_dialog(call, row) {
+		if (this.state.ai_disposition_enabled) return;
 		if (call.disposition) {
 			frappe.msgprint({
 				title: __('Call Disposed'),
