@@ -32,6 +32,7 @@ class VobizAgentConsole {
 			workdesk_live_call: null,
 			workdesk_live_call_log: null,
 			workdesk_live_polling: false,
+			disposition_prompted_call_log: null,
 			navigating_from_workdesk: false,
 			auto_dial: {
 				running: false,
@@ -520,6 +521,7 @@ class VobizAgentConsole {
 			this.stop_timer();
 			if (last.name && this.is_terminal_status(last.status)) {
 				this.clear_tracked_live_call(last.name);
+				this.maybe_prompt_workdesk_disposition(last);
 			}
 		}
 		this.render_call_assets(active.name ? active : last);
@@ -1040,6 +1042,11 @@ class VobizAgentConsole {
 			if (call.name) {
 				this.state.workdesk_live_call = call;
 				this.render_workdesk_live_call();
+				if (this.is_terminal_status(call.status)) {
+					this.clear_tracked_live_call(call.name);
+					this.render_workdesk_live_call();
+					this.maybe_prompt_workdesk_disposition(call);
+				}
 			}
 		}).always(() => {
 			this.state.workdesk_live_polling = false;
@@ -1877,6 +1884,7 @@ class VobizAgentConsole {
 		}).then((r) => {
 			const message = r.message || {};
 			if (message.call_log) {
+				this.state.disposition_prompted_call_log = null;
 				this.state.workdesk_live_call_log = message.call_log;
 				this.state.workdesk_live_call = {
 					name: message.call_log,
@@ -2309,15 +2317,108 @@ class VobizAgentConsole {
 	cancel_call_log(call_log, row) {
 		if (!call_log) return Promise.resolve();
 		return frappe.call('vobiz_click_to_call.api.call.cancel_call', { call_log }).then(() => {
+			return frappe.call({
+				method: 'vobiz_click_to_call.api.call.get_call_status',
+				args: { call_log }
+			});
+		}).then((r) => {
+			const call = r.message || { name: call_log, status: 'Cancelled' };
 			if (this.state.workdesk_live_call_log === call_log) {
 				this.clear_tracked_live_call(call_log);
 			}
-			if (row) {
-				this.update_workdesk_primary_action(row);
-			}
+			this.state.workdesk_live_call = null;
+			this.render_workdesk_live_call();
+			this.update_workdesk_primary_action(row || this.state.active_workdesk_row);
+			this.maybe_prompt_workdesk_disposition(call);
 			frappe.show_alert({ message: __('Call stopped.'), indicator: 'orange' });
 			this.load();
 		});
+	}
+
+	maybe_prompt_workdesk_disposition(call) {
+		if (!call || !call.name || !this.is_terminal_status(call.status)) return;
+		if (this.state.disposition_prompted_call_log === call.name) return;
+
+		const row = this.state.active_workdesk_row || this.state.selected || {};
+		const matchesWorkdesk = row.doctype && row.name &&
+			call.reference_doctype === row.doctype &&
+			call.reference_name === row.name;
+		if (!matchesWorkdesk) return;
+
+		this.state.disposition_prompted_call_log = call.name;
+		setTimeout(() => this.open_post_call_disposition_dialog(call, row), 150);
+	}
+
+	open_post_call_disposition_dialog(call, row) {
+		if (call.disposition) {
+			frappe.msgprint({
+				title: __('Call Disposed'),
+				indicator: 'green',
+				message: `
+					<div><strong>${__('Disposition')}</strong>: ${frappe.utils.escape_html(call.disposition)}</div>
+					${call.ai_disposition ? `<div><strong>${__('AI Suggestion')}</strong>: ${frappe.utils.escape_html(call.ai_disposition)}${call.ai_confidence ? ` (${frappe.utils.escape_html(String(call.ai_confidence))})` : ''}</div>` : ''}
+					${call.ai_summary ? `<hr><div>${frappe.utils.escape_html(call.ai_summary)}</div>` : ''}
+					${call.disposition_notes ? `<hr><div>${frappe.utils.escape_html(call.disposition_notes)}</div>` : ''}
+				`
+			});
+			return;
+		}
+
+		const options = this.state.dispositions || [];
+		const suggested = call.ai_disposition && options.includes(call.ai_disposition) ? call.ai_disposition : '';
+		const notes = [call.ai_summary, call.ai_next_action].filter(Boolean).join('\n\n');
+		const dialog = new frappe.ui.Dialog({
+			title: __('Complete Call Disposition'),
+			fields: [
+				{
+					fieldname: 'call_info',
+					fieldtype: 'HTML',
+					options: `
+						<div class="vobiz-workdesk-card">
+							<div><strong>${frappe.utils.escape_html(row.title || row.name || call.reference_name || '')}</strong></div>
+							<div class="text-muted">${frappe.utils.escape_html(call.status || '')}</div>
+							${call.ai_disposition ? `<hr><div><strong>${__('AI Suggestion')}</strong>: ${frappe.utils.escape_html(call.ai_disposition)}${call.ai_confidence ? ` (${frappe.utils.escape_html(String(call.ai_confidence))})` : ''}</div>` : ''}
+							${call.ai_summary ? `<div class="vobiz-related-meta">${frappe.utils.escape_html(call.ai_summary)}</div>` : ''}
+						</div>
+					`
+				},
+				{
+					fieldname: 'disposition',
+					fieldtype: 'Select',
+					label: __('Disposition'),
+					options: [''].concat(options).join('\n'),
+					reqd: 1,
+					default: suggested
+				},
+				{
+					fieldname: 'notes',
+					fieldtype: 'Small Text',
+					label: __('Notes'),
+					reqd: 1,
+					default: notes
+				}
+			],
+			primary_action_label: __('Save Disposition'),
+			primary_action: (values) => {
+				if (!values.disposition || !values.notes) {
+					frappe.msgprint(__('Select a disposition and add notes.'));
+					return;
+				}
+				dialog.get_primary_btn().prop('disabled', true).text(__('Saving...'));
+				frappe.call('vobiz_click_to_call.api.disposition.save_disposition', {
+					call_log: call.name,
+					disposition: values.disposition,
+					notes: values.notes
+				}).then(() => {
+					frappe.show_alert({ message: __('Disposition saved'), indicator: 'green' });
+					dialog.hide();
+					this.load();
+				}).always(() => {
+					dialog.get_primary_btn().prop('disabled', false).text(__('Save Disposition'));
+				});
+			}
+		});
+		dialog.show();
 	}
 
 	save_disposition() {

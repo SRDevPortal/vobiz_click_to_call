@@ -82,6 +82,22 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("btn-danger", update_source)
         self.assertIn("this.update_workdesk_primary_action(row)", render_live_source)
 
+    def test_workdesk_stop_and_terminal_call_prompt_disposition(self):
+        cancel_source = self.method_source("cancel_call_log", "maybe_prompt_workdesk_disposition")
+        prompt_source = self.method_source("maybe_prompt_workdesk_disposition", "open_post_call_disposition_dialog")
+        dialog_source = self.method_source("open_post_call_disposition_dialog", "save_disposition")
+        refresh_source = self.method_source("refresh_workdesk_live_call", "live_call_steps")
+
+        self.assertIn("get_call_status", cancel_source)
+        self.assertIn("this.clear_tracked_live_call(call_log)", cancel_source)
+        self.assertIn("this.update_workdesk_primary_action", cancel_source)
+        self.assertIn("this.maybe_prompt_workdesk_disposition(call)", cancel_source)
+        self.assertIn("this.maybe_prompt_workdesk_disposition(call)", refresh_source)
+        self.assertIn("disposition_prompted_call_log", prompt_source)
+        self.assertIn("Complete Call Disposition", dialog_source)
+        self.assertIn("AI Suggestion", dialog_source)
+        self.assertIn("save_disposition", dialog_source)
+
     def test_workdesk_heavy_tabs_are_lazy_loaded(self):
         load_tab_source = self.method_source("load_workdesk_tab", "workdesk_lead_html")
 
