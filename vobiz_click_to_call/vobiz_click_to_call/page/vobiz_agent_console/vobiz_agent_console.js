@@ -27,6 +27,7 @@ class VobizAgentConsole {
 			active_workdesk_key: null,
 			active_workdesk_body: null,
 			active_workdesk_row: null,
+			active_workdesk_dialog: null,
 			detail_loading_key: null,
 			workdesk_live_call: null,
 			workdesk_live_call_log: null,
@@ -720,16 +721,15 @@ class VobizAgentConsole {
 			static: true,
 			fields: [{ fieldname: 'details', fieldtype: 'HTML' }],
 			primary_action_label: __('Start Call'),
-			primary_action: () => {
-				this.state.selected = row;
-				this.start_call_for_row(row);
-			}
+			primary_action: () => this.handle_workdesk_primary_action(row)
 		});
+		this.state.active_workdesk_dialog = dialog;
 		dialog.get_close_btn().show();
 		dialog.$wrapper.on('hidden.bs.modal', () => {
 			this.state.active_workdesk_key = null;
 			this.state.active_workdesk_body = null;
 			this.state.active_workdesk_row = null;
+			this.state.active_workdesk_dialog = null;
 			if (!this.state.navigating_from_workdesk) {
 				this.clear_workdesk_return_state();
 			}
@@ -817,6 +817,32 @@ class VobizAgentConsole {
 			frappe.set_route('Form', $btn.data('doctype'), $btn.data('name'));
 		});
 		render('summary');
+		this.update_workdesk_primary_action(row);
+	}
+
+	handle_workdesk_primary_action(row) {
+		const call = this.matching_active_call(row);
+		if (call && call.name && !this.is_terminal_status(call.status)) {
+			return this.cancel_call_log(call.name, row);
+		}
+		this.state.selected = row;
+		return this.start_call_for_row(row);
+	}
+
+	update_workdesk_primary_action(row) {
+		const dialog = this.state.active_workdesk_dialog;
+		if (!dialog || !row) return;
+
+		const call = this.matching_active_call(row);
+		const isActive = Boolean(call && call.name && !this.is_terminal_status(call.status));
+		const $button = dialog.get_primary_btn();
+		$button
+			.toggleClass('btn-primary', !isActive)
+			.toggleClass('btn-danger', isActive)
+			.prop('disabled', false)
+			.html(isActive
+				? `<i class="fa fa-phone"></i> ${__('Stop Call')}`
+				: `<i class="fa fa-phone"></i> ${__('Start Call')}`);
 	}
 
 	load_workdesk_tab(row, context, tab, $body, render) {
@@ -880,6 +906,7 @@ class VobizAgentConsole {
 		const row = this.state.active_workdesk_row;
 		if (!$body || !$body.length || !row) return;
 		$body.find('[data-workdesk-live-call]').html(this.workdesk_live_call_html(row));
+		this.update_workdesk_primary_action(row);
 	}
 
 	workdesk_live_call_html(row) {
@@ -1820,6 +1847,7 @@ class VobizAgentConsole {
 					agent_mobile_display: message.agent_mobile_display || ''
 				};
 				this.render_workdesk_live_call();
+				this.update_workdesk_primary_action(row);
 				this.refresh_workdesk_live_call();
 			}
 			frappe.show_alert({ message: __('Call started: {0}', [message.call_log || 'Vobiz']), indicator: 'green' });
@@ -2234,7 +2262,21 @@ class VobizAgentConsole {
 	cancel_call() {
 		const active = this.state.active_call || {};
 		if (!active.name) return;
-		frappe.call('vobiz_click_to_call.api.call.cancel_call', { call_log: active.name }).then(() => this.load());
+		this.cancel_call_log(active.name);
+	}
+
+	cancel_call_log(call_log, row) {
+		if (!call_log) return Promise.resolve();
+		return frappe.call('vobiz_click_to_call.api.call.cancel_call', { call_log }).then(() => {
+			if (this.state.workdesk_live_call_log === call_log) {
+				this.clear_tracked_live_call(call_log);
+			}
+			if (row) {
+				this.update_workdesk_primary_action(row);
+			}
+			frappe.show_alert({ message: __('Call stopped.'), indicator: 'orange' });
+			this.load();
+		});
 	}
 
 	save_disposition() {

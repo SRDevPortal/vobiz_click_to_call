@@ -67,6 +67,21 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("request.always(() => this.set_detail_loading(row, false))", call_row_source)
         self.assertIn("this.render_queue()", loading_source)
 
+    def test_workdesk_primary_button_toggles_start_and_stop_call(self):
+        open_dialog_source = self.method_source("open_detail_dialog", "handle_workdesk_primary_action")
+        primary_source = self.method_source("handle_workdesk_primary_action", "update_workdesk_primary_action")
+        update_source = self.method_source("update_workdesk_primary_action", "load_workdesk_tab")
+        render_live_source = self.method_source("render_workdesk_live_call", "workdesk_live_call_html")
+
+        self.assertIn("primary_action: () => this.handle_workdesk_primary_action(row)", open_dialog_source)
+        self.assertIn("this.cancel_call_log(call.name, row)", primary_source)
+        self.assertIn("this.start_call_for_row(row)", primary_source)
+        self.assertIn("matching_active_call(row)", update_source)
+        self.assertIn("Stop Call", update_source)
+        self.assertIn("Start Call", update_source)
+        self.assertIn("btn-danger", update_source)
+        self.assertIn("this.update_workdesk_primary_action(row)", render_live_source)
+
     def test_workdesk_heavy_tabs_are_lazy_loaded(self):
         load_tab_source = self.method_source("load_workdesk_tab", "workdesk_lead_html")
 
