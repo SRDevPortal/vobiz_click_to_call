@@ -145,7 +145,7 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("Select SR Lead Disposition", render_source)
         self.assertIn("leadStatus", save_source)
         self.assertIn("lead_status: leadStatus", save_source)
-        self.assertIn("Select CRM status, SR lead disposition, and add notes", save_source)
+        self.assertIn("Select CRM status and SR lead disposition", save_source)
 
 
 if __name__ == "__main__":

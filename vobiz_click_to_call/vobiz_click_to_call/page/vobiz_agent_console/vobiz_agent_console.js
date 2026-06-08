@@ -2462,14 +2462,13 @@ class VobizAgentConsole {
 					fieldname: 'notes',
 					fieldtype: 'Small Text',
 					label: __('Notes'),
-					reqd: 1,
 					default: notes
 				}
 			],
 			primary_action_label: __('Save Disposition'),
 			primary_action: (values) => {
-				if ((statusOptions.length && !values.lead_status) || !values.disposition || !values.notes) {
-					frappe.msgprint(__('Select CRM status, SR lead disposition, and add notes.'));
+				if ((statusOptions.length && !values.lead_status) || !values.disposition) {
+					frappe.msgprint(__('Select CRM status and SR lead disposition.'));
 					return;
 				}
 				dialog.get_primary_btn().prop('disabled', true).text(__('Saving...'));
@@ -2522,8 +2521,8 @@ class VobizAgentConsole {
 			frappe.msgprint(__('No active call selected.'));
 			return;
 		}
-		if ((statusOptions.length && !leadStatus) || !disposition || !notes) {
-			frappe.msgprint(__('Select CRM status, SR lead disposition, and add notes.'));
+		if ((statusOptions.length && !leadStatus) || !disposition) {
+			frappe.msgprint(__('Select CRM status and SR lead disposition.'));
 			return;
 		}
 		frappe.call('vobiz_click_to_call.api.disposition.save_disposition', {

@@ -42,6 +42,7 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         self.assertIn("reference_doctype=doc.reference_doctype", self.disposition)
         self.assertIn("reference_name=doc.reference_name", self.disposition)
         self.assertIn("lead_status=lead_status", self.disposition)
+        self.assertNotIn("Call notes are required", self.disposition)
         self.assertIn("lead_sync", self.disposition)
 
     def test_vobiz_settings_ai_options_sync_from_sr_lead_disposition(self):

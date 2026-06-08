@@ -32,8 +32,6 @@ def save_call_disposition(
     notes = (notes or "").strip()
     if not disposition:
         frappe.throw(_("Disposition is required."))
-    if not notes:
-        frappe.throw(_("Call notes are required."))
     allowed_dispositions = get_manual_disposition_options(
         reference_doctype=doc.reference_doctype,
         reference_name=doc.reference_name,
@@ -185,7 +183,7 @@ def mark_reference_dnd(call_log_doc, disposition: str, notes: str) -> None:
     if "vobiz_do_not_call" in fields:
         values["vobiz_do_not_call"] = 1
     if "vobiz_do_not_call_reason" in fields:
-        values["vobiz_do_not_call_reason"] = f"{disposition}: {notes}"
+        values["vobiz_do_not_call_reason"] = f"{disposition}: {notes}" if notes else disposition
     if values:
         frappe.db.set_value(call_log_doc.reference_doctype, call_log_doc.reference_name, values, update_modified=True)
 
@@ -201,7 +199,7 @@ def add_disposition_comment(call_log_doc) -> None:
         text = (
             f"Vobiz call disposition: {call_log_doc.disposition}\n\n"
             f"Status: {call_log_doc.status}\n"
-            f"Notes: {call_log_doc.disposition_notes}"
+            f"Notes: {call_log_doc.disposition_notes or '-'}"
         )
         if call_log_doc.follow_up_datetime:
             text += f"\nFollow-up: {call_log_doc.follow_up_datetime}"
