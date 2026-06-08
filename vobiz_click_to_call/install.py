@@ -73,6 +73,27 @@ def ensure_defaults():
         settings.save(ignore_permissions=True)
 
     ensure_crm_lead_fields()
+    ensure_vobiz_call_log_disposition_field()
+
+
+def ensure_vobiz_call_log_disposition_field():
+    if not frappe.db.exists("DocType", "Vobiz Call Log"):
+        return
+
+    meta = frappe.get_meta("Vobiz Call Log")
+    if not meta.has_field("disposition"):
+        return
+
+    from frappe.custom.doctype.property_setter.property_setter import make_property_setter
+
+    if frappe.db.exists("DocType", "SR Lead Disposition"):
+        make_property_setter("Vobiz Call Log", "disposition", "options", "SR Lead Disposition", "Text", validate_fields_for_doctype=False)
+        make_property_setter("Vobiz Call Log", "disposition", "fieldtype", "Link", "Data", validate_fields_for_doctype=False)
+    else:
+        make_property_setter("Vobiz Call Log", "disposition", "fieldtype", "Data", "Data", validate_fields_for_doctype=False)
+        make_property_setter("Vobiz Call Log", "disposition", "options", "", "Text", validate_fields_for_doctype=False)
+    make_property_setter("Vobiz Call Log", "disposition", "reqd", "0", "Check", validate_fields_for_doctype=False)
+    frappe.clear_cache(doctype="Vobiz Call Log")
 
 
 def ensure_crm_lead_fields():

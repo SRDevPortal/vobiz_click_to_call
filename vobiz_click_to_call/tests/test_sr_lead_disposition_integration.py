@@ -14,6 +14,7 @@ VOBIZ_SETTINGS_JSON = APP / "vobiz_click_to_call" / "doctype" / "vobiz_settings"
 VOBIZ_SETTINGS_JS = APP / "public" / "js" / "vobiz_settings.js"
 CONSOLE = APP / "api" / "console.py"
 HOOKS = APP / "hooks.py"
+INSTALL = APP / "install.py"
 
 
 class TestSRLeadDispositionIntegration(unittest.TestCase):
@@ -28,6 +29,7 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         cls.vobiz_settings_js = VOBIZ_SETTINGS_JS.read_text(encoding="utf-8")
         cls.console = CONSOLE.read_text(encoding="utf-8")
         cls.hooks = HOOKS.read_text(encoding="utf-8")
+        cls.install = INSTALL.read_text(encoding="utf-8")
 
     def test_sr_lead_disposition_is_source_of_truth(self):
         self.assertIn('SR_LEAD_DISPOSITION = "SR Lead Disposition"', self.lead_disposition)
@@ -54,6 +56,12 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         self.assertIn('"read_only": 1', self.vobiz_settings_json)
         self.assertIn("Synced from active SR Lead Disposition", self.vobiz_settings_json)
         self.assertIn('"Vobiz Settings": "public/js/vobiz_settings.js"', self.hooks)
+
+    def test_call_log_disposition_field_uses_sr_lead_disposition_selector(self):
+        self.assertIn("ensure_vobiz_call_log_disposition_field()", self.install)
+        self.assertIn('"Vobiz Call Log", "disposition", "fieldtype", "Link"', self.install)
+        self.assertIn('"Vobiz Call Log", "disposition", "options", "SR Lead Disposition"', self.install)
+        self.assertIn('"Vobiz Call Log", "disposition", "reqd", "0"', self.install)
 
     def test_ai_uses_existing_sr_lead_dispositions(self):
         self.assertIn("get_lead_disposition_rows(doc.reference_doctype, doc.reference_name)", self.ai)
