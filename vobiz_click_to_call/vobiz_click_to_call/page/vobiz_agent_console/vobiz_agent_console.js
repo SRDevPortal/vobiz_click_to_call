@@ -480,7 +480,8 @@ class VobizAgentConsole {
 		this.state.selected = row;
 		frappe.call('vobiz_click_to_call.api.console.get_reference_context', {
 			reference_doctype: row.doctype,
-			reference_name: row.name
+			reference_name: row.name,
+			lite: 1
 		}).then((r) => {
 			this.state.context = r.message || {};
 			this.show_tab('call_summary');
@@ -667,16 +668,21 @@ class VobizAgentConsole {
 	call_row(index) {
 		const row = this.state.queue[index];
 		if (!row) return;
-		this.select_row(index);
+		this.state.selected = row;
+		this.render_focus(row);
 		frappe.call('vobiz_click_to_call.api.console.get_reference_context', {
 			reference_doctype: row.doctype,
-			reference_name: row.name
+			reference_name: row.name,
+			lite: 1
 		}).then((r) => {
+			this.state.context = r.message || {};
 			this.open_detail_dialog(row, r.message || {});
 		});
 	}
 
 	open_detail_dialog(row, context) {
+		context.workdesk = context.workdesk || {};
+		context.loaded_workdesk_tabs = context.loaded_workdesk_tabs || { summary: true };
 		this.state.navigating_from_workdesk = false;
 		this.state.active_workdesk_key = row && row.doctype && row.name ? `${row.doctype}::${row.name}` : null;
 		this.state.active_workdesk_row = row;
@@ -736,7 +742,10 @@ class VobizAgentConsole {
 				<div data-detail-panel></div>
 			</div>
 		`);
-		$body.on('click', '[data-detail-tab]', (e) => render($(e.currentTarget).data('detail-tab')));
+		$body.on('click', '[data-detail-tab]', (e) => {
+			const tab = $(e.currentTarget).data('detail-tab');
+			this.load_workdesk_tab(row, context, tab, $body, render);
+		});
 		$body.on('click', '[data-workdesk-action]', (e) => this.handle_workdesk_action($(e.currentTarget).data('workdesk-action'), row, context, $body));
 		$body.on('scroll', '[data-wa-chat-list]', (e) => {
 			const el = e.currentTarget;
@@ -780,6 +789,39 @@ class VobizAgentConsole {
 			frappe.set_route('Form', $btn.data('doctype'), $btn.data('name'));
 		});
 		render('summary');
+	}
+
+	load_workdesk_tab(row, context, tab, $body, render) {
+		const deferredTabs = ['encounters', 'clinical-history', 'reports', 'vobiz', 'whatsapp'];
+		context.loaded_workdesk_tabs = context.loaded_workdesk_tabs || { summary: true };
+		if (!deferredTabs.includes(tab) || context.loaded_workdesk_tabs[tab]) {
+			render(tab);
+			return;
+		}
+
+		$body.find('[data-detail-tab]').removeClass('active');
+		$body.find(`[data-detail-tab="${tab}"]`).addClass('active');
+		$body.find('[data-detail-panel]').html(`
+			<div class="vobiz-workdesk-card">
+				<div class="vobiz-empty">${__('Loading details...')}</div>
+			</div>
+		`);
+		frappe.call({
+			method: 'vobiz_click_to_call.api.console.get_workdesk_tab',
+			args: {
+				reference_doctype: row.doctype,
+				reference_name: row.name,
+				tab
+			}
+		}).then((r) => {
+			const data = r.message || {};
+			context.workdesk = Object.assign(context.workdesk || {}, data);
+			if (data.history) {
+				context.history = data.history;
+			}
+			context.loaded_workdesk_tabs[tab] = true;
+			render(tab);
+		});
 	}
 
 	workdesk_lead_html(row, context) {

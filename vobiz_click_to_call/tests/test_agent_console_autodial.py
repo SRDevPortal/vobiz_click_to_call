@@ -45,6 +45,24 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("this.stop_timer()", render_source)
         self.assertIn("this.clear_tracked_live_call(last.name)", render_source)
 
+    def test_details_click_uses_lightweight_context_once(self):
+        call_row_source = self.method_source("call_row", "open_detail_dialog")
+        select_row_source = self.method_source("select_row", "render_focus")
+
+        self.assertNotIn("this.select_row(index)", call_row_source)
+        self.assertIn("lite: 1", call_row_source)
+        self.assertIn("lite: 1", select_row_source)
+        self.assertIn("this.open_detail_dialog(row", call_row_source)
+
+    def test_workdesk_heavy_tabs_are_lazy_loaded(self):
+        load_tab_source = self.method_source("load_workdesk_tab", "workdesk_lead_html")
+
+        self.assertIn("get_workdesk_tab", load_tab_source)
+        for tab in ("encounters", "clinical-history", "reports", "vobiz", "whatsapp"):
+            with self.subTest(tab=tab):
+                self.assertIn(f"'{tab}'", load_tab_source)
+        self.assertIn("context.loaded_workdesk_tabs[tab] = true", load_tab_source)
+
 
 if __name__ == "__main__":
     unittest.main()

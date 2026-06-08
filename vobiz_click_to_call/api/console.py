@@ -33,7 +33,46 @@ def get_agent_console_data(limit: int | str = 25) -> dict[str, Any]:
 
 
 @frappe.whitelist()
-def get_reference_context(reference_doctype: str, reference_name: str) -> dict[str, Any]:
+def get_reference_context(reference_doctype: str, reference_name: str, lite: int | str = 0) -> dict[str, Any]:
+    doc = _get_permitted_reference(reference_doctype, reference_name)
+    lite = bool(frappe.utils.cint(lite))
+    history = _call_history(reference_doctype, reference_name, 8)
+
+    return {
+        "reference": _reference_row(reference_doctype, doc),
+        "history": history,
+        "guidance": _guidance_for_reference(reference_doctype, doc),
+        "workdesk": _workdesk_context(reference_doctype, reference_name, doc, lite=lite, history=history),
+    }
+
+
+@frappe.whitelist()
+def get_workdesk_tab(reference_doctype: str, reference_name: str, tab: str) -> dict[str, Any]:
+    doc = _get_permitted_reference(reference_doctype, reference_name)
+    tab = (tab or "").strip()
+    lead_name = reference_name if reference_doctype == "CRM Lead" else None
+    patient = _resolve_patient(reference_doctype, reference_name, doc)
+
+    if tab == "encounters":
+        return {
+            "encounters": _related_encounters(lead_name, patient),
+            "appointments": _related_appointments(patient),
+            "sales_invoices": _related_sales_invoices(patient, doc),
+        }
+    if tab == "clinical-history":
+        return {"clinical_history": _patient_clinical_history(patient)}
+    if tab == "reports":
+        return {"reports": _related_reports(lead_name, patient, reference_doctype, reference_name)}
+    if tab == "vobiz":
+        history = _call_history(reference_doctype, reference_name, 8)
+        return {"history": history, "vobiz": _vobiz_summary_from_history(history)}
+    if tab == "whatsapp":
+        return {"whatsapp": _whatsapp_preview(reference_doctype, reference_name)}
+
+    return _workdesk_context(reference_doctype, reference_name, doc, lite=True)
+
+
+def _get_permitted_reference(reference_doctype: str, reference_name: str):
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
     if not reference_doctype or not reference_name or not frappe.db.exists(reference_doctype, reference_name):
@@ -42,13 +81,7 @@ def get_reference_context(reference_doctype: str, reference_name: str) -> dict[s
     doc = frappe.get_doc(reference_doctype, reference_name)
     if not doc.has_permission("read"):
         frappe.throw(_("Not permitted."), frappe.PermissionError)
-
-    return {
-        "reference": _reference_row(reference_doctype, doc),
-        "history": _call_history(reference_doctype, reference_name, 8),
-        "guidance": _guidance_for_reference(reference_doctype, doc),
-        "workdesk": _workdesk_context(reference_doctype, reference_name, doc),
-    }
+    return doc
 
 
 @frappe.whitelist()
@@ -447,31 +480,58 @@ def _guidance_for_reference(reference_doctype: str, doc) -> dict[str, Any]:
     }
 
 
-def _workdesk_context(reference_doctype: str, reference_name: str, doc) -> dict[str, Any]:
+def _workdesk_context(
+    reference_doctype: str,
+    reference_name: str,
+    doc,
+    lite: bool = False,
+    history: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     lead_name = reference_name if reference_doctype == "CRM Lead" else None
-    patient = _resolve_patient(reference_doctype, reference_name, doc)
+    patient = _resolve_patient(reference_doctype, reference_name, doc, allow_phone_lookup=not lite)
+    context = {
+        "agent": _agent_context(),
+        "lead": _lead_details(reference_doctype, reference_name, doc, include_conversation_ai=not lite),
+        "patient": patient,
+        "vobiz": _vobiz_summary_from_history(history) if history is not None else _vobiz_summary(reference_doctype, reference_name),
+        "whatsapp": _whatsapp_deferred(reference_doctype, reference_name),
+        "create_defaults": _create_defaults(reference_doctype, reference_name, doc, patient),
+        "deferred_tabs": ["encounters", "clinical-history", "reports", "whatsapp"],
+    }
+
+    if lite:
+        context.update({
+            "encounters": [],
+            "clinical_history": {"patient": None, "rows": []},
+            "appointments": [],
+            "sales_invoices": [],
+            "reports": {"files": [], "ocr": [], "insights": []},
+        })
+        return context
 
     return {
-        "agent": _agent_context(),
-        "lead": _lead_details(reference_doctype, reference_name, doc),
-        "patient": patient,
+        **context,
         "encounters": _related_encounters(lead_name, patient),
         "clinical_history": _patient_clinical_history(patient),
         "appointments": _related_appointments(patient),
         "sales_invoices": _related_sales_invoices(patient, doc),
         "reports": _related_reports(lead_name, patient, reference_doctype, reference_name),
-        "vobiz": _vobiz_summary(reference_doctype, reference_name),
         "whatsapp": _whatsapp_preview(reference_doctype, reference_name),
-        "create_defaults": _create_defaults(reference_doctype, reference_name, doc, patient),
+        "deferred_tabs": [],
     }
 
 
-def _lead_details(reference_doctype: str, reference_name: str, doc) -> dict[str, Any]:
+def _lead_details(
+    reference_doctype: str,
+    reference_name: str,
+    doc,
+    include_conversation_ai: bool = True,
+) -> dict[str, Any]:
     if reference_doctype != "CRM Lead":
         return {"doctype": reference_doctype, "name": reference_name, "fields": []}
 
     meta = frappe.get_meta("CRM Lead")
-    wa_ai = _conversation_ai_fields(reference_doctype, reference_name)
+    wa_ai = _conversation_ai_fields(reference_doctype, reference_name) if include_conversation_ai else {}
     wanted = (
         "status",
         "sr_lead_platform",
@@ -528,11 +588,19 @@ def _is_empty_score(value) -> bool:
         return False
 
 
-def _resolve_patient(reference_doctype: str, reference_name: str, doc) -> str | None:
+def _resolve_patient(
+    reference_doctype: str,
+    reference_name: str,
+    doc,
+    allow_phone_lookup: bool = True,
+) -> str | None:
     meta = frappe.get_meta(reference_doctype)
     for fieldname in ("sr_source_patient", "patient"):
         if meta.has_field(fieldname) and doc.get(fieldname):
             return doc.get(fieldname)
+
+    if not allow_phone_lookup:
+        return None
 
     phone = _first_value(doc.as_dict(), ("mobile_no", "mobile", "phone", "phone_no")).get("value")
     if not phone or not frappe.db.exists("DocType", "Patient"):
@@ -703,6 +771,10 @@ def _related_files(reference_doctype: str, reference_name: str, patient: str | N
 
 def _vobiz_summary(reference_doctype: str, reference_name: str) -> dict[str, Any]:
     history = _call_history(reference_doctype, reference_name, 8)
+    return _vobiz_summary_from_history(history)
+
+
+def _vobiz_summary_from_history(history: list[dict[str, Any]]) -> dict[str, Any]:
     latest = history[0] if history else {}
     connected = len([row for row in history if row.get("status") in CONNECTED_STATUSES or row.get("status") == "Connected"])
     missed = len([row for row in history if row.get("status") in MISSED_STATUSES or row.get("status") in {"Cancelled", "Canceled"}])
@@ -712,6 +784,20 @@ def _vobiz_summary(reference_doctype: str, reference_name: str) -> dict[str, Any
         "total": len(history),
         "connected": connected,
         "missed": missed,
+    }
+
+
+def _whatsapp_deferred(reference_doctype: str, reference_name: str) -> dict[str, Any]:
+    if not frappe.db.exists("DocType", "Chat Conversation"):
+        return {"available": False, "message": _("WA Chat Hub is not installed.")}
+    return {
+        "available": True,
+        "conversation": None,
+        "messages": [],
+        "has_more": False,
+        "next_before": None,
+        "deferred": True,
+        "message": _("WhatsApp will load when the tab opens."),
     }
 
 
