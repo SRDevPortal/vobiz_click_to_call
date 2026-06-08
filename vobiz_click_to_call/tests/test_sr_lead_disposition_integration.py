@@ -62,6 +62,15 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         self.assertIn("doc.disposition = disposition", self.ai)
         self.assertIn("settings.auto_apply_ai_disposition", self.ai)
 
+    def test_ai_disposition_system_prompt_is_editable_in_settings(self):
+        self.assertIn("DEFAULT_AI_DISPOSITION_SYSTEM_PROMPT", self.ai)
+        self.assertIn("ai_disposition_system_prompt", self.ai)
+        self.assertIn("build_prompt(doc, dispositions, disposition_rows, settings)", self.ai)
+        self.assertIn("self.ai_disposition_system_prompt", self.vobiz_settings)
+        self.assertIn('"fieldname": "ai_disposition_system_prompt"', self.vobiz_settings_json)
+        self.assertIn('"label": "System Prompt"', self.vobiz_settings_json)
+        self.assertIn("Return only valid JSON in this shape", self.ai)
+
     def test_vobiz_ai_receive_transcript_can_trigger_click_to_call_ai(self):
         self.assertIn("on_update", self.hooks)
         self.assertIn("vobiz_click_to_call.services.ai.on_vobiz_call_log_update", self.hooks)
