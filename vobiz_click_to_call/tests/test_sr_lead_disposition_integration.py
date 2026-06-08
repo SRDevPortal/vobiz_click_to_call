@@ -7,6 +7,7 @@ import unittest
 APP = Path(__file__).resolve().parents[1]
 LEAD_DISPOSITION = APP / "services" / "lead_disposition.py"
 DISPOSITION = APP / "services" / "disposition.py"
+DISPOSITION_API = APP / "api" / "disposition.py"
 AI = APP / "services" / "ai.py"
 SETTINGS = APP / "services" / "settings.py"
 VOBIZ_SETTINGS = APP / "vobiz_click_to_call" / "doctype" / "vobiz_settings" / "vobiz_settings.py"
@@ -22,6 +23,7 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
     def setUpClass(cls):
         cls.lead_disposition = LEAD_DISPOSITION.read_text(encoding="utf-8")
         cls.disposition = DISPOSITION.read_text(encoding="utf-8")
+        cls.disposition_api = DISPOSITION_API.read_text(encoding="utf-8")
         cls.ai = AI.read_text(encoding="utf-8")
         cls.settings = SETTINGS.read_text(encoding="utf-8")
         cls.vobiz_settings = VOBIZ_SETTINGS.read_text(encoding="utf-8")
@@ -45,6 +47,8 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         self.assertIn("reference_name=doc.reference_name", self.disposition)
         self.assertIn("lead_status=lead_status", self.disposition)
         self.assertNotIn("Call notes are required", self.disposition)
+        self.assertIn('notes: str = ""', self.disposition_api)
+        self.assertIn('notes: str = ""', self.disposition)
         self.assertIn("lead_sync", self.disposition)
 
     def test_vobiz_settings_ai_options_sync_from_sr_lead_disposition(self):

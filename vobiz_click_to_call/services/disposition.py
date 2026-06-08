@@ -19,7 +19,7 @@ def save_call_disposition(
     *,
     call_log: str,
     disposition: str,
-    notes: str,
+    notes: str = "",
     lead_status: str | None = None,
     follow_up_datetime: str | None = None,
     mark_dnd: bool = False,
