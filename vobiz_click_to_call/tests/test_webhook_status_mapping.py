@@ -25,6 +25,18 @@ class TestWebhookStatusMapping(unittest.TestCase):
         self.assertEqual(_status_from_dial_status("hangup", previous="Customer Answered"), "Customer Answered")
         self.assertEqual(_status_from_dial_status("hangup", previous="Connected"), "Completed")
 
+    def test_static_transcription_event_endpoint_matches_provider_payload(self):
+        from pathlib import Path
+
+        source = (
+            Path(__file__).resolve().parents[1] / "api" / "webhook.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("def transcription_event():", source)
+        self.assertIn("_find_call_log_from_provider_payload(data)", source)
+        self.assertIn('"call_uuid"', source)
+        self.assertIn("_apply_transcription_payload(doc, data, payload)", source)
+
 
 if __name__ == "__main__":
     unittest.main()

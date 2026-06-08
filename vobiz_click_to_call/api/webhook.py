@@ -226,8 +226,28 @@ def transcription_callback(call_log: str | None = None, token: str | None = None
         return _plain_response("IGNORED")
 
     data = _with_nested_response(payload)
+    _apply_transcription_payload(doc, data, payload)
+    return _plain_response("OK")
+
+
+@frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
+def transcription_event():
+    payload = _payload()
+    data = _with_nested_response(payload)
+    doc = _find_call_log_from_provider_payload(data)
+    if not doc:
+        log_vobiz_event("Transcription event ignored: matching call log not found", severity="Warning", payload=data)
+        return _plain_response("IGNORED")
+
+    _log_webhook_event("transcription_event received", doc, data)
+    _apply_transcription_payload(doc, data, payload)
+    return _plain_response("OK")
+
+
+def _apply_transcription_payload(doc, data: dict, original_payload: dict | None = None) -> None:
     error = _first_value(data, "error", "Error")
     transcript = _first_value(data, "transcription", "transcript", "text", "transcription_text", "Transcript")
+    _apply_common_payload(doc, data)
     doc.recording_id = doc.recording_id or _first_value(data, "recording_id", "RecordingID")
     doc.transcription_id = doc.transcription_id or _first_value(data, "transcription_id", "TranscriptionID", "id")
     doc.transcript_received_at = frappe.utils.now()
@@ -245,13 +265,11 @@ def transcription_callback(call_log: str | None = None, token: str | None = None
         doc.transcript_error = "Vobiz transcription callback did not include transcript text."
 
     doc.save(ignore_permissions=True)
-    _append_callback_if_enabled(doc.name, "transcription_callback", payload)
+    _append_callback_if_enabled(doc.name, "transcription_callback", original_payload or data)
     frappe.db.commit()
 
     if doc.transcript_status == "Completed":
         enqueue_ai_disposition(doc.name)
-
-    return _plain_response("OK")
 
 
 def _enqueue_ai_if_ready(doc) -> None:
@@ -259,6 +277,25 @@ def _enqueue_ai_if_ready(doc) -> None:
         return
     if doc.transcript_status == "Completed" and doc.transcript_text:
         enqueue_ai_disposition(doc.name)
+
+
+def _find_call_log_from_provider_payload(payload: dict):
+    if not frappe.db.exists("DocType", "Vobiz Call Log"):
+        return None
+
+    candidates = [
+        ("call_uuid", _first_value(payload, "call_uuid", "CallUUID", "uuid")),
+        ("request_uuid", _first_value(payload, "request_uuid", "requestUUID", "request_id", "requestId")),
+        ("recording_id", _first_value(payload, "recording_id", "RecordingID")),
+        ("transcription_id", _first_value(payload, "transcription_id", "TranscriptionID")),
+    ]
+    for fieldname, value in candidates:
+        if not value or not frappe.get_meta("Vobiz Call Log").has_field(fieldname):
+            continue
+        call_log = frappe.db.get_value("Vobiz Call Log", {fieldname: value}, "name", order_by="creation desc")
+        if call_log:
+            return frappe.get_doc("Vobiz Call Log", call_log)
+    return None
 
 
 def _validate_callback(call_log: str | None, token: str | None):
