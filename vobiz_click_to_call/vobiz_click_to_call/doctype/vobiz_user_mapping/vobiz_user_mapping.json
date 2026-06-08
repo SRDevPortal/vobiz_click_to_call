@@ -1,0 +1,195 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:user",
+ "creation": "2026-05-22 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "user",
+  "enabled",
+  "agent_mobile",
+  "caller_id",
+  "availability_section",
+  "accept_calls",
+  "availability_status",
+  "auto_available_after_call",
+  "current_call_log",
+  "last_status_at",
+  "working_hours_section",
+  "enforce_working_hours",
+  "working_hours_start",
+  "working_hours_end",
+  "working_days",
+  "routing_section",
+  "team",
+  "pipeline",
+  "fallback_user",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "User",
+   "options": "User",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Enabled"
+  },
+  {
+   "description": "The phone number Vobiz will dial after the customer answers.",
+   "fieldname": "agent_mobile",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Agent Mobile",
+   "options": "Phone",
+   "reqd": 1
+  },
+  {
+   "description": "Optional caller ID override for this user.",
+   "fieldname": "caller_id",
+   "fieldtype": "Data",
+   "label": "Caller ID",
+   "options": "Phone"
+  },
+  {
+   "fieldname": "availability_section",
+   "fieldtype": "Section Break",
+   "label": "Availability"
+  },
+  {
+   "default": "1",
+   "fieldname": "accept_calls",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Accept Calls"
+  },
+  {
+   "default": "Available",
+   "fieldname": "availability_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Availability Status",
+   "options": "Available\nBusy\nAway\nOffline"
+  },
+  {
+   "default": "1",
+   "description": "When enabled, the user is made available again after the active call ends.",
+   "fieldname": "auto_available_after_call",
+   "fieldtype": "Check",
+   "label": "Auto Available After Call"
+  },
+  {
+   "fieldname": "current_call_log",
+   "fieldtype": "Link",
+   "label": "Current Call Log",
+   "options": "Vobiz Call Log",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_status_at",
+   "fieldtype": "Datetime",
+   "label": "Last Status At",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "working_hours_section",
+   "fieldtype": "Section Break",
+   "label": "Working Hours"
+  },
+  {
+   "default": "0",
+   "fieldname": "enforce_working_hours",
+   "fieldtype": "Check",
+   "label": "Enforce Working Hours"
+  },
+  {
+   "depends_on": "eval:doc.enforce_working_hours",
+   "fieldname": "working_hours_start",
+   "fieldtype": "Time",
+   "label": "Working Hours Start"
+  },
+  {
+   "depends_on": "eval:doc.enforce_working_hours",
+   "fieldname": "working_hours_end",
+   "fieldtype": "Time",
+   "label": "Working Hours End"
+  },
+  {
+   "depends_on": "eval:doc.enforce_working_hours",
+   "description": "Optional comma-separated day names, for example Monday,Tuesday,Wednesday. Leave blank for all days.",
+   "fieldname": "working_days",
+   "fieldtype": "Small Text",
+   "label": "Working Days"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "routing_section",
+   "fieldtype": "Section Break",
+   "label": "Routing"
+  },
+  {
+   "description": "Optional team label for reports and future routing.",
+   "fieldname": "team",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Team"
+  },
+  {
+   "description": "Optional pipeline label for reports and future pipeline-based caller mapping.",
+   "fieldname": "pipeline",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Pipeline"
+  },
+  {
+   "description": "Reserved fallback mapped user when this user is unavailable.",
+   "fieldname": "fallback_user",
+   "fieldtype": "Link",
+   "label": "Fallback User",
+   "options": "User"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  }
+ ],
+ "links": [],
+ "modified": "2026-05-22 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Vobiz Click To Call",
+ "name": "Vobiz User Mapping",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "user",
+ "track_changes": 1
+}

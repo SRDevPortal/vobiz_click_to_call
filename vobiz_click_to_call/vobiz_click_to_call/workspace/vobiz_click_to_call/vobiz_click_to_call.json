@@ -1,0 +1,99 @@
+{
+ "charts": [],
+ "content": "[{\"id\": \"vctc_header\", \"type\": \"header\", \"data\": {\"text\": \"Vobiz Click To Call\", \"level\": 4, \"col\": 12}}, {\"id\": \"vctc_agent_console\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Agent Console\", \"col\": 3}}, {\"id\": \"vctc_settings\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Settings\", \"col\": 3}}, {\"id\": \"vctc_user_mapping\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"User Mapping\", \"col\": 3}}, {\"id\": \"vctc_blocked_numbers\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Blocked Numbers\", \"col\": 3}}]",
+ "creation": "2026-05-28 11:10:35.585574",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "for_user": "",
+ "hide_custom": 0,
+ "icon": "link-url",
+ "idx": 0,
+ "indicator_color": "",
+ "is_hidden": 0,
+ "label": "Vobiz Click To Call",
+ "links": [
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Agent Console",
+   "link_count": 0,
+   "link_to": "vobiz-agent-console",
+   "link_type": "Page",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Settings",
+   "link_count": 0,
+   "link_to": "Vobiz Settings",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "User Mapping",
+   "link_count": 0,
+   "link_to": "Vobiz User Mapping",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Blocked Numbers",
+   "link_count": 0,
+   "link_to": "Vobiz Blocked Number",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  }
+ ],
+ "modified": "2026-06-01 13:21:03.086362",
+ "modified_by": "Administrator",
+ "module": "Vobiz Click To Call",
+ "name": "Vobiz Click To Call",
+ "number_cards": [],
+ "owner": "Administrator",
+ "parent_page": "",
+ "public": 1,
+ "quick_lists": [],
+ "roles": [],
+ "sequence_id": 0.0,
+ "shortcuts": [
+  {
+   "doc_view": "",
+   "icon": "phone",
+   "label": "Agent Console",
+   "link_to": "vobiz-agent-console",
+   "type": "Page"
+  },
+  {
+   "doc_view": "List",
+   "icon": "settings",
+   "label": "Settings",
+   "link_to": "Vobiz Settings",
+   "type": "DocType"
+  },
+  {
+   "doc_view": "List",
+   "icon": "users",
+   "label": "User Mapping",
+   "link_to": "Vobiz User Mapping",
+   "type": "DocType"
+  },
+  {
+   "doc_view": "List",
+   "icon": "slash",
+   "label": "Blocked Numbers",
+   "link_to": "Vobiz Blocked Number",
+   "type": "DocType"
+  }
+ ],
+ "title": "Vobiz Click To Call"
+}

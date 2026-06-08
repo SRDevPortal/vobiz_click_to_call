@@ -1,0 +1,31 @@
+[project]
+name = "vobiz_click_to_call"
+version = "0.0.1"
+description = "Vobiz.ai click-to-call integration for Frappe/ERPNext"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "SRIAAS", email = "webdevelopersriaas@gmail.com" }
+]
+dependencies = [
+    "requests",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vobiz_click_to_call*"]
+
+[tool.bench.frappe-dependencies]
+frappe = ">=15.0.0,<16.0.0"
+vobiz_ai = ">=0.0.1"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"

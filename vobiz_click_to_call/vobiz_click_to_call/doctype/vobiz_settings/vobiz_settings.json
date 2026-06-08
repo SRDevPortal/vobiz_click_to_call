@@ -1,0 +1,333 @@
+{
+ "actions": [],
+ "creation": "2026-05-22 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled",
+  "api_section",
+  "auth_id",
+  "auth_token",
+  "base_url",
+  "default_caller_id",
+  "default_country_code",
+  "webhook_base_url",
+  "call_section",
+  "allowed_doctypes",
+  "default_call_flow",
+  "manual_disposition_options",
+  "agent_ring_timeout",
+  "max_call_duration",
+  "safety_section",
+  "prevent_blocked_numbers",
+  "max_call_attempts_per_reference_per_day",
+  "max_calls_per_user_per_day",
+  "http_timeout",
+  "store_raw_payloads",
+  "cdr_section",
+  "enable_cdr_sync",
+  "cdr_sync_lookback_days",
+  "recording_section",
+  "enable_recording",
+  "recording_format",
+  "record_channel_type",
+  "recording_time_limit",
+  "enable_transcription",
+  "transcription_type",
+  "ai_section",
+  "enable_ai_disposition",
+  "openai_api_key",
+  "openai_model",
+  "ai_confidence_threshold",
+  "ai_disposition_options",
+  "auto_apply_ai_disposition",
+  "add_ai_summary_comment"
+ ],
+ "fields": [
+  {
+   "default": "0",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled"
+  },
+  {
+   "fieldname": "api_section",
+   "fieldtype": "Section Break",
+   "label": "API"
+  },
+  {
+   "depends_on": "eval:doc.enabled",
+   "fieldname": "auth_id",
+   "fieldtype": "Data",
+   "label": "Auth ID",
+   "no_copy": 1
+  },
+  {
+   "depends_on": "eval:doc.enabled",
+   "fieldname": "auth_token",
+   "fieldtype": "Password",
+   "label": "Auth Token",
+   "no_copy": 1
+  },
+  {
+   "default": "https://api.vobiz.ai/api/v1",
+   "fieldname": "base_url",
+   "fieldtype": "Data",
+   "label": "Base URL"
+  },
+  {
+   "description": "Vobiz caller ID / DID used for customer and agent call legs.",
+   "fieldname": "default_caller_id",
+   "fieldtype": "Data",
+   "label": "Default Caller ID",
+   "options": "Phone"
+  },
+  {
+   "default": "+91",
+   "fieldname": "default_country_code",
+   "fieldtype": "Data",
+   "label": "Default Country Code"
+  },
+  {
+   "description": "Optional public HTTPS site URL for Vobiz callbacks. Leave blank to use the current Frappe site URL.",
+   "fieldname": "webhook_base_url",
+   "fieldtype": "Data",
+   "label": "Webhook Base URL"
+  },
+  {
+   "fieldname": "call_section",
+   "fieldtype": "Section Break",
+   "label": "Calling"
+  },
+  {
+   "default": "CRM Lead\nContact\nPatient\nCustomer",
+   "description": "One DocType per line. A mapped user can call only from these DocTypes and only when they already have read access to the document.",
+   "fieldname": "allowed_doctypes",
+   "fieldtype": "Small Text",
+   "label": "Allowed DocTypes"
+  },
+  {
+   "default": "Customer First",
+   "description": "Customer First dials the customer before bridging the mapped user. Agent First dials the mapped user before bridging the customer.",
+   "fieldname": "default_call_flow",
+   "fieldtype": "Select",
+   "label": "Default Call Flow",
+   "options": "Customer First\nAgent First"
+  },
+  {
+   "default": "Connected\nNo Answer\nBusy\nFailed\nWrong Number\nNot Interested\nInterested\nFollow Up Required\nConverted\nCall Back Later\nLanguage Issue\nDuplicate Lead\nInvalid Number\nDo Not Call",
+   "description": "One manual post-call disposition per line.",
+   "fieldname": "manual_disposition_options",
+   "fieldtype": "Small Text",
+   "label": "Manual Disposition Options"
+  },
+  {
+   "default": "30",
+   "fieldname": "agent_ring_timeout",
+   "fieldtype": "Int",
+   "label": "Agent Ring Timeout"
+  },
+  {
+   "default": "3600",
+   "fieldname": "max_call_duration",
+   "fieldtype": "Int",
+   "label": "Max Call Duration"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "safety_section",
+   "fieldtype": "Section Break",
+   "label": "Safety"
+  },
+  {
+   "default": "1",
+   "description": "Prevents calls to numbers listed in Vobiz Blocked Number or source records marked Do Not Call.",
+   "fieldname": "prevent_blocked_numbers",
+   "fieldtype": "Check",
+   "label": "Prevent Blocked Numbers"
+  },
+  {
+   "default": "0",
+   "description": "0 means no daily limit per reference document.",
+   "fieldname": "max_call_attempts_per_reference_per_day",
+   "fieldtype": "Int",
+   "label": "Max Attempts Per Record Per Day"
+  },
+  {
+   "default": "0",
+   "description": "0 means no daily limit per mapped user.",
+   "fieldname": "max_calls_per_user_per_day",
+   "fieldtype": "Int",
+   "label": "Max Calls Per User Per Day"
+  },
+  {
+   "default": "20",
+   "fieldname": "http_timeout",
+   "fieldtype": "Int",
+   "label": "HTTP Timeout"
+  },
+  {
+   "default": "1",
+   "fieldname": "store_raw_payloads",
+   "fieldtype": "Check",
+   "label": "Store Raw Callback Payloads"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "cdr_section",
+   "fieldtype": "Section Break",
+   "label": "CDR Sync"
+  },
+  {
+   "default": "1",
+   "description": "Allows manual and scheduled CDR backfill from Vobiz.",
+   "fieldname": "enable_cdr_sync",
+   "fieldtype": "Check",
+   "label": "Enable CDR Sync"
+  },
+  {
+   "default": "7",
+   "depends_on": "eval:doc.enable_cdr_sync",
+   "fieldname": "cdr_sync_lookback_days",
+   "fieldtype": "Int",
+   "label": "CDR Sync Lookback Days"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "recording_section",
+   "fieldtype": "Section Break",
+   "label": "Recording and Transcription"
+  },
+  {
+   "default": "0",
+   "fieldname": "enable_recording",
+   "fieldtype": "Check",
+   "label": "Enable Recording"
+  },
+  {
+   "default": "mp3",
+   "depends_on": "eval:doc.enable_recording",
+   "fieldname": "recording_format",
+   "fieldtype": "Select",
+   "label": "Recording Format",
+   "options": "mp3\nwav"
+  },
+  {
+   "default": "stereo",
+   "depends_on": "eval:doc.enable_recording",
+   "description": "Stereo separates call legs for easier review and AI evaluation where Vobiz supports it.",
+   "fieldname": "record_channel_type",
+   "fieldtype": "Select",
+   "label": "Record Channel Type",
+   "options": "mono\nstereo"
+  },
+  {
+   "default": "3600",
+   "depends_on": "eval:doc.enable_recording",
+   "fieldname": "recording_time_limit",
+   "fieldtype": "Int",
+   "label": "Recording Time Limit"
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.enable_recording",
+   "description": "Requests Vobiz automated transcription for recorded calls.",
+   "fieldname": "enable_transcription",
+   "fieldtype": "Check",
+   "label": "Enable Transcription"
+  },
+  {
+   "default": "auto",
+   "depends_on": "eval:doc.enable_transcription",
+   "fieldname": "transcription_type",
+   "fieldtype": "Select",
+   "label": "Transcription Type",
+   "options": "auto\nhybrid"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "ai_section",
+   "fieldtype": "Section Break",
+   "label": "AI Disposition"
+  },
+  {
+   "default": "0",
+   "description": "Runs AI disposition after a transcript is received.",
+   "fieldname": "enable_ai_disposition",
+   "fieldtype": "Check",
+   "label": "Enable AI Disposition"
+  },
+  {
+   "depends_on": "eval:doc.enable_ai_disposition",
+   "description": "Optional app-level key. If blank, site_config openai_api_key or vobiz_openai_api_key is used.",
+   "fieldname": "openai_api_key",
+   "fieldtype": "Password",
+   "label": "OpenAI API Key",
+   "no_copy": 1
+  },
+  {
+   "default": "gpt-4.1-mini",
+   "depends_on": "eval:doc.enable_ai_disposition",
+   "fieldname": "openai_model",
+   "fieldtype": "Data",
+   "label": "OpenAI Model"
+  },
+  {
+   "default": "0.75",
+   "depends_on": "eval:doc.enable_ai_disposition",
+   "description": "AI results below this confidence are marked for manual review.",
+   "fieldname": "ai_confidence_threshold",
+   "fieldtype": "Float",
+   "label": "AI Confidence Threshold"
+  },
+  {
+   "default": "Interested\nNot Interested\nFollow Up\nCallback Requested\nWrong Number\nNo Requirement\nConverted\nComplaint\nDo Not Call\nUnknown",
+   "depends_on": "eval:doc.enable_ai_disposition",
+   "description": "One allowed disposition per line.",
+   "fieldname": "ai_disposition_options",
+   "fieldtype": "Small Text",
+   "label": "Disposition Options"
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.enable_ai_disposition",
+   "description": "Reserved for source-document updates once field mapping is configured.",
+   "fieldname": "auto_apply_ai_disposition",
+   "fieldtype": "Check",
+   "label": "Auto Apply AI Disposition"
+  },
+  {
+   "default": "1",
+   "depends_on": "eval:doc.enable_ai_disposition",
+   "description": "Adds the AI summary to the linked document timeline.",
+   "fieldname": "add_ai_summary_comment",
+   "fieldtype": "Check",
+   "label": "Add AI Summary Comment"
+  }
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-05-22 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Vobiz Click To Call",
+ "name": "Vobiz Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
