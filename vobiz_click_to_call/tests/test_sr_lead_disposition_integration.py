@@ -68,6 +68,25 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         self.assertIn("localhost", self.settings)
         self.assertIn("ip.is_private", self.settings)
         self.assertIn("Vobiz Webhook Base URL must be a public HTTPS URL", self.settings)
+        self.assertIn('scheme == "http"', self.settings)
+        self.assertIn('path.startswith(("/app", "/desk", "/login", "/api"))', self.settings)
+
+    def test_callback_base_url_normalizes_full_desk_urls(self):
+        import importlib.util
+
+        module_path = SETTINGS
+        spec = importlib.util.spec_from_file_location("vobiz_settings_service", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        self.assertEqual(
+            module.normalize_public_callback_base_url("http://dev-sr.butest.tech/app/vobiz-agent-console"),
+            "https://dev-sr.butest.tech",
+        )
+        self.assertEqual(
+            module.normalize_public_callback_base_url("https://dev-sr.butest.tech/api/method/test"),
+            "https://dev-sr.butest.tech",
+        )
 
     def test_call_log_disposition_field_uses_sr_lead_disposition_selector(self):
         self.assertIn("ensure_vobiz_call_log_disposition_field()", self.install)

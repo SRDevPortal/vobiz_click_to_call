@@ -126,6 +126,15 @@ def normalize_public_callback_base_url(base_url: str) -> str:
 
     parsed = urlsplit(base_url)
     hostname = parsed.hostname or ""
+    scheme = parsed.scheme
+    if scheme == "http" and hostname and not _is_internal_callback_host(hostname):
+        scheme = "https"
+
+    path = parsed.path or ""
+    if path.startswith(("/app", "/desk", "/login", "/api")):
+        path = ""
+
+    netloc = parsed.netloc
     is_https_tunnel = parsed.scheme == "https" and hostname.endswith(
         (".ngrok-free.dev", ".ngrok-free.app", ".ngrok.io")
     )
@@ -136,7 +145,7 @@ def normalize_public_callback_base_url(base_url: str) -> str:
             if parsed.password:
                 userinfo += f":{parsed.password}"
             netloc = f"{userinfo}@{netloc}"
-        base_url = urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
+    base_url = urlunsplit((scheme, netloc, path.rstrip("/"), "", ""))
 
     return base_url.rstrip("/")
 
@@ -152,7 +161,7 @@ def validate_public_callback_base_url(base_url: str) -> None:
             )
         )
 
-    if hostname in {"localhost", "127.0.0.1", "::1"} or hostname.endswith(".localhost") or hostname.endswith(".local"):
+    if _is_internal_callback_host(hostname):
         frappe.throw(_("Vobiz Webhook Base URL cannot be localhost or a private/internal host."))
 
     try:
@@ -161,6 +170,11 @@ def validate_public_callback_base_url(base_url: str) -> None:
             frappe.throw(_("Vobiz Webhook Base URL must use a public internet reachable host."))
     except ValueError:
         pass
+
+
+def _is_internal_callback_host(hostname: str) -> bool:
+    hostname = (hostname or "").strip().lower()
+    return hostname in {"localhost", "127.0.0.1", "::1"} or hostname.endswith(".localhost") or hostname.endswith(".local")
 
 
 def build_callback_url(method_path: str, call_log: str, token: str, settings=None) -> str:
