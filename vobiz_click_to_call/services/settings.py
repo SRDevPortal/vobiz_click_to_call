@@ -84,11 +84,12 @@ def get_manual_disposition_options(
     settings=None,
     reference_doctype: str | None = None,
     reference_name: str | None = None,
+    lead_status: str | None = None,
 ) -> list[str]:
     try:
         from vobiz_click_to_call.services.lead_disposition import get_lead_disposition_options
 
-        options = get_lead_disposition_options(reference_doctype, reference_name)
+        options = get_lead_disposition_options(reference_doctype, reference_name, lead_status)
         if options:
             return options
     except Exception:

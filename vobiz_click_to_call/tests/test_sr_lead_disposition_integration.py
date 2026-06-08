@@ -26,13 +26,16 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
     def test_sr_lead_disposition_is_source_of_truth(self):
         self.assertIn('SR_LEAD_DISPOSITION = "SR Lead Disposition"', self.lead_disposition)
         self.assertIn("get_lead_disposition_options", self.settings)
-        self.assertIn("get_lead_disposition_options(reference_doctype, reference_name)", self.settings)
-        self.assertIn("get_reference_lead_disposition", self.console)
+        self.assertIn("get_lead_disposition_options(reference_doctype, reference_name, lead_status)", self.settings)
+        self.assertIn("get_lead_disposition_context", self.console)
+        self.assertIn("get_lead_status_options", self.lead_disposition)
+        self.assertIn("lead_status: str | None = None", self.lead_disposition)
 
     def test_manual_disposition_syncs_to_crm_lead(self):
         self.assertIn("sync_call_disposition_to_lead", self.disposition)
         self.assertIn("reference_doctype=doc.reference_doctype", self.disposition)
         self.assertIn("reference_name=doc.reference_name", self.disposition)
+        self.assertIn("lead_status=lead_status", self.disposition)
         self.assertIn("lead_sync", self.disposition)
 
     def test_ai_uses_existing_sr_lead_dispositions(self):

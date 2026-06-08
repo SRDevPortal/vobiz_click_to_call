@@ -22,6 +22,7 @@ class VobizAgentConsole {
 			active_call: null,
 			call_started_at: null,
 			dispositions: [],
+			lead_disposition_context: {},
 			restore_checked: false,
 			restore_in_flight: false,
 			active_workdesk_key: null,
@@ -142,6 +143,7 @@ class VobizAgentConsole {
 							<div class="vobiz-section-title">
 								<h3>${__('Call Disposition')}</h3>
 							</div>
+							<select class="form-control" data-role="lead-status"></select>
 							<select class="form-control" data-role="disposition"></select>
 							<textarea class="form-control" rows="3" data-role="notes" placeholder="${__('Call notes')}"></textarea>
 							<button class="btn btn-primary btn-sm" data-action="save-disposition">${__('Save')}</button>
@@ -319,6 +321,7 @@ class VobizAgentConsole {
 		$main.on('click', '[data-action="open-reference"]', () => this.open_reference());
 		$main.on('click', '[data-action="cancel-call"]', () => this.cancel_call());
 		$main.on('click', '[data-action="save-disposition"]', () => this.save_disposition());
+		$main.on('change', '[data-role="lead-status"]', () => this.refresh_lead_disposition_options());
 		$main.on('click', '[data-tab]', (e) => this.show_tab($(e.currentTarget).data('tab')));
 		$main.on('change', '[data-role="check-all"]', (e) => {
 			$main.find('[data-role="row-check"]').prop('checked', e.currentTarget.checked);
@@ -335,6 +338,9 @@ class VobizAgentConsole {
 			this.state.queue = data.queue || [];
 			this.state.active_call = data.active_call || null;
 			this.state.dispositions = data.dispositions || [];
+			if (!this.state.lead_disposition_context || !this.state.lead_disposition_context.name) {
+				this.state.lead_disposition_context = { options: (data.dispositions || []).map(value => ({ name: value })) };
+			}
 			this.render_summary(data.summary || {});
 			this.render_availability(data.availability || {}, data.active_call || {});
 			this.render_queue();
@@ -571,19 +577,55 @@ class VobizAgentConsole {
 	}
 
 	render_dispositions() {
+		const context = this.state.lead_disposition_context || {};
+		const statusOptions = context.status_options || [];
+		const currentStatus = context.status || '';
+		const currentDisposition = context.disposition || '';
 		const options = [''].concat(this.state.dispositions || []);
+		this.page.main.find('[data-role="lead-status"]').html([''].concat(statusOptions).map(value =>
+			`<option value="${frappe.utils.escape_html(value)}">${frappe.utils.escape_html(value || __('Select CRM Status'))}</option>`
+		).join('')).val(currentStatus);
 		this.page.main.find('[data-role="disposition"]').html(options.map(value =>
-			`<option value="${frappe.utils.escape_html(value)}">${frappe.utils.escape_html(value || __('Select Status'))}</option>`
-		).join(''));
+			`<option value="${frappe.utils.escape_html(value)}">${frappe.utils.escape_html(value || __('Select SR Lead Disposition'))}</option>`
+		).join('')).val(currentDisposition);
 	}
 
 	apply_context_dispositions(context) {
 		const leadDisposition = ((context || {}).workdesk || {}).lead_disposition || {};
 		const options = (leadDisposition.options || []).map(row => row.name).filter(Boolean);
-		if (options.length) {
-			this.state.dispositions = options;
+		this.state.lead_disposition_context = leadDisposition;
+		this.state.dispositions = options.length ? options : this.state.dispositions;
+		this.render_dispositions();
+	}
+
+	refresh_lead_disposition_options() {
+		const reference = this.active_disposition_reference();
+		if (!reference.reference_doctype || !reference.reference_name) return;
+
+		const leadStatus = this.page.main.find('[data-role="lead-status"]').val();
+		frappe.call({
+			method: 'vobiz_click_to_call.api.disposition.get_lead_disposition_context_api',
+			args: {
+				reference_doctype: reference.reference_doctype,
+				reference_name: reference.reference_name,
+				lead_status: leadStatus
+			}
+		}).then((r) => {
+			const context = r.message || {};
+			this.state.lead_disposition_context = context;
+			this.state.dispositions = (context.options || []).map(row => row.name).filter(Boolean);
 			this.render_dispositions();
-		}
+		});
+	}
+
+	active_disposition_reference() {
+		const active = this.state.active_call || {};
+		const selected = this.state.selected || {};
+		const contextReference = (this.state.context || {}).reference || {};
+		return {
+			reference_doctype: active.reference_doctype || selected.doctype || contextReference.doctype,
+			reference_name: active.reference_name || selected.name || contextReference.name
+		};
 	}
 
 	show_tab(tab) {
@@ -2364,6 +2406,9 @@ class VobizAgentConsole {
 			return;
 		}
 
+		const leadContext = this.state.lead_disposition_context || {};
+		const statusOptions = leadContext.status_options || [];
+		const currentStatus = leadContext.status || '';
 		const options = this.state.dispositions || [];
 		const suggested = call.ai_disposition && options.includes(call.ai_disposition) ? call.ai_disposition : '';
 		const notes = [call.ai_summary, call.ai_next_action].filter(Boolean).join('\n\n');
@@ -2383,9 +2428,17 @@ class VobizAgentConsole {
 					`
 				},
 				{
+					fieldname: 'lead_status',
+					fieldtype: 'Select',
+					label: __('CRM Status'),
+					options: [''].concat(statusOptions).join('\n'),
+					reqd: Boolean(statusOptions.length),
+					default: currentStatus
+				},
+				{
 					fieldname: 'disposition',
 					fieldtype: 'Select',
-					label: __('Disposition'),
+					label: __('SR Lead Disposition'),
 					options: [''].concat(options).join('\n'),
 					reqd: 1,
 					default: suggested
@@ -2400,13 +2453,14 @@ class VobizAgentConsole {
 			],
 			primary_action_label: __('Save Disposition'),
 			primary_action: (values) => {
-				if (!values.disposition || !values.notes) {
-					frappe.msgprint(__('Select a disposition and add notes.'));
+				if ((statusOptions.length && !values.lead_status) || !values.disposition || !values.notes) {
+					frappe.msgprint(__('Select CRM status, SR lead disposition, and add notes.'));
 					return;
 				}
 				dialog.get_primary_btn().prop('disabled', true).text(__('Saving...'));
 				frappe.call('vobiz_click_to_call.api.disposition.save_disposition', {
 					call_log: call.name,
+					lead_status: values.lead_status,
 					disposition: values.disposition,
 					notes: values.notes
 				}).then(() => {
@@ -2419,22 +2473,47 @@ class VobizAgentConsole {
 			}
 		});
 		dialog.show();
+		if (statusOptions.length) {
+			dialog.fields_dict.lead_status.$input.on('change', () => {
+				const leadStatus = dialog.get_value('lead_status');
+				frappe.call({
+					method: 'vobiz_click_to_call.api.disposition.get_lead_disposition_context_api',
+					args: {
+						reference_doctype: row.doctype || call.reference_doctype,
+						reference_name: row.name || call.reference_name,
+						lead_status: leadStatus
+					}
+				}).then((r) => {
+					const context = r.message || {};
+					const refreshedOptions = (context.options || []).map(item => item.name).filter(Boolean);
+					const refreshedSuggestion = call.ai_disposition && refreshedOptions.includes(call.ai_disposition) ? call.ai_disposition : '';
+					this.state.lead_disposition_context = context;
+					this.state.dispositions = refreshedOptions;
+					dialog.set_df_property('disposition', 'options', [''].concat(refreshedOptions).join('\n'));
+					dialog.set_value('disposition', refreshedSuggestion);
+					this.render_dispositions();
+				});
+			});
+		}
 	}
 
 	save_disposition() {
 		const active = this.state.active_call || {};
+		const leadStatus = this.page.main.find('[data-role="lead-status"]').val();
+		const statusOptions = ((this.state.lead_disposition_context || {}).status_options || []);
 		const disposition = this.page.main.find('[data-role="disposition"]').val();
 		const notes = this.page.main.find('[data-role="notes"]').val();
 		if (!active.name) {
 			frappe.msgprint(__('No active call selected.'));
 			return;
 		}
-		if (!disposition || !notes) {
-			frappe.msgprint(__('Select a disposition and add notes.'));
+		if ((statusOptions.length && !leadStatus) || !disposition || !notes) {
+			frappe.msgprint(__('Select CRM status, SR lead disposition, and add notes.'));
 			return;
 		}
 		frappe.call('vobiz_click_to_call.api.disposition.save_disposition', {
 			call_log: active.name,
+			lead_status: leadStatus,
 			disposition,
 			notes
 		}).then(() => {

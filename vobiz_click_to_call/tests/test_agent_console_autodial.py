@@ -103,6 +103,8 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("disposition_prompted_call_log", prompt_source)
         self.assertIn("Complete Call Disposition", dialog_source)
         self.assertIn("AI Suggestion", dialog_source)
+        self.assertIn("lead_status", dialog_source)
+        self.assertIn("get_lead_disposition_context_api", dialog_source)
         self.assertIn("save_disposition", dialog_source)
 
     def test_workdesk_heavy_tabs_are_lazy_loaded(self):
@@ -118,14 +120,28 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         select_source = self.method_source("select_row", "render_focus")
         call_row_source = self.method_source("call_row", "detail_key")
         apply_source = self.method_source("apply_context_dispositions", "show_tab")
+        refresh_source = self.method_source("refresh_lead_disposition_options", "active_disposition_reference")
         workdesk_source = self.method_source("workdesk_lead_disposition_html", "render_workdesk_live_call")
 
         self.assertIn("this.apply_context_dispositions(this.state.context)", select_source)
         self.assertIn("this.apply_context_dispositions(this.state.context)", call_row_source)
         self.assertIn("lead_disposition", apply_source)
+        self.assertIn("lead_disposition_context", apply_source)
         self.assertIn("this.render_dispositions()", apply_source)
+        self.assertIn("lead-status", self.source)
+        self.assertIn("get_lead_disposition_context_api", refresh_source)
         self.assertIn("Lead Disposition", workdesk_source)
         self.assertIn("Available for this lead", workdesk_source)
+
+    def test_manual_disposition_saves_status_and_sr_lead_disposition(self):
+        render_source = self.method_source("render_dispositions", "apply_context_dispositions")
+        save_source = self.method_source("save_disposition", "open_reference")
+
+        self.assertIn("Select CRM Status", render_source)
+        self.assertIn("Select SR Lead Disposition", render_source)
+        self.assertIn("leadStatus", save_source)
+        self.assertIn("lead_status: leadStatus", save_source)
+        self.assertIn("Select CRM status, SR lead disposition, and add notes", save_source)
 
 
 if __name__ == "__main__":
