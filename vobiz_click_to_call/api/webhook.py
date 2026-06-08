@@ -549,7 +549,7 @@ def _status_from_dial_status(dial_status: str, *, previous: str) -> str:
     if normalized in {"failed", "canceled", "cancelled"}:
         return "Failed"
     if normalized in {"hangup"}:
-        return "Completed" if previous == "Connected" else previous or "Completed"
+        return "Completed" if previous == "Connected" else "Cancelled"
     return previous or "Customer Answered"
 
 

@@ -890,11 +890,25 @@ class VobizAgentConsole {
 
 		const call = this.matching_active_call(row);
 		const isActive = Boolean(call && call.name && !this.is_terminal_status(call.status));
-		const $button = dialog.get_primary_btn();
-		$button
+		dialog.get_primary_btn()
 			.toggleClass('btn-primary', !isActive)
 			.toggleClass('btn-danger', isActive)
 			.prop('disabled', false)
+			.html(isActive
+				? `<i class="fa fa-phone"></i> ${__('Stop Call')}`
+				: `<i class="fa fa-phone"></i> ${__('Start Call')}`);
+		this.update_workdesk_header_call_action(row, call);
+	}
+
+	update_workdesk_header_call_action(row, call) {
+		const $body = this.state.active_workdesk_body;
+		if (!$body || !$body.length || !row) return;
+		const isActive = Boolean(call && call.name && !this.is_terminal_status(call.status));
+		$body.find('[data-workdesk-action="call"]')
+			.toggleClass('btn-primary', !isActive)
+			.toggleClass('btn-success', !isActive)
+			.toggleClass('btn-danger', isActive)
+			.attr('data-call-log', isActive ? call.name : '')
 			.html(isActive
 				? `<i class="fa fa-phone"></i> ${__('Stop Call')}`
 				: `<i class="fa fa-phone"></i> ${__('Start Call')}`);
@@ -1085,6 +1099,7 @@ class VobizAgentConsole {
 				this.state.workdesk_live_call = call;
 				this.render_workdesk_live_call();
 				if (this.is_terminal_status(call.status)) {
+					this.state.active_call = { last_call: call };
 					this.clear_tracked_live_call(call.name);
 					this.render_workdesk_live_call();
 					this.maybe_prompt_workdesk_disposition(call);
@@ -1558,8 +1573,7 @@ class VobizAgentConsole {
 	handle_workdesk_action(action, row, context, $body) {
 		const workdesk = context.workdesk || {};
 		if (action === 'call') {
-			this.state.selected = row;
-			this.start_call_for_row(row);
+			return this.handle_workdesk_primary_action(row);
 		} else if (action === 'open-lead') {
 			this.remember_workdesk_return(row);
 			frappe.set_route('Form', row.doctype, row.name);
@@ -2368,6 +2382,7 @@ class VobizAgentConsole {
 			if (this.state.workdesk_live_call_log === call_log) {
 				this.clear_tracked_live_call(call_log);
 			}
+			this.state.active_call = { last_call: call };
 			this.state.workdesk_live_call = null;
 			this.render_workdesk_live_call();
 			this.update_workdesk_primary_action(row || this.state.active_workdesk_row);

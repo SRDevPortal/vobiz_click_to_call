@@ -87,6 +87,9 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("Stop Call", update_source)
         self.assertIn("Start Call", update_source)
         self.assertIn("btn-danger", update_source)
+        self.assertIn("update_workdesk_header_call_action", update_source)
+        self.assertIn('data-workdesk-action="call"', self.source)
+        self.assertIn("return this.handle_workdesk_primary_action(row)", self.source)
         self.assertIn("this.update_workdesk_primary_action(row)", render_live_source)
 
     def test_workdesk_stop_and_terminal_call_prompt_disposition(self):
@@ -97,6 +100,7 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
 
         self.assertIn("get_call_status", cancel_source)
         self.assertIn("this.clear_tracked_live_call(call_log)", cancel_source)
+        self.assertIn("this.state.active_call = { last_call: call }", cancel_source)
         self.assertIn("this.update_workdesk_primary_action", cancel_source)
         self.assertIn("this.maybe_prompt_workdesk_disposition(call)", cancel_source)
         self.assertIn("this.maybe_prompt_workdesk_disposition(call)", refresh_source)

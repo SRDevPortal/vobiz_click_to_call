@@ -211,6 +211,7 @@ def sync_provider_update_to_click_to_call_log(doc) -> None:
     if not values:
         return
 
+    values = normalize_provider_update_status(target, values)
     frappe.db.set_value("Vobiz Call Log", target, values, update_modified=False)
     if values.get("status") in TERMINAL_STATUSES:
         restore_mapping_for_call_log(target)
@@ -277,6 +278,31 @@ def provider_update_values(doc) -> dict[str, Any]:
             values["transcript_status"] = "Completed"
         if meta.has_field("transcript_received_at"):
             values["transcript_received_at"] = doc.get("transcript_received_at") or frappe.utils.now()
+    return values
+
+
+def normalize_provider_update_status(target_call_log: str, values: dict[str, Any]) -> dict[str, Any]:
+    current_status = frappe.db.get_value("Vobiz Call Log", target_call_log, "status") or ""
+    signal = " ".join(
+        str(values.get(fieldname) or "")
+        for fieldname in ("status", "call_status", "dial_status", "hangup_cause", "error_message")
+    ).strip().lower().replace("_", "-")
+    if not signal:
+        return values
+
+    if "busy" in signal:
+        values["status"] = "Busy"
+    elif "no-answer" in signal or "no answer" in signal or "timeout" in signal or "unanswered" in signal:
+        values["status"] = "No Answer"
+    elif "cancel" in signal or "reject" in signal or "decline" in signal:
+        values["status"] = "Cancelled"
+    elif "fail" in signal or "error" in signal:
+        values["status"] = "Failed"
+    elif "completed" in signal or "hangup" in signal:
+        values["status"] = "Completed" if current_status == "Connected" else "Cancelled"
+    elif "connected" in signal or "answered" in signal or "in-progress" in signal or "in progress" in signal:
+        values["status"] = "Connected"
+
     return values
 
 

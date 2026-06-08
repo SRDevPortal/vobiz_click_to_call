@@ -21,8 +21,9 @@ class TestWebhookStatusMapping(unittest.TestCase):
         self.assertEqual(_status_from_hangup("completed", "no-answer", previous="Customer Answered"), "No Answer")
         self.assertEqual(_status_from_hangup("completed", "failed", previous="Ringing"), "Failed")
 
-    def test_dial_hangup_before_connect_stays_non_completed_until_hangup_webhook(self):
-        self.assertEqual(_status_from_dial_status("hangup", previous="Customer Answered"), "Customer Answered")
+    def test_dial_hangup_before_connect_is_terminal_cancelled(self):
+        self.assertEqual(_status_from_dial_status("hangup", previous="Customer Answered"), "Cancelled")
+        self.assertEqual(_status_from_dial_status("hangup", previous="Agent Answered"), "Cancelled")
         self.assertEqual(_status_from_dial_status("hangup", previous="Connected"), "Completed")
 
     def test_static_transcription_event_endpoint_matches_provider_payload(self):

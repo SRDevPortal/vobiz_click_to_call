@@ -76,6 +76,12 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         self.assertIn("enqueue_ai_disposition(target, commit=False)", self.ai)
         self.assertIn('"transcription_text"', self.ai)
 
+    def test_vobiz_ai_provider_status_updates_are_normalized_to_terminal_states(self):
+        self.assertIn("normalize_provider_update_status(target, values)", self.ai)
+        self.assertIn("def normalize_provider_update_status", self.ai)
+        self.assertIn('"hangup"', self.ai)
+        self.assertIn('"Completed" if current_status == "Connected" else "Cancelled"', self.ai)
+
 
 if __name__ == "__main__":
     unittest.main()
