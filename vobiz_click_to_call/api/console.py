@@ -226,6 +226,7 @@ def get_call_performance(status_filter: str | None = None) -> dict[str, Any]:
             "reference_doctype",
             "reference_name",
             "customer_number",
+            "user_mobile",
             "disposition",
         ],
         order_by="creation desc",
@@ -313,6 +314,7 @@ def _performance_call_row(row) -> dict[str, Any]:
         "reference_doctype": row.reference_doctype,
         "reference_name": row.reference_name,
         "customer_number": row.customer_number,
+        "user_mobile": row.user_mobile,
         "disposition": row.disposition,
     }
 

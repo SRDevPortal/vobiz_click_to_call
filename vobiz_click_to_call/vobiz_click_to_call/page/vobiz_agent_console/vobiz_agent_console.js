@@ -2417,7 +2417,8 @@ class VobizAgentConsole {
 				fields: [{ fieldname: 'performance', fieldtype: 'HTML' }]
 			});
 			dialog.show();
-			dialog.get_field('performance').$wrapper.html(`
+			const $wrapper = dialog.get_field('performance').$wrapper;
+			$wrapper.html(`
 				<div class="vobiz-performance">
 					<div class="vobiz-performance-head">
 						<div>
@@ -2436,6 +2437,14 @@ class VobizAgentConsole {
 					${this.performance_calls_html(data.calls || [], metric)}
 				</div>
 			`);
+			$wrapper.on('click', '[data-performance-call]', (e) => {
+				const $button = $(e.currentTarget);
+				this.call_performance_row({
+					doctype: $button.data('doctype'),
+					name: $button.data('name'),
+					phone: $button.data('phone')
+				});
+			});
 		});
 	}
 
@@ -2487,11 +2496,13 @@ class VobizAgentConsole {
 						<tr>
 							<th>${__('Call Log')}</th>
 							<th>${__('User')}</th>
+							<th>${__('User Mobile')}</th>
 							<th>${__('Lead')}</th>
 							<th>${__('Status')}</th>
 							<th>${__('Duration')}</th>
 							<th>${__('Disposition')}</th>
 							<th>${__('Time')}</th>
+							<th>${__('Action')}</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -2499,18 +2510,52 @@ class VobizAgentConsole {
 							<tr>
 								<td><a href="/app/vobiz-call-log/${frappe.utils.escape_html(row.name || '')}"><code>${frappe.utils.escape_html(row.name || '')}</code></a></td>
 								<td>${frappe.utils.escape_html(row.user || '')}</td>
+								<td>${frappe.utils.escape_html(row.user_mobile || '')}</td>
 								<td>${row.reference_name ? `<a href="/app/${frappe.router.slug(row.reference_doctype || 'CRM Lead')}/${frappe.utils.escape_html(row.reference_name)}"><code>${frappe.utils.escape_html(row.reference_name)}</code></a>` : ''}</td>
 								<td>${frappe.utils.escape_html(row.status || '')}</td>
 								<td>${frappe.utils.escape_html(row.duration_label || '0s')}</td>
 								<td>${frappe.utils.escape_html(row.disposition || '')}</td>
 								<td>${row.creation ? frappe.datetime.str_to_user(row.creation) : ''}</td>
+								<td>
+									<button class="btn btn-xs btn-primary" data-performance-call
+										data-doctype="${frappe.utils.escape_html(row.reference_doctype || '')}"
+										data-name="${frappe.utils.escape_html(row.reference_name || '')}"
+										data-phone="${frappe.utils.escape_html(row.customer_number || '')}"
+										${!row.reference_name || !row.customer_number ? 'disabled' : ''}>
+										<i class="fa fa-phone"></i> ${__('Call')}
+									</button>
+								</td>
 							</tr>
-						`).join('') || `<tr><td colspan="7" class="text-muted text-center">${__('No calls found today.')}</td></tr>`}
+						`).join('') || `<tr><td colspan="9" class="text-muted text-center">${__('No calls found today.')}</td></tr>`}
 					</tbody>
 				</table>
 			</div>
 			</div>
 		`;
+	}
+
+	call_performance_row(row) {
+		if (!row || !row.doctype || !row.name || !row.phone) {
+			frappe.msgprint(__('This call row does not have enough lead information to call again.'));
+			return;
+		}
+		const callRow = {
+			doctype: row.doctype,
+			name: row.name,
+			title: row.name,
+			phone: row.phone
+		};
+		this.start_call_for_row(callRow).then(() => {
+			frappe.call('vobiz_click_to_call.api.console.get_reference_context', {
+				reference_doctype: callRow.doctype,
+				reference_name: callRow.name,
+				lite: 1
+			}).then((r) => {
+				this.state.context = r.message || {};
+				this.apply_context_dispositions(this.state.context);
+				this.open_detail_dialog(callRow, r.message || {});
+			});
+		});
 	}
 
 	cancel_call() {
