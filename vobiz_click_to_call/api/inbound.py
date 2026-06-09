@@ -10,6 +10,7 @@ from werkzeug.wrappers import Response
 
 from vobiz_ai.api.call_log import make_outbound_call_key, sync_reference_links
 from vobiz_click_to_call.api.call import get_user_mapping
+from vobiz_click_to_call.api.console import is_agent_console_online
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
 from vobiz_click_to_call.services.numbers import normalize_phone_number, phone_key, provider_phone_number
 from vobiz_click_to_call.services.settings import build_callback_url, get_default_country_code, get_settings
@@ -60,7 +61,6 @@ def route():
 
     call_log = find_existing_inbound_call(payload) or create_inbound_call_log(previous, customer_number, did_number, agent_mobile, payload)
     update_inbound_call_event(call_log, payload, commit=False)
-    publish_callback_notification(call_log, previous, customer_number, did_number, agent_mobile)
 
     if _is_trunk_notification(payload):
         log_vobiz_event(
@@ -79,6 +79,17 @@ def route():
         frappe.db.commit()
         return _plain_response("OK")
 
+    if not is_agent_console_online(previous.user):
+        mark_inbound_missed(
+            call_log,
+            "Mapped agent is not active on Vobiz Agent Console.",
+            payload,
+            commit=False,
+        )
+        frappe.db.commit()
+        return _xml_response(_hangup_xml())
+
+    publish_callback_notification(call_log, previous, customer_number, did_number, agent_mobile)
     xml = _dial_agent_xml(call_log, agent_mobile, settings)
     frappe.db.commit()
     return _xml_response(xml)
@@ -232,6 +243,30 @@ def update_inbound_call_event(doc, payload: dict[str, Any], *, commit: bool = Tr
 
     doc.request_json = json.dumps(_safe_payload(payload), indent=2, default=str)
     doc.save(ignore_permissions=True)
+    if commit:
+        frappe.db.commit()
+
+
+def mark_inbound_missed(doc, reason: str, payload: dict[str, Any], *, commit: bool = True) -> None:
+    apply_provider_payload(doc, payload)
+    doc.status = "No Answer"
+    doc.call_status = "missed"
+    doc.hangup_cause = "AGENT_CONSOLE_OFFLINE"
+    doc.error_message = reason
+    doc.end_time = frappe.utils.now()
+    doc.request_json = json.dumps(_safe_payload(payload), indent=2, default=str)
+    doc.save(ignore_permissions=True)
+    log_vobiz_event(
+        "Inbound callback missed: mapped agent console inactive",
+        call_log=doc.name,
+        severity="Warning",
+        payload={
+            "user": doc.user,
+            "customer_number": doc.customer_number,
+            "did_number": doc.did_number,
+            "reason": reason,
+        },
+    )
     if commit:
         frappe.db.commit()
 

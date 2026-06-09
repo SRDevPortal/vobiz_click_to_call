@@ -52,9 +52,11 @@ class VobizAgentConsole {
 		this.timer = null;
 		this.poller = null;
 		this.search_timer = null;
+		this.heartbeat_timer = null;
 		this.render();
 		this.bind();
 		this.bind_realtime();
+		this.start_console_heartbeat();
 		this.load();
 		this.start_polling();
 	}
@@ -343,6 +345,13 @@ class VobizAgentConsole {
 		$main.on('change', '[data-role="row-check"]', () => this.update_selected_count());
 		$main.on('click', '[data-role="row-check"]', (e) => e.stopPropagation());
 		$main.on('input', '[data-role="search"]', () => this.queue_search_changed());
+		$(document).on('visibilitychange.vobiz-agent-console', () => {
+			if (document.hidden) {
+				this.stop_console_heartbeat();
+			} else if (this.is_console_visible()) {
+				this.start_console_heartbeat();
+			}
+		});
 	}
 
 	load() {
@@ -381,6 +390,7 @@ class VobizAgentConsole {
 
 	on_page_show() {
 		this.state.restore_checked = false;
+		this.start_console_heartbeat();
 		this.restore_workdesk_dialog();
 	}
 
@@ -391,7 +401,34 @@ class VobizAgentConsole {
 			clearInterval(this.poller);
 			clearInterval(this.timer);
 			clearTimeout(this.search_timer);
+			this.stop_console_heartbeat();
 			this.unbind_realtime();
+			$(document).off('visibilitychange.vobiz-agent-console');
+		});
+	}
+
+	start_console_heartbeat() {
+		if (!this.is_console_visible()) return;
+		this.send_console_heartbeat();
+		clearInterval(this.heartbeat_timer);
+		this.heartbeat_timer = setInterval(() => {
+			if (this.is_console_visible() && !document.hidden) {
+				this.send_console_heartbeat();
+			}
+		}, 10000);
+	}
+
+	stop_console_heartbeat() {
+		clearInterval(this.heartbeat_timer);
+		this.heartbeat_timer = null;
+	}
+
+	send_console_heartbeat() {
+		frappe.call({
+			method: 'vobiz_click_to_call.api.console.heartbeat_agent_console',
+			type: 'POST',
+			freeze: false,
+			args: {}
 		});
 	}
 

@@ -17,6 +17,33 @@ from vobiz_click_to_call.services.settings import get_settings
 TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
 LEAD_DOCTYPE_CANDIDATES = ("CRM Lead", "Lead", "Patient", "Customer")
 HTML_TAG_RE = re.compile(r"<[^>]*>")
+CONSOLE_SESSION_TTL_SECONDS = 25
+
+
+def _console_session_key(user: str) -> str:
+    return f"vobiz_agent_console:online:{user}"
+
+
+def is_agent_console_online(user: str | None) -> bool:
+    if not user:
+        return False
+    return bool(frappe.cache().get_value(_console_session_key(user)))
+
+
+@frappe.whitelist(methods=["POST"])
+def heartbeat_agent_console() -> dict[str, Any]:
+    if frappe.session.user == "Guest":
+        frappe.throw(_("Login required."))
+
+    frappe.cache().set_value(
+        _console_session_key(frappe.session.user),
+        frappe.utils.now(),
+        expires_in_sec=CONSOLE_SESSION_TTL_SECONDS,
+    )
+    return {
+        "online": True,
+        "ttl": CONSOLE_SESSION_TTL_SECONDS,
+    }
 
 
 @frappe.whitelist()
