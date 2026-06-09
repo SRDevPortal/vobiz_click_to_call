@@ -41,6 +41,11 @@ def phone_key(value: str | None) -> str:
     return digits[-10:] if len(digits) >= 10 else digits
 
 
+def provider_phone_number(value: str | None) -> str:
+    """Return the digit-only E.164 form expected inside Vobiz XML."""
+    return digits_only(value)
+
+
 def numbers_match(left: str | None, right: str | None) -> bool:
     left_key = phone_key(left)
     right_key = phone_key(right)
@@ -52,4 +57,3 @@ def mask_phone(value: str | None) -> str:
     if len(digits) <= 4:
         return value or ""
     return f"{'*' * max(len(digits) - 4, 0)}{digits[-4:]}"
-

@@ -40,9 +40,10 @@ class VobizSettings(Document):
         self.transcription_type = self.transcription_type or "auto"
         self.openai_model = self.openai_model or "gpt-4.1-mini"
         self.ai_confidence_threshold = self.ai_confidence_threshold or 0.75
-        self.ai_disposition_system_prompt = (
-            self.ai_disposition_system_prompt or DEFAULT_AI_DISPOSITION_SYSTEM_PROMPT
-        ).strip()
+        if self.meta.has_field("ai_disposition_system_prompt"):
+            self.ai_disposition_system_prompt = (
+                self.get("ai_disposition_system_prompt") or DEFAULT_AI_DISPOSITION_SYSTEM_PROMPT
+            ).strip()
         self.sync_ai_disposition_options()
 
         if not self.enabled:

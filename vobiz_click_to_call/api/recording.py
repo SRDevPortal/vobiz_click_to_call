@@ -75,7 +75,8 @@ def _can_access_recording(doc) -> bool:
 
 def _is_allowed_recording_url(url: str) -> bool:
     parsed = urlparse(url or "")
-    return parsed.scheme == "https" and parsed.netloc.lower() == "media.vobiz.ai"
+    host = parsed.hostname or ""
+    return parsed.scheme == "https" and (host == "vobiz.ai" or host.endswith(".vobiz.ai"))
 
 
 def _extension_from_url(url: str) -> str:

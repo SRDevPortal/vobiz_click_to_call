@@ -5,12 +5,14 @@ from datetime import datetime
 from xml.sax.saxutils import escape, quoteattr
 
 import frappe
+from werkzeug.wrappers import Response
 
 from vobiz_ai.api.call_log import append_callback, sync_linked_summaries
 from vobiz_click_to_call.api.call import restore_mapping_after_call
 from vobiz_click_to_call.services.ai import enqueue_ai_disposition
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
 from vobiz_click_to_call.services.disposition import update_reference_call_metrics
+from vobiz_click_to_call.services.numbers import provider_phone_number
 from vobiz_click_to_call.services.settings import build_callback_url, get_settings
 
 
@@ -114,10 +116,16 @@ def dial_action(call_log: str | None = None, token: str | None = None):
         "DialBLegStatus",
     )
     if dial_status:
+        previous_status = doc.status
         doc.dial_status = dial_status
         doc.status = _status_from_dial_status(dial_status, previous=doc.status)
         if str(dial_status).strip().lower().replace("_", "-") == "completed":
-            doc.status = "Completed"
+            if _dial_completed_without_bridge(payload, previous_status):
+                doc.status = "No Answer"
+                doc.error_message = "Vobiz Dial completed without connecting the second leg."
+                _log_webhook_event("dial_action completed without bridge", doc, payload, severity="Warning")
+            else:
+                doc.status = "Completed"
             if not doc.end_time:
                 doc.end_time = frappe.utils.now()
 
@@ -412,7 +420,7 @@ def _dial_xml(doc) -> str:
         ("callbackMethod", "POST"),
     ]
     if doc.caller_id:
-        attrs.append(("callerId", doc.caller_id))
+        attrs.append(("callerId", provider_phone_number(doc.caller_id)))
     if settings.agent_ring_timeout:
         attrs.append(("timeout", str(int(settings.agent_ring_timeout))))
     if settings.max_call_duration:
@@ -424,7 +432,7 @@ def _dial_xml(doc) -> str:
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
         "<Response>"
         f"<Dial {attr_text}>"
-        f"<Number>{escape(dial_number)}</Number>"
+        f"<Number>{escape(provider_phone_number(dial_number))}</Number>"
         "</Dial>"
         "</Response>"
     )
@@ -439,7 +447,7 @@ def _wait_xml() -> str:
 
 
 def _xml_response(xml: str):
-    return _raw_response(xml, "text/xml", "vobiz.xml")
+    return Response(xml, content_type="text/xml; charset=utf-8")
 
 
 def _plain_response(text: str):
@@ -551,6 +559,13 @@ def _status_from_dial_status(dial_status: str, *, previous: str) -> str:
     if normalized in {"hangup"}:
         return "Completed" if previous == "Connected" else "Cancelled"
     return previous or "Customer Answered"
+
+
+def _dial_completed_without_bridge(payload: dict, previous_status: str | None) -> bool:
+    b_leg = _first_value(payload, "DialBLegUUID", "BLegUUID", "DialCallUUID", "dial_b_leg_uuid")
+    dial_action = str(_first_value(payload, "DialAction", "dial_action") or "").strip().lower()
+    previous_status = str(previous_status or "").strip()
+    return not b_leg and dial_action != "connected" and previous_status not in {"Connected", "Completed"}
 
 
 def _status_from_hangup(call_status: str | None, hangup_cause: str | None, *, previous: str) -> str:

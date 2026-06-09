@@ -36,6 +36,7 @@ class VobizAgentConsole {
 			workdesk_live_polling: false,
 			disposition_prompted_call_log: null,
 			navigating_from_workdesk: false,
+			last_callback_call_log: null,
 			auto_dial: {
 				running: false,
 				in_flight: false,
@@ -50,8 +51,10 @@ class VobizAgentConsole {
 		};
 		this.timer = null;
 		this.poller = null;
+		this.search_timer = null;
 		this.render();
 		this.bind();
+		this.bind_realtime();
 		this.load();
 		this.start_polling();
 	}
@@ -160,7 +163,7 @@ class VobizAgentConsole {
 		if ($('#vobiz-agent-console-style').length) return;
 		$('head').append(`
 			<style id="vobiz-agent-console-style">
-				.vobiz-console { background: #f7f7fb; margin: -15px; min-height: calc(100vh - 60px); padding: 24px; }
+				.vobiz-console { background: #f7f7fb; margin: -15px; min-height: calc(100vh - 60px); overflow-x: hidden; padding: 24px; }
 				.vobiz-console-head { align-items: center; display: flex; justify-content: space-between; margin-bottom: 20px; }
 				.vobiz-console-head h2 { font-size: 22px; font-weight: 700; margin: 0; }
 				.vobiz-eyebrow { color: #6b7280; font-size: 11px; font-weight: 700; letter-spacing: .04em; margin-bottom: 4px; }
@@ -229,7 +232,7 @@ class VobizAgentConsole {
 				.vobiz-live-meta { color: #6b7280; font-size: 12px; overflow-wrap: anywhere; }
 				.vobiz-transcript { background: #f9fafb; border: 1px solid #eef0f3; border-radius: 6px; margin-top: 6px; max-height: 120px; overflow: auto; padding: 8px; white-space: pre-wrap; }
 				.vobiz-side textarea, .vobiz-side select { margin-bottom: 10px; }
-				.vobiz-tabs { border-bottom: 1px solid #e5e7eb; display: flex; gap: 20px; margin: -4px 0 16px; }
+				.vobiz-tabs { border-bottom: 1px solid #e5e7eb; display: flex; flex-wrap: wrap; gap: 20px; margin: -4px 0 16px; max-width: 100%; }
 				.vobiz-tabs button { background: none; border: 0; border-bottom: 2px solid transparent; font-weight: 700; padding: 8px 0; }
 				.vobiz-tabs button.active { border-color: #111827; }
 				.vobiz-context-grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) 360px; min-height: 210px; }
@@ -242,16 +245,19 @@ class VobizAgentConsole {
 				.vobiz-detail-head h3 { font-size: 16px; font-weight: 700; margin: 0; }
 				.vobiz-audio-list { display: grid; gap: 12px; }
 				.vobiz-audio-card { border: 1px solid #eef0f3; border-radius: 8px; padding: 12px; }
-				.vobiz-workdesk { min-height: 520px; }
+				.modal-dialog.modal-xl, .modal-dialog.modal-extra-large { max-width: min(1200px, calc(100vw - 32px)); }
+				.modal-body .form-column, .modal-body .frappe-control, .modal-body [data-fieldname="details"] { max-width: 100%; min-width: 0; }
+				.vobiz-workdesk { max-width: 100%; min-height: 520px; min-width: 0; overflow-x: hidden; }
 				.vobiz-workdesk-top { margin-bottom: 14px; }
 				.vobiz-workdesk-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-start; margin-top: 10px; }
 				.vobiz-workdesk-actions .btn { white-space: nowrap; }
-				.vobiz-workdesk-title h3 { font-size: 18px; font-weight: 800; margin: 0 0 4px; }
+				.vobiz-workdesk-title { min-width: 0; }
+				.vobiz-workdesk-title h3 { font-size: 18px; font-weight: 800; margin: 0 0 4px; overflow-wrap: anywhere; }
 				.vobiz-call-route { align-items: center; color: #4b5563; display: flex; flex-wrap: wrap; font-size: 12px; gap: 8px; margin-top: 8px; }
-				.vobiz-call-route-chip { background: #f9fafb; border: 1px solid #eef0f3; border-radius: 6px; font-weight: 700; padding: 4px 8px; }
+				.vobiz-call-route-chip { background: #f9fafb; border: 1px solid #eef0f3; border-radius: 6px; font-weight: 700; max-width: 100%; overflow-wrap: anywhere; padding: 4px 8px; }
 				.vobiz-call-route-icon { color: #059669; }
 				.vobiz-workdesk-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-				.vobiz-workdesk-card { border: 1px solid #eef0f3; border-radius: 8px; padding: 12px; }
+				.vobiz-workdesk-card { border: 1px solid #eef0f3; border-radius: 8px; min-width: 0; overflow-x: hidden; padding: 12px; }
 				.vobiz-workdesk-card h4 { font-size: 13px; font-weight: 800; margin: 0 0 10px; }
 				.vobiz-field-grid { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 				.vobiz-field { background: #f9fafb; border-radius: 6px; min-height: 54px; padding: 8px; }
@@ -297,6 +303,12 @@ class VobizAgentConsole {
 				.vobiz-pad-grid button { background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; font-weight: 700; height: 38px; }
 				.vobiz-wave { align-items: center; display: flex; gap: 4px; height: 120px; }
 				.vobiz-wave span { background: #6b7280; border-radius: 999px; display: block; width: 5px; }
+				.vobiz-callback-popup { align-items: flex-start; display: grid; gap: 14px; grid-template-columns: 44px minmax(0, 1fr); }
+				.vobiz-callback-icon { align-items: center; background: #ecfdf5; border: 1px solid #bbf7d0; border-radius: 50%; color: #16a34a; display: flex; font-size: 18px; height: 44px; justify-content: center; width: 44px; }
+				.vobiz-callback-popup h4 { font-size: 16px; font-weight: 800; margin: 0 0 10px; }
+				.vobiz-callback-row { align-items: center; border-top: 1px solid #eef0f3; display: grid; gap: 10px; grid-template-columns: 110px minmax(0, 1fr); padding: 8px 0; }
+				.vobiz-callback-row span { color: #6b7280; font-size: 12px; font-weight: 700; }
+				.vobiz-callback-row strong { overflow-wrap: anywhere; }
 				@media (max-width: 1100px) {
 					.vobiz-stats, .vobiz-layout, .vobiz-context-grid, .vobiz-workdesk-grid, .vobiz-field-grid { grid-template-columns: 1fr; }
 					.vobiz-console { padding: 14px; }
@@ -330,11 +342,12 @@ class VobizAgentConsole {
 		});
 		$main.on('change', '[data-role="row-check"]', () => this.update_selected_count());
 		$main.on('click', '[data-role="row-check"]', (e) => e.stopPropagation());
-		$main.on('input', '[data-role="search"]', () => this.render_queue());
+		$main.on('input', '[data-role="search"]', () => this.queue_search_changed());
 	}
 
 	load() {
-		frappe.call('vobiz_click_to_call.api.console.get_agent_console_data', { limit: 30 }).then((r) => {
+		const search = (this.page.main.find('[data-role="search"]').val() || '').trim();
+		frappe.call('vobiz_click_to_call.api.console.get_agent_console_data', { limit: 500, search }).then((r) => {
 			const data = r.message || {};
 			this.state.queue = data.queue || [];
 			this.state.active_call = data.active_call || null;
@@ -361,6 +374,11 @@ class VobizAgentConsole {
 		});
 	}
 
+	queue_search_changed() {
+		clearTimeout(this.search_timer);
+		this.search_timer = setTimeout(() => this.load(), 300);
+	}
+
 	on_page_show() {
 		this.state.restore_checked = false;
 		this.restore_workdesk_dialog();
@@ -372,6 +390,88 @@ class VobizAgentConsole {
 		$(window).one('beforeunload', () => {
 			clearInterval(this.poller);
 			clearInterval(this.timer);
+			clearTimeout(this.search_timer);
+			this.unbind_realtime();
+		});
+	}
+
+	bind_realtime() {
+		if (!frappe.realtime || this.callback_handler) return;
+		this.callback_handler = (payload) => this.handle_customer_callback(payload || {});
+		frappe.realtime.on('vobiz_customer_callback', this.callback_handler);
+	}
+
+	unbind_realtime() {
+		if (frappe.realtime && this.callback_handler && frappe.realtime.off) {
+			frappe.realtime.off('vobiz_customer_callback', this.callback_handler);
+		}
+		this.callback_handler = null;
+	}
+
+	is_console_visible() {
+		const route = frappe.get_route ? frappe.get_route() : [];
+		const routeText = route.join('/');
+		return routeText === 'vobiz-agent-console' || window.location.pathname.includes('/app/vobiz-agent-console');
+	}
+
+	handle_customer_callback(payload) {
+		if (!this.is_console_visible()) return;
+		if (!payload.call_log || this.state.last_callback_call_log === payload.call_log) return;
+		this.state.last_callback_call_log = payload.call_log;
+		this.load();
+		this.show_customer_callback_popup(payload);
+	}
+
+	show_customer_callback_popup(payload) {
+		if (this.callback_dialog) {
+			this.callback_dialog.hide();
+		}
+		const reference = [payload.reference_doctype, payload.reference_name].filter(Boolean).join(' ');
+		const dialog = new frappe.ui.Dialog({
+			title: __('Customer Callback'),
+			fields: [{
+				fieldname: 'details',
+				fieldtype: 'HTML',
+				options: `
+					<div class="vobiz-callback-popup">
+						<div class="vobiz-callback-icon"><i class="fa fa-phone"></i></div>
+						<div>
+							<h4>${__('Incoming customer callback')}</h4>
+							<div class="vobiz-callback-row"><span>${__('Customer')}</span><strong>${frappe.utils.escape_html(payload.customer_number || '-')}</strong></div>
+							<div class="vobiz-callback-row"><span>${__('Called DID')}</span><strong>${frappe.utils.escape_html(payload.did_number || '-')}</strong></div>
+							<div class="vobiz-callback-row"><span>${__('Lead')}</span><strong>${frappe.utils.escape_html(reference || payload.crm_lead || '-')}</strong></div>
+						</div>
+					</div>
+				`
+			}],
+			primary_action_label: __('Open Workdesk'),
+			primary_action: () => {
+				dialog.hide();
+				this.open_callback_workdesk(payload);
+			}
+		});
+		this.callback_dialog = dialog;
+		dialog.get_close_btn().show();
+		dialog.show();
+	}
+
+	open_callback_workdesk(payload) {
+		if (!payload.reference_doctype || !payload.reference_name) return;
+		const existing = (this.state.queue || []).find(row => row.doctype === payload.reference_doctype && row.name === payload.reference_name);
+		const row = existing || {
+			doctype: payload.reference_doctype,
+			name: payload.reference_name,
+			title: payload.reference_name,
+			phone: payload.customer_number || ''
+		};
+		frappe.call('vobiz_click_to_call.api.console.get_reference_context', {
+			reference_doctype: row.doctype,
+			reference_name: row.name,
+			lite: 1
+		}).then((r) => {
+			this.state.context = r.message || {};
+			this.apply_context_dispositions(this.state.context);
+			this.open_detail_dialog(row, r.message || {});
 		});
 	}
 
@@ -702,7 +802,7 @@ class VobizAgentConsole {
 					<div class="vobiz-audio-card">
 						<div><strong>${frappe.utils.escape_html(row.name)}</strong></div>
 						<div class="text-muted">${frappe.datetime.str_to_user(row.creation)} • ${frappe.utils.escape_html(row.recording_status || row.status || '')} • ${frappe.utils.escape_html(row.duration_label || '')}</div>
-						${row.recording_download_url ? `<audio controls src="${frappe.utils.escape_html(row.recording_download_url)}" style="width:100%; margin-top:8px;"></audio>` : `<div class="text-muted">${__('No audio file yet')}</div>`}
+						${this.audio_player_html(row) || `<div class="text-muted">${__('No audio file yet')}</div>`}
 						${row.recording_download_url ? `<a href="${frappe.utils.escape_html(row.recording_download_url)}" target="_blank" rel="noopener">${__('Open Recording')}</a>` : ''}
 					</div>
 				`).join('') || `<div class="text-muted">${__('No recording available for this lead.')}</div>`}
@@ -737,8 +837,6 @@ class VobizAgentConsole {
 		const row = this.state.queue[index];
 		if (!row) return;
 		if (this.state.detail_loading_key) return;
-		this.state.selected = row;
-		this.render_focus(row);
 		this.set_detail_loading(row, true);
 		const request = frappe.call({
 			method: 'vobiz_click_to_call.api.console.get_reference_context',
@@ -1922,6 +2020,12 @@ class VobizAgentConsole {
 				`).join('') || `<div class="text-muted">${__('No recording available for this lead.')}</div>`}
 			</div>
 		`;
+	}
+
+	audio_player_html(row) {
+		const url = row.recording_download_url || (row.name && row.recording_url ? `/api/method/vobiz_click_to_call.api.recording.download?call_log=${encodeURIComponent(row.name)}` : '');
+		if (!url) return '';
+		return `<audio controls preload="none" src="${frappe.utils.escape_html(url)}" style="width:100%; margin-top:8px;"></audio>`;
 	}
 
 	call_selected() {

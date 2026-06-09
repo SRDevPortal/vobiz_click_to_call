@@ -4,6 +4,7 @@ import frappe
 from frappe import _
 
 from vobiz_ai.api.call_log import sync_linked_summaries
+from vobiz_click_to_call.services.debug_log import log_vobiz_event
 from vobiz_click_to_call.services.lead_disposition import sync_call_disposition_to_lead
 from vobiz_click_to_call.services.safety import block_number
 from vobiz_click_to_call.services.settings import get_manual_disposition_options
@@ -95,8 +96,37 @@ def assert_user_can_update_disposition(doc) -> None:
 
 def sync_call_disposition_safely(doc, disposition: str, lead_status: str | None = None) -> dict:
     try:
-        return sync_call_disposition_to_lead(doc, disposition, lead_status)
+        result = sync_call_disposition_to_lead(doc, disposition, lead_status)
+        if not result.get("synced"):
+            log_vobiz_event(
+                "Vobiz CRM Lead disposition sync skipped",
+                call_log=doc.name,
+                severity="Warning",
+                process_type="AI Processing",
+                payload={
+                    "reference_doctype": doc.reference_doctype,
+                    "reference_name": doc.reference_name,
+                    "disposition": disposition,
+                    "lead_status": lead_status,
+                    "reason": result.get("reason"),
+                },
+            )
+        return result
     except Exception as exc:
+        log_vobiz_event(
+            "Vobiz CRM Lead disposition sync failed",
+            call_log=doc.name,
+            severity="Error",
+            process_type="AI Processing",
+            payload={
+                "reference_doctype": doc.reference_doctype,
+                "reference_name": doc.reference_name,
+                "disposition": disposition,
+                "lead_status": lead_status,
+                "error": str(exc),
+            },
+            traceback=frappe.get_traceback(),
+        )
         frappe.log_error(frappe.get_traceback(), "Vobiz CRM Lead disposition sync failed")
         return {"synced": False, "reason": str(exc)}
 

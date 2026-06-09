@@ -17,6 +17,9 @@ def log_vobiz_event(
 ) -> None:
     """Write a non-blocking diagnostic row for click-to-call activity."""
     try:
+        if severity == "Info":
+            return
+
         if not frappe.db.exists("DocType", "Vobiz Error Log"):
             frappe.log_error(_stringify(payload), f"Vobiz Click To Call: {message}")
             return

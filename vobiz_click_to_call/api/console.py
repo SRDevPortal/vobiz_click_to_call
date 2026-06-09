@@ -20,17 +20,17 @@ HTML_TAG_RE = re.compile(r"<[^>]*>")
 
 
 @frappe.whitelist()
-def get_agent_console_data(limit: int | str = 25) -> dict[str, Any]:
+def get_agent_console_data(limit: int | str = 25, search: str | None = None) -> dict[str, Any]:
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
 
-    limit = max(5, min(frappe.utils.cint(limit) or 25, 100))
+    limit = max(5, min(frappe.utils.cint(limit) or 25, 500))
     settings = get_settings()
     return {
         "summary": _call_summary(),
         "availability": get_call_capability(),
         "active_call": _active_call(),
-        "queue": _lead_queue(limit),
+        "queue": _lead_queue(limit, search),
         "dispositions": get_disposition_options_api(),
         "ai_disposition_enabled": bool(settings.enable_ai_disposition),
     }
@@ -335,10 +335,10 @@ def _agent_context() -> dict[str, Any]:
     ) or {}
 
 
-def _lead_queue(limit: int) -> list[dict[str, Any]]:
+def _lead_queue(limit: int, search: str | None = None) -> list[dict[str, Any]]:
     for doctype in LEAD_DOCTYPE_CANDIDATES:
         if frappe.db.exists("DocType", doctype):
-            rows = _queue_for_doctype(doctype, limit)
+            rows = _queue_for_doctype(doctype, limit, search)
             if doctype == "CRM Lead":
                 return rows
             if rows:
@@ -346,7 +346,7 @@ def _lead_queue(limit: int) -> list[dict[str, Any]]:
     return []
 
 
-def _queue_for_doctype(doctype: str, limit: int) -> list[dict[str, Any]]:
+def _queue_for_doctype(doctype: str, limit: int, search: str | None = None) -> list[dict[str, Any]]:
     meta = frappe.get_meta(doctype)
     fields = ["name", "modified"]
     for fieldname in _existing_fields(
@@ -376,9 +376,12 @@ def _queue_for_doctype(doctype: str, limit: int) -> list[dict[str, Any]]:
             fields.append(fieldname)
 
     filters = _queue_filters(meta)
+    query = (search or "").strip()
+    search_fields = _queue_search_fields(meta, fields) if query else []
     rows = frappe.get_all(
         doctype,
         filters=filters,
+        or_filters=_queue_search_filters(search_fields, query) if query else None,
         fields=fields,
         order_by="modified desc",
         limit_page_length=limit,
@@ -395,6 +398,33 @@ def _queue_filters(meta) -> dict[str, Any]:
     if meta.name == "CRM Lead" and meta.has_field("lead_owner") and not _can_view_all_queue_leads():
         filters["lead_owner"] = frappe.session.user
     return filters
+
+
+def _queue_search_fields(meta, loaded_fields: list[str]) -> list[str]:
+    candidates = (
+        "name",
+        "lead_name",
+        "first_name",
+        "patient_name",
+        "customer_name",
+        "company_name",
+        "organization",
+        "mobile_no",
+        "mobile",
+        "phone",
+        "phone_no",
+        "status",
+        "lead_status",
+        "sr_lead_status",
+        "qualification_status",
+    )
+    return [fieldname for fieldname in candidates if fieldname == "name" or fieldname in loaded_fields or meta.has_field(fieldname)]
+
+
+def _queue_search_filters(fields: list[str], query: str) -> list[list[str]]:
+    if not fields or not query:
+        return []
+    return [[fieldname, "like", f"%{query}%"] for fieldname in fields]
 
 
 def _can_view_all_queue_leads() -> bool:

@@ -7,6 +7,7 @@ from typing import Any
 import frappe
 
 from vobiz_ai.api.call_log import sync_linked_summaries
+from vobiz_click_to_call.services.debug_log import log_vobiz_event
 from vobiz_click_to_call.services.disposition import sync_call_log_disposition_options, update_reference_call_metrics
 from vobiz_click_to_call.services.lead_disposition import (
     get_lead_disposition_rows,
@@ -398,7 +399,7 @@ def apply_ai_result(call_log: str, result: dict[str, Any], settings=None) -> Non
 
     review_required = confidence < threshold
     auto_disposed = bool(settings.enable_ai_disposition and not review_required)
-    lead_auto_applied = bool(settings.auto_apply_ai_disposition and auto_disposed)
+    lead_auto_applied = bool(auto_disposed)
     doc.ai_summary = result.get("summary") or ""
     doc.ai_disposition = disposition
     doc.ai_confidence = confidence
@@ -434,8 +435,35 @@ def apply_ai_result(call_log: str, result: dict[str, Any], settings=None) -> Non
 
 def sync_ai_disposition_safely(doc, disposition: str) -> dict:
     try:
-        return sync_call_disposition_to_lead(doc, disposition)
+        result = sync_call_disposition_to_lead(doc, disposition)
+        if not result.get("synced"):
+            log_vobiz_event(
+                "Vobiz AI CRM Lead disposition sync skipped",
+                call_log=doc.name,
+                severity="Warning",
+                process_type="AI Processing",
+                payload={
+                    "reference_doctype": doc.reference_doctype,
+                    "reference_name": doc.reference_name,
+                    "disposition": disposition,
+                    "reason": result.get("reason"),
+                },
+            )
+        return result
     except Exception as exc:
+        log_vobiz_event(
+            "Vobiz AI CRM Lead disposition sync failed",
+            call_log=doc.name,
+            severity="Error",
+            process_type="AI Processing",
+            payload={
+                "reference_doctype": doc.reference_doctype,
+                "reference_name": doc.reference_name,
+                "disposition": disposition,
+                "error": str(exc),
+            },
+            traceback=frappe.get_traceback(),
+        )
         frappe.log_error(frappe.get_traceback(), "Vobiz AI CRM Lead disposition sync failed")
         return {"synced": False, "reason": str(exc)}
 
