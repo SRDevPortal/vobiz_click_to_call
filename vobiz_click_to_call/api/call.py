@@ -142,6 +142,9 @@ def start_call(
     customer_number = normalize_phone_number(raw_customer_number, default_country_code=default_country_code)
     user_mobile = normalize_phone_number(mapping["agent_mobile"], default_country_code=default_country_code)
     caller_id = get_caller_id(settings, mapping)
+    default_caller_id = get_caller_id(settings, {})
+    if caller_id == user_mobile and default_caller_id and default_caller_id != user_mobile:
+        caller_id = default_caller_id
 
     if not customer_number:
         frappe.throw(_("Customer phone number is required."))
@@ -209,19 +212,30 @@ def start_call(
     try:
         response = VobizClient(settings).make_call(payload)
     except Exception as exc:
-        call_log.status = "Failed"
-        call_log.error_message = str(exc)
-        call_log.save(ignore_permissions=True)
-        restore_mapping_after_call(call_log.name)
-        frappe.db.commit()
-        log_vobiz_event(
-            "Provider make_call failed",
-            call_log=call_log.name,
-            severity="Error",
-            payload={"error": str(exc)},
-            traceback=frappe.get_traceback(),
-        )
-        raise
+        if _is_unowned_from_number_error(exc) and default_caller_id and caller_id != default_caller_id:
+            caller_id = default_caller_id
+            payload["from"] = caller_id
+            call_log.caller_id = caller_id
+            call_log.did_number = caller_id
+            call_log.normalized_did = caller_id
+            call_log.request_json = json.dumps(redact_callback_tokens(payload), indent=2)
+            call_log.error_message = ""
+            call_log.save(ignore_permissions=True)
+            log_vobiz_event(
+                "Provider rejected mapped caller ID; retrying with default caller ID",
+                call_log=call_log.name,
+                severity="Warning",
+                payload=redact_callback_tokens(payload),
+            )
+            frappe.db.commit()
+            try:
+                response = VobizClient(settings).make_call(payload)
+            except Exception as retry_exc:
+                _fail_provider_call(call_log, retry_exc)
+                raise
+        else:
+            _fail_provider_call(call_log, exc)
+            raise
 
     call_log.response_json = json.dumps(response, indent=2, default=str)
     call_log.request_uuid = extract_provider_id(response, "request_uuid", "requestUUID", "request_id", "requestId")
@@ -239,6 +253,26 @@ def start_call(
         "customer_number": customer_number,
         "agent_mobile_display": mask_phone(user_mobile),
     }
+
+
+def _is_unowned_from_number_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "from number" in message and "not owned" in message
+
+
+def _fail_provider_call(call_log, exc: Exception) -> None:
+    call_log.status = "Failed"
+    call_log.error_message = str(exc)
+    call_log.save(ignore_permissions=True)
+    restore_mapping_after_call(call_log.name)
+    frappe.db.commit()
+    log_vobiz_event(
+        "Provider make_call failed",
+        call_log=call_log.name,
+        severity="Error",
+        payload={"error": str(exc)},
+        traceback=frappe.get_traceback(),
+    )
 
 
 @frappe.whitelist()
