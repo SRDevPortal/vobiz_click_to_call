@@ -16,6 +16,9 @@ class VobizUserMapping(Document):
             self.caller_id = normalize_phone_number(self.caller_id, default_country_code=default_country_code)
 
         self.availability_status = self.availability_status or "Available"
+        self.queue_source = self.queue_source or "CRM Lead"
+        if self.queue_source not in {"CRM Lead", "Patient"}:
+            frappe.throw(_("Queue Source must be CRM Lead or Patient."))
         if self.accept_calls is None:
             self.accept_calls = 1
         if self.auto_available_after_call is None:

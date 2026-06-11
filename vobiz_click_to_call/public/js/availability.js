@@ -9,12 +9,30 @@
 
     let currentAvailability = null;
 
+    function currentRoute() {
+        if (!window.frappe || !frappe.get_route) return [];
+        return frappe.get_route() || [];
+    }
+
+    function isDeskHome() {
+        return window.location && window.location.pathname === "/app/home";
+    }
+
+    function shouldLoadAvailability() {
+        if (isDeskHome()) return false;
+        const route = currentRoute();
+        return route[0] === "Form" || route[0] === "List" || route[0] === "vobiz-agent-console";
+    }
+
     function init() {
         if (!window.frappe || !frappe.session || frappe.session.user === "Guest") return;
+        if (!shouldLoadAvailability()) return;
         refresh();
     }
 
     function refresh() {
+        if (!window.frappe || !frappe.session || frappe.session.user === "Guest") return;
+        if (!shouldLoadAvailability()) return;
         frappe.call({
             method: "vobiz_click_to_call.api.call.get_my_availability",
         }).then((r) => {
@@ -189,6 +207,7 @@
     }
 
     $(document).on("vobiz_refresh_availability", refresh);
+    $(document).on("page-change route-change", init);
 
     if (frappe.ready) {
         frappe.ready(init);

@@ -8,6 +8,7 @@
  "field_order": [
   "user",
   "enabled",
+  "queue_source",
   "agent_mobile",
   "caller_id",
   "availability_section",
@@ -44,6 +45,16 @@
    "fieldtype": "Check",
    "in_list_view": 1,
    "label": "Enabled"
+  },
+  {
+   "default": "CRM Lead",
+   "description": "Select which records this mapped user should work from in the agent console.",
+   "fieldname": "queue_source",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Queue Source",
+   "options": "CRM Lead\nPatient"
   },
   {
    "description": "The phone number Vobiz will dial after the customer answers.",

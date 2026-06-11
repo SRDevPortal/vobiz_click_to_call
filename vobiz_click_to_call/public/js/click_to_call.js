@@ -17,6 +17,22 @@
     const TERMINAL_STATUSES = ["Completed", "Failed", "Busy", "No Answer", "Cancelled"];
     let currentPoller = null;
     const registeredDoctypes = new Set();
+    let allowedDoctypesLoaded = false;
+
+    function currentRoute() {
+        if (!window.frappe || !frappe.get_route) return [];
+        return frappe.get_route() || [];
+    }
+
+    function isDeskHome() {
+        return window.location && window.location.pathname === "/app/home";
+    }
+
+    function shouldLoadAllowedDoctypes() {
+        if (isDeskHome()) return false;
+        const route = currentRoute();
+        return route[0] === "Form" || route[0] === "List";
+    }
 
     function ensureStyles() {
         if ($("#vobiz-click-to-call-style").length) return;
@@ -551,8 +567,10 @@
     });
 
     function loadAllowedDoctypes() {
+        if (allowedDoctypesLoaded || !shouldLoadAllowedDoctypes()) return;
         if (!window.frappe || !frappe.session || frappe.session.user === "Guest") {
             DOCTYPES.forEach(registerDoctype);
+            allowedDoctypesLoaded = true;
             return;
         }
 
@@ -561,11 +579,14 @@
         }).then((r) => {
             DOCTYPES = Array.isArray(r.message) && r.message.length ? r.message : DEFAULT_DOCTYPES.slice();
             DOCTYPES.forEach(registerDoctype);
+            allowedDoctypesLoaded = true;
             if (window.cur_frm && DOCTYPES.includes(cur_frm.doctype)) {
                 setupForm(cur_frm);
             }
         });
     }
+
+    $(document).on("page-change route-change", loadAllowedDoctypes);
 
     if (frappe.ready) {
         frappe.ready(loadAllowedDoctypes);

@@ -16,6 +16,10 @@ from vobiz_click_to_call.services.settings import get_settings
 
 TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
 LEAD_DOCTYPE_CANDIDATES = ("CRM Lead", "Lead", "Patient", "Customer")
+QUEUE_SOURCE_DOCTYPES = {
+    "CRM Lead": "CRM Lead",
+    "Patient": "Patient",
+}
 HTML_TAG_RE = re.compile(r"<[^>]*>")
 CONSOLE_SESSION_TTL_SECONDS = 25
 
@@ -53,11 +57,15 @@ def get_agent_console_data(limit: int | str = 25, search: str | None = None) -> 
 
     limit = max(5, min(frappe.utils.cint(limit) or 25, 500))
     settings = get_settings()
+    agent = _agent_context()
+    queue_source = _agent_queue_source(agent)
+    queue_doctype = _queue_doctype_for_source(queue_source)
     return {
         "summary": _call_summary(),
         "availability": get_call_capability(),
         "active_call": _active_call(),
-        "queue": _lead_queue(limit, search),
+        "queue": _lead_queue(limit, search, agent=agent, queue_source=queue_source),
+        "queue_meta": _queue_meta(queue_source, queue_doctype),
         "dispositions": get_disposition_options_api(),
         "ai_disposition_enabled": bool(settings.enable_ai_disposition),
     }
@@ -141,7 +149,7 @@ def get_whatsapp_conversation(reference_doctype: str, reference_name: str) -> di
 
 
 @frappe.whitelist()
-def get_whatsapp_messages(conversation: str, limit: int | str = 10, before: str | None = None) -> dict[str, Any]:
+def get_whatsapp_messages(conversation: str, limit: int | str = 30, before: str | None = None) -> dict[str, Any]:
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
 
@@ -191,7 +199,7 @@ def send_whatsapp_reply(conversation: str, body: str) -> dict[str, Any]:
         "raw_transport_payload": outbound,
     })
     frappe.db.commit()
-    return {"success": True, "result": {**outbound, **result}, **_whatsapp_messages_page(conversation, 10)}
+    return {"success": True, "result": {**outbound, **result}, **_whatsapp_messages_page(conversation, 30)}
 
 
 @frappe.whitelist()
@@ -356,18 +364,66 @@ def _agent_context() -> dict[str, Any]:
     if not frappe.db.exists("DocType", "Vobiz User Mapping"):
         return {}
 
+    meta = frappe.get_meta("Vobiz User Mapping")
+    fields = ["name", "agent_mobile", "caller_id", "availability_status"]
+    if meta.has_field("queue_source") and frappe.db.has_column("Vobiz User Mapping", "queue_source"):
+        fields.append("queue_source")
+
     return frappe.db.get_value(
         "Vobiz User Mapping",
         {"user": frappe.session.user, "enabled": 1},
-        ["name", "agent_mobile", "caller_id", "availability_status"],
+        fields,
         as_dict=True,
     ) or {}
 
 
-def _lead_queue(limit: int, search: str | None = None) -> list[dict[str, Any]]:
+def _agent_queue_source(agent: dict[str, Any] | None = None) -> str:
+    source = ((agent or {}).get("queue_source") or "CRM Lead").strip()
+    return source if source in QUEUE_SOURCE_DOCTYPES else "CRM Lead"
+
+
+def _queue_doctype_for_source(queue_source: str) -> str:
+    return QUEUE_SOURCE_DOCTYPES.get(queue_source, "CRM Lead")
+
+
+def _queue_meta(queue_source: str, doctype: str) -> dict[str, str]:
+    if doctype == "Patient":
+        return {
+            "source": queue_source,
+            "doctype": doctype,
+            "title": _("Patient Queue"),
+            "id_label": _("Patient ID"),
+            "selected_label": _("patients"),
+            "summary_tab_label": _("Patient"),
+            "data_label": _("Patient Data"),
+            "empty_message": _("No callable patients found"),
+        }
+    return {
+        "source": queue_source,
+        "doctype": doctype,
+        "title": _("Lead Queue"),
+        "id_label": _("CRM Lead ID"),
+        "selected_label": _("leads"),
+        "summary_tab_label": _("CRM Lead"),
+        "data_label": _("CRM Lead Data"),
+        "empty_message": _("No callable records found"),
+    }
+
+
+def _lead_queue(
+    limit: int,
+    search: str | None = None,
+    agent: dict[str, Any] | None = None,
+    queue_source: str | None = None,
+) -> list[dict[str, Any]]:
+    queue_source = queue_source or _agent_queue_source(agent)
+    preferred_doctype = _queue_doctype_for_source(queue_source)
+    if preferred_doctype and frappe.db.exists("DocType", preferred_doctype):
+        return _queue_for_doctype(preferred_doctype, limit, search, queue_source=queue_source)
+
     for doctype in LEAD_DOCTYPE_CANDIDATES:
         if frappe.db.exists("DocType", doctype):
-            rows = _queue_for_doctype(doctype, limit, search)
+            rows = _queue_for_doctype(doctype, limit, search, queue_source=queue_source)
             if doctype == "CRM Lead":
                 return rows
             if rows:
@@ -375,7 +431,12 @@ def _lead_queue(limit: int, search: str | None = None) -> list[dict[str, Any]]:
     return []
 
 
-def _queue_for_doctype(doctype: str, limit: int, search: str | None = None) -> list[dict[str, Any]]:
+def _queue_for_doctype(
+    doctype: str,
+    limit: int,
+    search: str | None = None,
+    queue_source: str | None = None,
+) -> list[dict[str, Any]]:
     meta = frappe.get_meta(doctype)
     fields = ["name", "modified"]
     for fieldname in _existing_fields(
@@ -398,13 +459,14 @@ def _queue_for_doctype(doctype: str, limit: int, search: str | None = None) -> l
             "vobiz_last_call_status",
             "vobiz_next_follow_up",
             "lead_owner",
+            "created_by_agent",
             "owner",
         ),
     ):
         if fieldname not in fields:
             fields.append(fieldname)
 
-    filters = _queue_filters(meta)
+    filters = _queue_filters(meta, queue_source=queue_source)
     query = (search or "").strip()
     search_fields = _queue_search_fields(meta, fields) if query else []
     rows = frappe.get_all(
@@ -418,12 +480,14 @@ def _queue_for_doctype(doctype: str, limit: int, search: str | None = None) -> l
     return [_reference_row(doctype, row) for row in rows]
 
 
-def _queue_filters(meta) -> dict[str, Any]:
+def _queue_filters(meta, queue_source: str | None = None) -> dict[str, Any]:
     filters: dict[str, Any] = {}
     if meta.has_field("disabled"):
         filters["disabled"] = ["!=", 1]
     if meta.has_field("vobiz_do_not_call"):
         filters["vobiz_do_not_call"] = ["!=", 1]
+    if meta.name == "Patient" and queue_source == "Patient" and meta.has_field("created_by_agent"):
+        filters["created_by_agent"] = frappe.session.user
     if meta.name == "CRM Lead" and meta.has_field("lead_owner") and not _can_view_all_queue_leads():
         filters["lead_owner"] = frappe.session.user
     return filters
@@ -484,7 +548,7 @@ def _reference_row(doctype: str, doc) -> dict[str, Any]:
         "phone_field": phone_field.get("fieldname"),
         "status": status,
         "next_action": str(next_action),
-        "owner": data.get("lead_owner") or data.get("owner"),
+        "owner": data.get("lead_owner") or data.get("created_by_agent") or data.get("owner"),
     }
 
 
@@ -592,7 +656,37 @@ def _lead_details(
     include_conversation_ai: bool = True,
 ) -> dict[str, Any]:
     if reference_doctype != "CRM Lead":
-        return {"doctype": reference_doctype, "name": reference_name, "fields": []}
+        meta = frappe.get_meta(reference_doctype)
+        wanted = (
+            "patient_name",
+            "first_name",
+            "middle_name",
+            "last_name",
+            "sex",
+            "gender",
+            "mobile",
+            "mobile_no",
+            "phone",
+            "phone_no",
+            "custom_whatsapp_number",
+            "email",
+            "status",
+            "created_by_agent",
+        )
+        fields = []
+        for fieldname in wanted:
+            df = meta.get_field(fieldname)
+            if not df:
+                continue
+            fields.append(
+                {
+                    "fieldname": fieldname,
+                    "label": df.label or fieldname,
+                    "value": doc.get(fieldname),
+                    "fieldtype": df.fieldtype,
+                }
+            )
+        return {"doctype": reference_doctype, "name": reference_name, "fields": fields}
 
     meta = frappe.get_meta("CRM Lead")
     wa_ai = _conversation_ai_fields(reference_doctype, reference_name) if include_conversation_ai else {}
@@ -879,7 +973,7 @@ def _whatsapp_preview(reference_doctype: str, reference_name: str) -> dict[str, 
         "last_message_preview", "unread_count", "ai_summary", "modified",
     ))
     data = frappe.db.get_value("Chat Conversation", conversation, fields, as_dict=True) if fields else {"name": conversation}
-    page = _whatsapp_messages_page(conversation, 10)
+    page = _whatsapp_messages_page(conversation, 30)
     return {
         "available": True,
         "conversation": conversation,
@@ -892,14 +986,22 @@ def _whatsapp_recent_messages(conversation: str) -> list[dict[str, Any]]:
     return _whatsapp_messages_page(conversation, 10).get("messages", [])
 
 
-def _whatsapp_messages_page(conversation: str, limit: int | str = 10, before: str | None = None) -> dict[str, Any]:
+def _whatsapp_messages_page(conversation: str, limit: int | str = 30, before: str | None = None) -> dict[str, Any]:
     if not conversation or not frappe.db.exists("DocType", "Chat Message"):
         return {"messages": [], "has_more": False, "next_before": None}
 
-    limit = max(1, min(frappe.utils.cint(limit) or 10, 50))
+    limit = max(1, min(frappe.utils.cint(limit) or 30, 100))
     meta = frappe.get_meta("Chat Message")
     fields = _existing_fields(meta, (
-        "name", "direction", "sender_type", "content_type", "body", "media_url", "delivery_status", "creation",
+        "name",
+        "direction",
+        "sender_type",
+        "content_type",
+        "body",
+        "media_url",
+        "attachment_file",
+        "delivery_status",
+        "creation",
     ))
     filters: dict[str, Any] = {"conversation": conversation}
     if before:
@@ -914,6 +1016,9 @@ def _whatsapp_messages_page(conversation: str, limit: int | str = 10, before: st
     has_more = len(rows) > limit
     rows = rows[:limit]
     rows.reverse()
+    for row in rows:
+        if row.get("attachment_file") and not row.get("media_url"):
+            row["attachment_url"] = frappe.db.get_value("File", row.get("attachment_file"), "file_url") or ""
     return {
         "messages": rows,
         "has_more": has_more,

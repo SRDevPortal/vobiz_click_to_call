@@ -11,6 +11,15 @@ AGENT_CONSOLE_JS = (
     / "vobiz_agent_console"
     / "vobiz_agent_console.js"
 )
+CONSOLE_API = Path(__file__).resolve().parents[1] / "api" / "console.py"
+USER_MAPPING_JSON = (
+    Path(__file__).resolve().parents[1]
+    / "vobiz_click_to_call"
+    / "doctype"
+    / "vobiz_user_mapping"
+    / "vobiz_user_mapping.json"
+)
+PUBLIC_JS = Path(__file__).resolve().parents[1] / "public" / "js"
 
 
 class TestAgentConsoleAutoDial(unittest.TestCase):
@@ -121,10 +130,39 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
                 self.assertIn(f"'{tab}'", load_tab_source)
         self.assertIn("context.loaded_workdesk_tabs[tab] = true", load_tab_source)
 
+    def test_workdesk_whatsapp_lazy_loads_and_sends_inline(self):
+        console = CONSOLE_API.read_text(encoding="utf-8")
+        refresh_source = self.method_source("refresh_inline_whatsapp", "load_more_whatsapp_messages")
+        more_source = self.method_source("load_more_whatsapp_messages", "send_workdesk_whatsapp")
+        send_source = self.method_source("send_workdesk_whatsapp", "insert_workdesk_emoji")
+        whatsapp_source = self.method_source("workdesk_whatsapp_html", "workdesk_whatsapp_messages_html")
+        media_source = self.method_source("workdesk_whatsapp_media_html", "workdesk_whatsapp_composer_html")
+
+        self.assertIn("VOBIZ_WHATSAPP_PAGE_SIZE = 30", self.source)
+        self.assertIn("data-wa-loader", self.source)
+        self.assertIn("e.key === 'Enter' && !e.shiftKey", self.source)
+        self.assertIn(".vobiz-detail-dialog, .vobiz-detail-dialog *", self.source)
+        self.assertIn(".vobiz-wa-image", self.source)
+        self.assertIn("limit: VOBIZ_WHATSAPP_PAGE_SIZE", refresh_source)
+        self.assertIn("limit: VOBIZ_WHATSAPP_PAGE_SIZE", more_source)
+        self.assertIn("vobiz_click_to_call.api.console.send_whatsapp_reply", send_source)
+        self.assertIn("workdesk_whatsapp_message_body_text", self.source)
+        self.assertIn("workdesk_whatsapp_media_url", self.source)
+        self.assertIn("img class=\"vobiz-wa-image\"", media_source)
+        self.assertNotIn("__('Conversation')", whatsapp_source)
+        self.assertNotIn("data.unread_count", whatsapp_source)
+        self.assertNotIn("data.lead_temperature", whatsapp_source)
+        self.assertIn("def send_whatsapp_reply", console)
+        self.assertIn("def get_whatsapp_messages(conversation: str, limit: int | str = 30", console)
+        self.assertIn("_whatsapp_messages_page(conversation, 30)", console)
+        self.assertIn('"attachment_file"', console)
+        self.assertIn('row["attachment_url"]', console)
+
     def test_lead_dispositions_are_contextual_in_console(self):
         select_source = self.method_source("select_row", "render_focus")
         call_row_source = self.method_source("call_row", "detail_key")
         apply_source = self.method_source("apply_context_dispositions", "show_tab")
+        disposition_source = self.method_source("workdesk_lead_disposition_html", "render_workdesk_live_call")
         refresh_source = self.method_source("refresh_lead_disposition_options", "active_disposition_reference")
         workdesk_source = self.method_source("workdesk_lead_disposition_html", "render_workdesk_live_call")
 
@@ -137,6 +175,7 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("get_lead_disposition_context_api", refresh_source)
         self.assertIn("Lead Disposition", workdesk_source)
         self.assertIn("Available for this lead", workdesk_source)
+        self.assertIn("row.doctype !== 'CRM Lead'", disposition_source)
 
     def test_manual_disposition_saves_status_and_sr_lead_disposition(self):
         render_source = self.method_source("render_dispositions", "apply_context_dispositions")
@@ -158,6 +197,37 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("if (this.state.ai_disposition_enabled) return", prompt_source)
         self.assertIn("if (this.state.ai_disposition_enabled) return", dialog_source)
         self.assertIn("render_manual_disposition_visibility", self.source)
+
+    def test_mapping_drives_lead_or_patient_queue(self):
+        console = CONSOLE_API.read_text(encoding="utf-8")
+        mapping_json = USER_MAPPING_JSON.read_text(encoding="utf-8")
+
+        self.assertIn('"fieldname": "queue_source"', mapping_json)
+        self.assertIn('"options": "CRM Lead\\nPatient"', mapping_json)
+        self.assertIn("QUEUE_SOURCE_DOCTYPES", console)
+        self.assertIn('"Patient": "Patient"', console)
+        self.assertIn('"queue_meta": _queue_meta(queue_source, queue_doctype)', console)
+        self.assertIn('filters["created_by_agent"] = frappe.session.user', console)
+        self.assertIn("this.state.queue_meta = Object.assign", self.source)
+        self.assertIn("queue_meta_value('summary_tab_label')", self.source)
+
+    def test_global_desk_scripts_do_not_call_vobiz_apis_on_home(self):
+        availability = (PUBLIC_JS / "availability.js").read_text(encoding="utf-8")
+        click_to_call = (PUBLIC_JS / "click_to_call.js").read_text(encoding="utf-8")
+        list_dialer = (PUBLIC_JS / "list_dialer.js").read_text(encoding="utf-8")
+
+        self.assertIn("function shouldLoadAvailability()", availability)
+        self.assertIn('window.location.pathname === "/app/home"', availability)
+        self.assertIn('route[0] === "Form" || route[0] === "List" || route[0] === "vobiz-agent-console"', availability)
+        self.assertIn("if (!shouldLoadAvailability()) return", availability)
+        self.assertIn("function shouldLoadAllowedDoctypes()", click_to_call)
+        self.assertIn('window.location.pathname === "/app/home"', click_to_call)
+        self.assertIn('route[0] === "Form" || route[0] === "List"', click_to_call)
+        self.assertIn("if (allowedDoctypesLoaded || !shouldLoadAllowedDoctypes()) return", click_to_call)
+        self.assertIn("function shouldInstall()", list_dialer)
+        self.assertIn('window.location.pathname === "/app/home"', list_dialer)
+        self.assertIn('return route[0] === "List"', list_dialer)
+        self.assertIn("if (installed || !shouldInstall()) return", list_dialer)
 
 
 if __name__ == "__main__":

@@ -1,13 +1,31 @@
 (function () {
     const DEFAULT_DOCTYPES = ["CRM Lead", "Contact", "Patient", "Customer"];
     const registeredDoctypes = new Set();
+    let installed = false;
+
+    function currentRoute() {
+        if (!window.frappe || !frappe.get_route) return [];
+        return frappe.get_route() || [];
+    }
+
+    function isDeskHome() {
+        return window.location && window.location.pathname === "/app/home";
+    }
+
+    function shouldInstall() {
+        if (isDeskHome()) return false;
+        const route = currentRoute();
+        return route[0] === "List";
+    }
 
     function install() {
         if (!window.frappe) return;
+        if (installed || !shouldInstall()) return;
         frappe.listview_settings = frappe.listview_settings || {};
 
         loadAllowedDoctypes((doctypes) => {
             doctypes.forEach(registerListDialer);
+            installed = true;
         });
     }
 
@@ -86,4 +104,5 @@
     }
 
     $(install);
+    $(document).on("page-change route-change", install);
 })();

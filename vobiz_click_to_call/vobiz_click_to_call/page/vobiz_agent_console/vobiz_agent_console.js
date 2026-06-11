@@ -13,11 +13,14 @@ frappe.pages['vobiz-agent-console'].on_page_show = function(wrapper) {
 	}
 };
 
+const VOBIZ_WHATSAPP_PAGE_SIZE = 30;
+
 class VobizAgentConsole {
 	constructor(page) {
 		this.page = page;
 		this.state = {
 			queue: [],
+			queue_meta: this.default_queue_meta(),
 			selected: null,
 			active_call: null,
 			call_started_at: null,
@@ -61,6 +64,19 @@ class VobizAgentConsole {
 		this.start_polling();
 	}
 
+	default_queue_meta() {
+		return {
+			source: 'CRM Lead',
+			doctype: 'CRM Lead',
+			title: __('Lead Queue'),
+			id_label: __('CRM Lead ID'),
+			selected_label: __('leads'),
+			summary_tab_label: __('CRM Lead'),
+			data_label: __('CRM Lead Data'),
+			empty_message: __('No callable records found')
+		};
+	}
+
 	render() {
 		this.page.main.html(`
 			<div class="vobiz-console">
@@ -98,7 +114,7 @@ class VobizAgentConsole {
 				<div class="vobiz-layout">
 					<section class="vobiz-band vobiz-queue">
 						<div class="vobiz-section-title">
-							<h3>${__('Lead Queue')}</h3>
+							<h3 data-role="queue-title">${__('Lead Queue')}</h3>
 							<input class="form-control input-sm" data-role="search" placeholder="${__('Search')}">
 						</div>
 						<div class="vobiz-table-wrap">
@@ -106,7 +122,7 @@ class VobizAgentConsole {
 								<thead>
 									<tr>
 										<th style="width: 34px"><input type="checkbox" data-role="check-all"></th>
-										<th style="width: 170px">${__('CRM Lead ID')}</th>
+										<th style="width: 170px" data-role="queue-id-label">${__('CRM Lead ID')}</th>
 										<th>${__('Name')}</th>
 										<th>${__('Phone')}</th>
 										<th>${__('Status')}</th>
@@ -248,7 +264,10 @@ class VobizAgentConsole {
 				.vobiz-audio-list { display: grid; gap: 12px; }
 				.vobiz-audio-card { border: 1px solid #eef0f3; border-radius: 8px; padding: 12px; }
 				.modal-dialog.modal-xl, .modal-dialog.modal-extra-large { max-width: min(1200px, calc(100vw - 32px)); }
-				.modal-body .form-column, .modal-body .frappe-control, .modal-body [data-fieldname="details"] { max-width: 100%; min-width: 0; }
+				.modal-body { overflow-x: hidden; }
+				.modal-body .form-column, .modal-body .frappe-control, .modal-body [data-fieldname="details"] { max-width: 100%; min-width: 0; overflow-x: hidden; }
+				.vobiz-detail-dialog, .vobiz-detail-dialog * { box-sizing: border-box; max-width: 100%; }
+				.vobiz-detail-dialog { overflow-x: hidden; width: 100%; }
 				.vobiz-workdesk { max-width: 100%; min-height: 520px; min-width: 0; overflow-x: hidden; }
 				.vobiz-workdesk-top { margin-bottom: 14px; }
 				.vobiz-workdesk-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-start; margin-top: 10px; }
@@ -280,14 +299,17 @@ class VobizAgentConsole {
 				.vobiz-clinical-med-table th { color: #6b7280; font-size: 11px; font-weight: 800; }
 				.vobiz-clinical-med-table td { font-size: 12px; white-space: normal; word-break: break-word; }
 				.vobiz-empty { color: #6b7280; padding: 12px 0; }
-				.vobiz-wa-chat-list { background: #f9fafb; border: 1px solid #eef0f3; border-radius: 8px; display: grid; gap: 8px; margin-top: 12px; max-height: 380px; overflow-y: auto; padding: 10px; }
-				.vobiz-wa-loader { color: #6b7280; font-size: 12px; padding: 6px 0; text-align: center; }
-				.vobiz-wa-message { border: 1px solid #eef0f3; border-radius: 8px; max-width: 82%; padding: 8px 10px; }
+				.vobiz-wa-chat-list { background: #f9fafb; border: 1px solid #eef0f3; border-radius: 8px; display: grid; gap: 8px; margin-top: 12px; max-height: 420px; overflow-y: auto; padding: 10px; }
+				.vobiz-wa-loader { color: #64748b; cursor: pointer; font-size: 12px; font-weight: 700; padding: 6px; text-align: center; }
+				.vobiz-wa-message { border: 1px solid #eef0f3; border-radius: 8px; max-width: min(82%, 860px); min-width: 0; overflow: hidden; padding: 8px 10px; }
 				.vobiz-wa-message.inbound { background: #fff; justify-self: start; }
 				.vobiz-wa-message.outbound { background: #ecfdf5; justify-self: end; }
 				.vobiz-wa-message-meta { color: #6b7280; font-size: 11px; font-weight: 700; margin-bottom: 4px; }
 				.vobiz-wa-message-body { font-size: 13px; white-space: pre-wrap; word-break: break-word; }
-				.vobiz-wa-composer { align-items: center; background: #fff; border: 1px solid #e5e7eb; border-radius: 999px; box-shadow: 0 1px 6px rgba(15, 23, 42, .06); display: grid; gap: 8px; grid-template-columns: auto auto minmax(0, 1fr) auto; margin-top: 12px; padding: 8px 10px 8px 14px; }
+				.vobiz-wa-media { display: block; margin-top: 6px; }
+				.vobiz-wa-image { border-radius: 8px; display: block; height: auto; max-height: 360px; max-width: 260px; object-fit: contain; width: auto; }
+				.vobiz-wa-media-link { align-items: center; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; display: inline-flex; gap: 8px; padding: 8px 10px; text-decoration: none; }
+				.vobiz-wa-composer { align-items: center; background: #fff; border: 1px solid #e5e7eb; border-radius: 999px; box-shadow: 0 1px 6px rgba(15, 23, 42, .06); display: grid; gap: 8px; grid-template-columns: auto auto minmax(0, 1fr) auto; margin-top: 12px; overflow: visible; padding: 8px 10px 8px 14px; width: 100%; }
 				.vobiz-wa-icon-btn { align-items: center; background: transparent; border: 0; color: #111827; display: inline-flex; font-size: 18px; height: 32px; justify-content: center; padding: 0; width: 32px; }
 				.vobiz-wa-attach-wrap, .vobiz-wa-emoji-wrap { position: relative; }
 				.vobiz-wa-menu { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; bottom: 42px; box-shadow: 0 12px 30px rgba(15, 23, 42, .16); display: none; left: 0; min-width: 190px; padding: 8px; position: absolute; z-index: 10; }
@@ -296,7 +318,7 @@ class VobizAgentConsole {
 				.vobiz-wa-menu button:hover { background: #f3f4f6; }
 				.vobiz-wa-emoji-menu { grid-template-columns: repeat(8, 30px); min-width: 276px; }
 				.vobiz-wa-emoji-menu button { font-size: 18px; justify-content: center; padding: 4px; }
-				.vobiz-wa-composer textarea { background: transparent; border: 0; box-shadow: none; height: 36px; line-height: 20px; max-height: 96px; min-height: 36px; padding: 8px 4px; resize: none; }
+				.vobiz-wa-composer textarea { background: transparent; border: 0; box-shadow: none; height: 36px; line-height: 20px; max-height: 96px; min-height: 36px; min-width: 0; padding: 8px 4px; resize: none; }
 				.vobiz-wa-composer textarea:focus { border: 0; box-shadow: none; outline: 0; }
 				.vobiz-wa-send { align-items: center; background: #16a34a; border: 0; border-radius: 50%; color: #fff; display: inline-flex; font-size: 18px; height: 42px; justify-content: center; padding: 0; width: 42px; }
 				.vobiz-wa-send:disabled { opacity: .65; }
@@ -359,6 +381,7 @@ class VobizAgentConsole {
 		frappe.call('vobiz_click_to_call.api.console.get_agent_console_data', { limit: 500, search }).then((r) => {
 			const data = r.message || {};
 			this.state.queue = data.queue || [];
+			this.state.queue_meta = Object.assign(this.default_queue_meta(), data.queue_meta || {});
 			this.state.active_call = data.active_call || null;
 			this.state.dispositions = data.dispositions || [];
 			this.state.ai_disposition_enabled = Boolean(data.ai_disposition_enabled);
@@ -535,14 +558,26 @@ class VobizAgentConsole {
 	}
 
 	render_queue() {
+		this.render_queue_meta();
 		const query = (this.page.main.find('[data-role="search"]').val() || '').toLowerCase();
 		const rows = this.state.queue
 			.map((row, index) => ({ ...row, index }))
 			.filter(row => !query || [row.name, row.title, row.company, row.phone, row.status, row.next_action].join(' ').toLowerCase().includes(query));
 		this.page.main.find('[data-role="queue"]').html(rows.map(row => this.row_html(row)).join('') || `
-			<tr><td colspan="7" class="text-muted text-center">${__('No callable records found')}</td></tr>
+			<tr><td colspan="7" class="text-muted text-center">${frappe.utils.escape_html(this.queue_meta_value('empty_message'))}</td></tr>
 		`);
 		this.update_selected_count();
+	}
+
+	render_queue_meta() {
+		const meta = this.state.queue_meta || this.default_queue_meta();
+		this.page.main.find('[data-role="queue-title"]').text(meta.title || __('Lead Queue'));
+		this.page.main.find('[data-role="queue-id-label"]').text(meta.id_label || __('CRM Lead ID'));
+	}
+
+	queue_meta_value(key) {
+		const meta = this.state.queue_meta || this.default_queue_meta();
+		return meta[key] || this.default_queue_meta()[key] || '';
 	}
 
 	row_html(row) {
@@ -568,17 +603,18 @@ class VobizAgentConsole {
 
 	update_selected_count() {
 		const count = this.page.main.find('[data-role="row-check"]:checked').length;
+		const selectedLabel = this.queue_meta_value('selected_label');
 		const session = this.state.auto_dial || {};
 		if (session.running || (session.results || []).length) {
 			const total = (session.queue || []).length;
 			const done = (session.results || []).length;
 			const status = session.running ? __('running') : __('stopped');
 			this.page.main.find('[data-role="selected-count"]').text(
-				__('{0} leads selected • Auto dial {1}: {2}/{3}', [count, status, done, total])
+				__('{0} {1} selected - Auto dial {2}: {3}/{4}', [count, selectedLabel, status, done, total])
 			);
 			return;
 		}
-		this.page.main.find('[data-role="selected-count"]').text(__('{0} leads selected', [count]));
+		this.page.main.find('[data-role="selected-count"]').text(__('{0} {1} selected', [count, selectedLabel]));
 	}
 
 	render_auto_toggle() {
@@ -957,7 +993,7 @@ class VobizAgentConsole {
 		$body.html(`
 			<div class="vobiz-detail-dialog">
 				<div class="vobiz-tabs">
-					<button class="active" data-detail-tab="summary">${__('CRM Lead')}</button>
+					<button class="active" data-detail-tab="summary">${frappe.utils.escape_html(this.queue_meta_value('summary_tab_label'))}</button>
 					<button data-detail-tab="encounters">${__('Encounters')}</button>
 					<button data-detail-tab="clinical-history">${__('Patient Clinical History')}</button>
 					<button data-detail-tab="reports">${__('Reports')}</button>
@@ -974,10 +1010,11 @@ class VobizAgentConsole {
 		$body.on('click', '[data-workdesk-action]', (e) => this.handle_workdesk_action($(e.currentTarget).data('workdesk-action'), row, context, $body));
 		$body.on('scroll', '[data-wa-chat-list]', (e) => {
 			const el = e.currentTarget;
-			if (el.scrollTop <= 24) {
+			if (el.scrollTop <= 80) {
 				this.load_more_whatsapp_messages($(el));
 			}
 		});
+		$body.on('click', '[data-wa-loader]', (e) => this.load_more_whatsapp_messages($(e.currentTarget).closest('[data-wa-chat-list]')));
 		$body.on('click', '[data-wa-send]', () => this.send_workdesk_whatsapp($body));
 		$body.on('click', '[data-wa-attach]', (e) => {
 			e.stopPropagation();
@@ -1000,7 +1037,7 @@ class VobizAgentConsole {
 			$body.find('[data-wa-emoji-menu]').removeClass('show');
 		});
 		$body.on('keydown', '[data-wa-reply]', (e) => {
-			if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+			if (e.key === 'Enter' && !e.shiftKey) {
 				e.preventDefault();
 				this.send_workdesk_whatsapp($body);
 			}
@@ -1098,12 +1135,12 @@ class VobizAgentConsole {
 				${this.workdesk_header_html(row, context)}
 				<div class="vobiz-workdesk-grid">
 					<div class="vobiz-workdesk-card">
-						<h4>${__('CRM Lead Data')}</h4>
+						<h4>${frappe.utils.escape_html(this.queue_meta_value('data_label'))}</h4>
 						<div class="vobiz-field-grid">
-							${fields.map(field => this.workdesk_field_html(field.label, field.value)).join('') || `<div class="vobiz-empty">${__('No CRM fields found for this record.')}</div>`}
+							${fields.map(field => this.workdesk_field_html(field.label, field.value)).join('') || `<div class="vobiz-empty">${__('No fields found for this record.')}</div>`}
 						</div>
 					</div>
-					${this.workdesk_lead_disposition_html(workdesk)}
+					${this.workdesk_lead_disposition_html(row, workdesk)}
 					<div class="vobiz-workdesk-card">
 						<h4>${__('Guidance')}</h4>
 						<div data-workdesk-live-call>${this.workdesk_live_call_html(row)}</div>
@@ -1114,7 +1151,10 @@ class VobizAgentConsole {
 		`;
 	}
 
-	workdesk_lead_disposition_html(workdesk) {
+	workdesk_lead_disposition_html(row, workdesk) {
+		if (!row || row.doctype !== 'CRM Lead') {
+			return '';
+		}
 		const leadDisposition = workdesk.lead_disposition || {};
 		const options = leadDisposition.options || [];
 		if (!leadDisposition.name && !leadDisposition.status && !options.length) {
@@ -1363,7 +1403,7 @@ class VobizAgentConsole {
 				</div>
 				<div class="vobiz-workdesk-actions">
 					<button class="btn btn-primary btn-sm" data-workdesk-action="call"><i class="fa fa-phone"></i> ${__('Start Call')}</button>
-					<button class="btn btn-default btn-sm" data-workdesk-action="open-lead"><i class="fa fa-external-link"></i> ${__('Open Lead')}</button>
+					<button class="btn btn-default btn-sm" data-workdesk-action="open-lead"><i class="fa fa-external-link"></i> ${__('Open')} ${frappe.utils.escape_html(this.queue_meta_value('summary_tab_label'))}</button>
 					<button class="btn btn-default btn-sm" data-workdesk-action="whatsapp"><i class="fa fa-whatsapp"></i> ${workdesk.whatsapp && workdesk.whatsapp.conversation ? __('Open WhatsApp') : __('WhatsApp')}</button>
 					<button class="btn btn-default btn-sm" data-workdesk-action="new-encounter"><i class="fa fa-file-text-o"></i> ${__('Create Encounter')}</button>
 				</div>
@@ -1619,13 +1659,6 @@ class VobizAgentConsole {
 		return `
 			<div class="vobiz-workdesk-card">
 				<h4>${__('WhatsApp')}</h4>
-				<div class="vobiz-field-grid">
-					${this.workdesk_field_html(__('Conversation'), wa.conversation || __('No existing chat'))}
-					${this.workdesk_field_html(__('Status'), data.status || '')}
-					${this.workdesk_field_html(__('Unread'), data.unread_count || 0)}
-					${this.workdesk_field_html(__('Temperature'), data.lead_temperature || '')}
-				</div>
-				<hr>
 				<div class="vobiz-related-meta">${frappe.utils.escape_html(data.last_message_preview || data.ai_summary || __('WhatsApp chat preview.'))}</div>
 				${wa.conversation ? this.workdesk_whatsapp_messages_html(messages, wa) : `<div class="vobiz-empty">${__('No WhatsApp conversation found for this lead.')}</div>`}
 				${wa.conversation ? '' : `
@@ -1652,22 +1685,7 @@ class VobizAgentConsole {
 		return `
 			<div class="vobiz-wa-chat-list" data-wa-chat-list data-conversation="${frappe.utils.escape_html(wa.conversation || '')}" data-before="${frappe.utils.escape_html(before || '')}" data-has-more="${has_more}">
 				${wa.has_more ? `<div class="vobiz-wa-loader" data-wa-loader>${__('Scroll up to load older messages')}</div>` : ''}
-				${messages.map((message) => {
-					const direction = String(message.direction || '').toLowerCase();
-					const side = direction === 'outbound' ? 'outbound' : 'inbound';
-					const body = message.body || message.media_url || `[${message.content_type || __('Message')}]`;
-					const meta = [
-						message.direction || '',
-						message.sender_type || '',
-						message.creation ? frappe.datetime.str_to_user(message.creation) : ''
-					].filter(Boolean).join(' • ');
-					return `
-						<div class="vobiz-wa-message ${side}">
-							<div class="vobiz-wa-message-meta">${frappe.utils.escape_html(meta)}</div>
-							<div class="vobiz-wa-message-body">${frappe.utils.escape_html(body)}</div>
-						</div>
-					`;
-				}).join('')}
+				${messages.map((message) => this.workdesk_whatsapp_message_html(message)).join('')}
 			</div>
 			${this.workdesk_whatsapp_composer_html()}
 		`;
@@ -1676,17 +1694,70 @@ class VobizAgentConsole {
 	workdesk_whatsapp_message_html(message) {
 		const direction = String(message.direction || '').toLowerCase();
 		const side = direction === 'outbound' ? 'outbound' : 'inbound';
-		const body = message.body || message.media_url || `[${message.content_type || __('Message')}]`;
+		const body = this.workdesk_whatsapp_message_body_text(message);
+		const media = this.workdesk_whatsapp_media_html(message);
 		const meta = [
 			message.direction || '',
 			message.sender_type || '',
 			message.creation ? frappe.datetime.str_to_user(message.creation) : ''
-		].filter(Boolean).join(' / ');
+		].filter(Boolean).join(' • ');
 		return `
 			<div class="vobiz-wa-message ${side}" data-wa-message="${frappe.utils.escape_html(message.name || '')}">
 				<div class="vobiz-wa-message-meta">${frappe.utils.escape_html(meta)}</div>
-				<div class="vobiz-wa-message-body">${frappe.utils.escape_html(body)}</div>
+				${body ? `<div class="vobiz-wa-message-body">${frappe.utils.escape_html(body)}</div>` : ''}
+				${media}
 			</div>
+		`;
+	}
+
+	workdesk_whatsapp_message_body_text(message) {
+		const body = String(message.body || '').trim();
+		const contentType = String(message.content_type || '').toLowerCase();
+		if (body && !this.is_generic_whatsapp_media_body(body, contentType)) {
+			return body;
+		}
+		if (!this.workdesk_whatsapp_media_url(message)) {
+			return body || `[${message.content_type || __('Message')}]`;
+		}
+		return '';
+	}
+
+	is_generic_whatsapp_media_body(body, contentType) {
+		const text = String(body || '').trim().toLowerCase();
+		if (!text) return true;
+		return [
+			'image message received',
+			'[image message received]',
+			'document message received',
+			'[document message received]',
+			'video message received',
+			'audio message received'
+		].includes(text) || (contentType && text === contentType);
+	}
+
+	workdesk_whatsapp_media_url(message) {
+		return message.display_media_url || message.media_url || message.attachment_url || '';
+	}
+
+	workdesk_whatsapp_media_html(message) {
+		const url = this.workdesk_whatsapp_media_url(message);
+		if (!url) return '';
+		const contentType = String(message.content_type || '').toLowerCase();
+		const safeUrl = frappe.utils.escape_html(url);
+		const lowerUrl = String(url).toLowerCase();
+		const isImage = contentType === 'image' || /\.(png|jpe?g|gif|webp|bmp|svg)(\?|#|$)/.test(lowerUrl);
+		if (isImage) {
+			return `
+				<a class="vobiz-wa-media" href="${safeUrl}" target="_blank" rel="noopener">
+					<img class="vobiz-wa-image" src="${safeUrl}" alt="${__('WhatsApp image')}">
+				</a>
+			`;
+		}
+		return `
+			<a class="vobiz-wa-media vobiz-wa-media-link" href="${safeUrl}" target="_blank" rel="noopener">
+				<i class="fa fa-paperclip"></i>
+				<span>${frappe.utils.escape_html(message.content_type || __('Attachment'))}</span>
+			</a>
 		`;
 	}
 
@@ -1764,7 +1835,7 @@ class VobizAgentConsole {
 	refresh_inline_whatsapp($body, conversation) {
 		frappe.call('vobiz_click_to_call.api.console.get_whatsapp_messages', {
 			conversation,
-			limit: 10
+			limit: VOBIZ_WHATSAPP_PAGE_SIZE
 		}).then((r) => {
 			const page = r.message || {};
 			const wa = {
@@ -1801,7 +1872,7 @@ class VobizAgentConsole {
 		$list.find('[data-wa-loader]').text(__('Loading older messages...'));
 		frappe.call('vobiz_click_to_call.api.console.get_whatsapp_messages', {
 			conversation,
-			limit: 10,
+			limit: VOBIZ_WHATSAPP_PAGE_SIZE,
 			before
 		}).then((r) => {
 			const page = r.message || {};
@@ -1831,7 +1902,7 @@ class VobizAgentConsole {
 		const $button = $body.find('[data-wa-send]').first();
 		$button.prop('disabled', true);
 		frappe.call({
-			method: 'wa_chat_hub.api.runtime.send_reply',
+			method: 'vobiz_click_to_call.api.console.send_whatsapp_reply',
 			args: { conversation, body },
 			type: 'POST'
 		}).then((r) => {
