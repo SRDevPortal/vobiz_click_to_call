@@ -8,6 +8,7 @@ from frappe import _
 
 from vobiz_ai.api.call_log import sync_linked_summaries
 from vobiz_click_to_call.services.client import VobizClient
+from vobiz_click_to_call.services.call_status import status_from_provider
 from vobiz_click_to_call.services.disposition import update_reference_call_metrics
 from vobiz_click_to_call.services.settings import get_settings
 
@@ -129,7 +130,7 @@ def find_matching_cdr(doc, response: dict) -> dict | None:
             if any(customer and customer in "".join(ch for ch in str(number or "") if ch.isdigit()) for number in numbers):
                 return cdr
 
-    return candidates[0]
+    return None
 
 
 def extract_cdr_rows(response: dict) -> list[dict]:
@@ -167,18 +168,16 @@ def apply_cdr_to_call_log(doc, cdr: dict, raw_response: dict) -> None:
 
 
 def status_from_cdr(cdr: dict, current_status: str) -> str:
-    raw = str(cdr.get("status") or cdr.get("call_status") or cdr.get("hangup_cause") or "").lower()
-    if "busy" in raw:
-        return "Busy"
-    if "no-answer" in raw or "no answer" in raw or "timeout" in raw:
-        return "No Answer"
-    if "fail" in raw or "error" in raw:
-        return "Failed"
-    if "cancel" in raw:
-        return "Cancelled"
-    if "complete" in raw or "answer" in raw or "connected" in raw:
-        return "Completed"
-    return current_status or "Completed"
+    return status_from_provider(
+        {
+            "status": cdr.get("status"),
+            "call_status": cdr.get("call_status"),
+            "hangup_cause": cdr.get("hangup_cause") or cdr.get("hangup_cause_name"),
+            "duration": first_int(cdr, "duration", "call_duration"),
+            "billsec": first_int(cdr, "billsec", "bill_seconds", "billed_duration"),
+        },
+        previous=current_status,
+    ) or current_status or "Completed"
 
 
 def first_int(row: dict, *keys: str, fallback=None) -> int:

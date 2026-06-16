@@ -13,7 +13,7 @@ from vobiz_click_to_call.services.ai import enqueue_ai_disposition
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
 from vobiz_click_to_call.services.disposition import update_reference_call_metrics
 from vobiz_click_to_call.services.numbers import provider_phone_number
-from vobiz_click_to_call.services.settings import build_callback_url, get_settings
+from vobiz_click_to_call.services.settings import build_callback_url, get_inbound_callback_token, get_settings
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
@@ -247,6 +247,9 @@ def transcription_callback(call_log: str | None = None, token: str | None = None
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
 def transcription_event():
     payload = _payload()
+    if not _static_event_allowed(payload):
+        log_vobiz_event("Transcription event ignored: invalid static callback token", severity="Warning", payload=payload)
+        return _plain_response("IGNORED")
     data = _with_nested_response(payload)
     doc = _find_call_log_from_provider_payload(data)
     if not doc:
@@ -576,6 +579,14 @@ def _dial_completed_without_bridge(payload: dict, previous_status: str | None) -
 
 def _has_billable_talk_time(billsec=None, duration=None) -> bool:
     return _safe_int(billsec) > 0 or _safe_int(duration) >= 30
+
+
+def _static_event_allowed(payload: dict) -> bool:
+    expected = get_inbound_callback_token(get_settings())
+    if not expected:
+        return True
+    received = _first_value(payload, "token", "Token", "callback_token", "inbound_token", "inbound_callback_token")
+    return secrets_match(expected, received or "")
 
 
 def _status_from_hangup(

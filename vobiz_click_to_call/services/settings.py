@@ -69,6 +69,17 @@ def get_caller_ids(settings=None) -> list[str]:
     return numbers
 
 
+def get_inbound_callback_token(settings=None) -> str:
+    settings = settings or get_settings()
+    token = ""
+    try:
+        if hasattr(settings, "get_password"):
+            token = settings.get_password("inbound_callback_token") or ""
+    except Exception:
+        token = ""
+    return (token or frappe.conf.get("vobiz_inbound_callback_token") or "").strip()
+
+
 def _first_caller_id(settings=None) -> str:
     ids = get_caller_ids(settings)
     return ids[0] if ids else ""

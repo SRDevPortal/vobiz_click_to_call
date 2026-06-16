@@ -7,6 +7,7 @@ from typing import Any
 import frappe
 
 from vobiz_ai.api.call_log import sync_linked_summaries
+from vobiz_click_to_call.services.call_status import normalize_status_values
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
 from vobiz_click_to_call.services.disposition import sync_call_log_disposition_options, update_reference_call_metrics
 from vobiz_click_to_call.services.lead_disposition import (
@@ -297,38 +298,7 @@ def provider_update_values(doc) -> dict[str, Any]:
 
 def normalize_provider_update_status(target_call_log: str, values: dict[str, Any]) -> dict[str, Any]:
     current_status = frappe.db.get_value("Vobiz Call Log", target_call_log, "status") or ""
-    signal = " ".join(
-        str(values.get(fieldname) or "")
-        for fieldname in ("status", "call_status", "dial_status", "hangup_cause", "error_message")
-    ).strip().lower().replace("_", "-")
-    if not signal:
-        return values
-
-    billsec = frappe.utils.cint(values.get("billsec"))
-    duration = frappe.utils.cint(values.get("duration"))
-    if (billsec > 0 or duration >= 30) and (
-        "completed" in signal
-        or "connected" in signal
-        or "normal-clearing" in signal
-        or "normal clearing" in signal
-    ):
-        values["status"] = "Completed"
-        return values
-
-    if "busy" in signal:
-        values["status"] = "Busy"
-    elif "no-answer" in signal or "no answer" in signal or "timeout" in signal or "unanswered" in signal:
-        values["status"] = "No Answer"
-    elif "cancel" in signal or "reject" in signal or "decline" in signal:
-        values["status"] = "Cancelled"
-    elif "fail" in signal or "error" in signal:
-        values["status"] = "Failed"
-    elif "completed" in signal or "hangup" in signal:
-        values["status"] = "Completed" if current_status == "Connected" else "Cancelled"
-    elif "connected" in signal or "answered" in signal or "in-progress" in signal or "in progress" in signal:
-        values["status"] = "Connected"
-
-    return values
+    return normalize_status_values(current_status, values)
 
 
 def restore_mapping_for_terminal_call(doc) -> None:

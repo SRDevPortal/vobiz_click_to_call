@@ -290,6 +290,9 @@ class VobizAgentConsole {
 				.vobiz-audio-list { display: grid; gap: 12px; }
 				.vobiz-audio-card { border: 1px solid #eef0f3; border-radius: 8px; padding: 12px; }
 				.modal-dialog.modal-xl, .modal-dialog.modal-extra-large { max-width: min(1200px, calc(100vw - 32px)); }
+				.vobiz-workdesk-modal { overflow-x: hidden; }
+				.vobiz-workdesk-modal .modal-dialog { margin-left: auto; margin-right: auto; max-width: min(1180px, calc(100vw - 64px)) !important; width: auto !important; }
+				.vobiz-workdesk-modal .modal-content, .vobiz-workdesk-modal .modal-body, .vobiz-workdesk-modal .form-layout, .vobiz-workdesk-modal .form-page, .vobiz-workdesk-modal .form-section, .vobiz-workdesk-modal .section-body { max-width: 100%; min-width: 0; overflow-x: hidden; }
 				.modal-body { overflow-x: hidden; }
 				.modal-body .form-column, .modal-body .frappe-control, .modal-body [data-fieldname="details"] { max-width: 100%; min-width: 0; overflow-x: hidden; }
 				.vobiz-detail-dialog, .vobiz-detail-dialog * { box-sizing: border-box; max-width: 100%; }
@@ -326,7 +329,7 @@ class VobizAgentConsole {
 				.vobiz-clinical-med-table th { color: #6b7280; font-size: 11px; font-weight: 800; }
 				.vobiz-clinical-med-table td { font-size: 12px; white-space: normal; word-break: break-word; }
 				.vobiz-empty { color: #6b7280; padding: 12px 0; }
-				.vobiz-wa-chat-list { background: #f9fafb; border: 1px solid #eef0f3; border-radius: 8px; display: grid; gap: 8px; margin-top: 12px; max-height: 420px; overflow-y: auto; padding: 10px; }
+				.vobiz-wa-chat-list { background: #f9fafb; border: 1px solid #eef0f3; border-radius: 8px; display: grid; gap: 8px; margin-top: 12px; max-height: 420px; min-width: 0; overflow-x: hidden; overflow-y: auto; padding: 10px; width: 100%; }
 				.vobiz-wa-loader { color: #64748b; cursor: pointer; font-size: 12px; font-weight: 700; padding: 6px; text-align: center; }
 				.vobiz-wa-message { border: 1px solid #eef0f3; border-radius: 8px; max-width: min(82%, 860px); min-width: 0; overflow: hidden; padding: 8px 10px; }
 				.vobiz-wa-message.inbound { background: #fff; justify-self: start; }
@@ -336,8 +339,8 @@ class VobizAgentConsole {
 				.vobiz-wa-media { display: block; margin-top: 6px; }
 				.vobiz-wa-image { border-radius: 8px; display: block; height: auto; max-height: 360px; max-width: 260px; object-fit: contain; width: auto; }
 				.vobiz-wa-media-link { align-items: center; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; display: inline-flex; gap: 8px; padding: 8px 10px; text-decoration: none; }
-				.vobiz-wa-composer { align-items: center; background: #fff; border: 1px solid #e5e7eb; border-radius: 999px; box-shadow: 0 1px 6px rgba(15, 23, 42, .06); display: grid; gap: 8px; grid-template-columns: auto auto minmax(0, 1fr) auto; margin-top: 12px; overflow: visible; padding: 8px 10px 8px 14px; width: 100%; }
-				.vobiz-wa-icon-btn { align-items: center; background: transparent; border: 0; color: #111827; display: inline-flex; font-size: 18px; height: 32px; justify-content: center; padding: 0; width: 32px; }
+				.vobiz-wa-composer { align-items: center; background: #fff; border: 1px solid #e5e7eb; border-radius: 18px; box-shadow: 0 1px 6px rgba(15, 23, 42, .06); display: grid; gap: 6px; grid-template-columns: 32px 32px 32px minmax(0, 1fr) 42px; margin-top: 12px; max-width: 100%; min-width: 0; overflow: visible; padding: 8px 10px; width: 100%; }
+				.vobiz-wa-icon-btn { align-items: center; background: transparent; border: 0; color: #111827; display: inline-flex; font-size: 17px; height: 32px; justify-content: center; min-width: 32px; padding: 0; width: 32px; }
 				.vobiz-wa-attach-wrap, .vobiz-wa-emoji-wrap { position: relative; }
 				.vobiz-wa-menu { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; bottom: 42px; box-shadow: 0 12px 30px rgba(15, 23, 42, .16); display: none; left: 0; min-width: 190px; padding: 8px; position: absolute; z-index: 10; }
 				.vobiz-wa-menu.show { display: grid; gap: 4px; }
@@ -345,7 +348,7 @@ class VobizAgentConsole {
 				.vobiz-wa-menu button:hover { background: #f3f4f6; }
 				.vobiz-wa-emoji-menu { grid-template-columns: repeat(8, 30px); min-width: 276px; }
 				.vobiz-wa-emoji-menu button { font-size: 18px; justify-content: center; padding: 4px; }
-				.vobiz-wa-composer textarea { background: transparent; border: 0; box-shadow: none; height: 36px; line-height: 20px; max-height: 96px; min-height: 36px; min-width: 0; padding: 8px 4px; resize: none; }
+				.vobiz-wa-composer textarea { background: transparent; border: 0; box-shadow: none; height: 36px; line-height: 20px; margin: 0; max-height: 96px; min-height: 36px; min-width: 0; padding: 8px 4px; resize: none; width: 100%; }
 				.vobiz-wa-composer textarea:focus { border: 0; box-shadow: none; outline: 0; }
 				.vobiz-wa-send { align-items: center; background: #16a34a; border: 0; border-radius: 50%; color: #fff; display: inline-flex; font-size: 18px; height: 42px; justify-content: center; padding: 0; width: 42px; }
 				.vobiz-wa-send:disabled { opacity: .65; }
@@ -360,11 +363,20 @@ class VobizAgentConsole {
 				.vobiz-callback-row { align-items: center; border-top: 1px solid #eef0f3; display: grid; gap: 10px; grid-template-columns: 110px minmax(0, 1fr); padding: 8px 0; }
 				.vobiz-callback-row span { color: #6b7280; font-size: 12px; font-weight: 700; }
 				.vobiz-callback-row strong { overflow-wrap: anywhere; }
+				.vobiz-template-card { background: #f9fafb; border: 1px solid #eef0f3; border-radius: 8px; display: grid; gap: 8px; margin-top: 10px; padding: 10px; white-space: pre-wrap; word-break: break-word; }
 				@media (max-width: 1100px) {
 					.vobiz-stats, .vobiz-layout, .vobiz-context-grid, .vobiz-workdesk-grid, .vobiz-field-grid { grid-template-columns: 1fr; }
 					.vobiz-console { padding: 14px; }
 					.vobiz-workdesk-top { display: block; }
 					.vobiz-workdesk-actions { justify-content: flex-start; margin-top: 10px; }
+					.vobiz-wa-composer { grid-template-columns: 30px 30px 30px minmax(0, 1fr) 40px; padding: 8px; }
+				}
+				@media (max-width: 700px) {
+					.vobiz-workdesk-modal .modal-dialog { max-width: calc(100vw - 20px) !important; }
+					.vobiz-wa-composer { border-radius: 14px; gap: 4px; grid-template-columns: 28px 28px 28px minmax(0, 1fr) 38px; padding: 7px; }
+					.vobiz-wa-icon-btn { font-size: 15px; height: 28px; min-width: 28px; width: 28px; }
+					.vobiz-wa-send { height: 38px; width: 38px; }
+					.vobiz-wa-menu { left: auto; right: 0; }
 				}
 			</style>
 		`);
@@ -1048,6 +1060,7 @@ class VobizAgentConsole {
 			primary_action: () => this.handle_workdesk_primary_action(row)
 		});
 		this.state.active_workdesk_dialog = dialog;
+		dialog.$wrapper.addClass('vobiz-workdesk-modal');
 		dialog.get_close_btn().show();
 		dialog.$wrapper.on('hidden.bs.modal', () => {
 			this.state.active_workdesk_key = null;
@@ -1107,6 +1120,7 @@ class VobizAgentConsole {
 		});
 		$body.on('click', '[data-wa-loader]', (e) => this.load_more_whatsapp_messages($(e.currentTarget).closest('[data-wa-chat-list]')));
 		$body.on('click', '[data-wa-send]', () => this.send_workdesk_whatsapp($body));
+		$body.on('click', '[data-wa-template]', () => this.open_workdesk_template_dialog($body));
 		$body.on('click', '[data-wa-attach]', (e) => {
 			e.stopPropagation();
 			$body.find('[data-wa-emoji-menu]').removeClass('show');
@@ -1859,6 +1873,7 @@ class VobizAgentConsole {
 						<button type="button" data-wa-attach-action="document"><i class="fa fa-file-text-o"></i> ${__('Document')}</button>
 					</div>
 				</div>
+				<button class="vobiz-wa-icon-btn" type="button" data-wa-template title="${__('Template')}"><i class="fa fa-file-text-o"></i></button>
 				<div class="vobiz-wa-emoji-wrap">
 					<button class="vobiz-wa-icon-btn" type="button" data-wa-emoji title="${__('Emoji')}"><i class="fa fa-smile-o"></i></button>
 					<div class="vobiz-wa-menu vobiz-wa-emoji-menu" data-wa-emoji-menu>
@@ -2075,6 +2090,131 @@ class VobizAgentConsole {
 			}
 		});
 		dialog.show();
+	}
+
+	open_workdesk_template_dialog($body) {
+		const conversation = $body.find('[data-wa-chat-list]').first().attr('data-conversation');
+		if (!conversation) {
+			frappe.show_alert({ message: __('No WhatsApp conversation selected.'), indicator: 'orange' });
+			return;
+		}
+
+		frappe.call('vobiz_click_to_call.api.console.get_whatsapp_templates', {
+			conversation
+		}).then((r) => {
+			const response = r.message || {};
+			const templates = response.templates || [];
+			if (!response.success || !templates.length) {
+				frappe.msgprint(response.message || __('No approved WhatsApp templates found for this conversation.'));
+				return;
+			}
+			this.show_workdesk_template_dialog($body, conversation, templates);
+		});
+	}
+
+	show_workdesk_template_dialog($body, conversation, templates) {
+		const options = templates.map((template, index) => {
+			const label = template.display_name || template.name || __('Template');
+			const language = template.language_code || 'en';
+			return `<option value="${index}">${frappe.utils.escape_html(label)} (${frappe.utils.escape_html(language)})</option>`;
+		}).join('');
+		const dialog = new frappe.ui.Dialog({
+			title: __('Send WhatsApp Template'),
+			fields: [
+				{
+					fieldname: 'template_html',
+					fieldtype: 'HTML',
+					options: `
+						<div class="vobiz-template-send">
+							<label>${__('Template')}</label>
+							<select class="form-control" data-wa-template-select>${options}</select>
+							<div class="vobiz-template-preview" data-wa-template-preview></div>
+						</div>
+					`
+				},
+				{
+					fieldname: 'header_values',
+					fieldtype: 'Small Text',
+					label: __('Header Values'),
+					description: __('One value per line, only if the template has header variables.')
+				},
+				{
+					fieldname: 'body_values',
+					fieldtype: 'Small Text',
+					label: __('Body Values'),
+					description: __('One value per line for {{1}}, {{2}}, etc.')
+				},
+				{
+					fieldname: 'followup_body',
+					fieldtype: 'Small Text',
+					label: __('Message After Template'),
+					description: __('Optional normal message to send after the approved template.')
+				}
+			],
+			primary_action_label: __('Send Template'),
+			primary_action: (values) => {
+				const index = parseInt(dialog.$wrapper.find('[data-wa-template-select]').val(), 10) || 0;
+				const template = templates[index] || {};
+				dialog.get_primary_btn().prop('disabled', true).text(__('Sending...'));
+				frappe.call({
+					method: 'vobiz_click_to_call.api.console.send_whatsapp_template',
+					args: {
+						conversation,
+						template_name: template.name,
+						language_code: template.language_code,
+						header_values: values.header_values || '',
+						body_values: values.body_values || '',
+						followup_body: values.followup_body || '',
+						body_preview: this.render_template_text(template.body_preview || '', values.body_values || ''),
+						template_category: template.category || ''
+					},
+					type: 'POST'
+				}).then(() => {
+					dialog.hide();
+					this.refresh_inline_whatsapp($body, conversation);
+				}).always(() => {
+					dialog.get_primary_btn().prop('disabled', false).text(__('Send Template'));
+				});
+			}
+		});
+		const update_preview = () => {
+			const index = parseInt(dialog.$wrapper.find('[data-wa-template-select]').val(), 10) || 0;
+			const template = templates[index] || {};
+			dialog.$wrapper.find('[data-wa-template-preview]').html(this.workdesk_template_preview_html(template));
+			dialog.set_value('header_values', '');
+			dialog.set_value('body_values', '');
+		};
+		dialog.show();
+		dialog.$wrapper.on('change', '[data-wa-template-select]', update_preview);
+		update_preview();
+	}
+
+	workdesk_template_preview_html(template) {
+		const header = template.header_preview || '';
+		const body = template.body_preview || '';
+		const meta = [
+			template.category,
+			template.status,
+			(template.body_variable_count ? `${template.body_variable_count} ${__('body values')}` : ''),
+			(template.header_variable_count ? `${template.header_variable_count} ${__('header values')}` : '')
+		].filter(Boolean).join(' • ');
+		return `
+			<div class="vobiz-template-card">
+				${meta ? `<div class="vobiz-related-meta">${frappe.utils.escape_html(meta)}</div>` : ''}
+				${header ? `<strong>${frappe.utils.escape_html(header)}</strong>` : ''}
+				${body ? `<div>${frappe.utils.escape_html(body)}</div>` : `<div class="text-muted">${__('No preview available.')}</div>`}
+			</div>
+		`;
+	}
+
+	render_template_text(text, values_text) {
+		const values = String(values_text || '').replace(/,/g, '\n').split('\n').map((row) => row.trim()).filter(Boolean);
+		let output = String(text || '');
+		values.forEach((value, index) => {
+			const pattern = new RegExp(`\\{\\{${index + 1}\\}\\}`, 'g');
+			output = output.replace(pattern, value);
+		});
+		return output;
 	}
 
 	upload_workdesk_whatsapp_file(conversation, file, is_image) {

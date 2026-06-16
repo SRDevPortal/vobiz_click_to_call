@@ -13,6 +13,7 @@
   "default_caller_id",
   "default_country_code",
   "webhook_base_url",
+  "inbound_callback_token",
   "call_section",
   "allowed_doctypes",
   "default_call_flow",
@@ -105,6 +106,13 @@
    "fieldname": "webhook_base_url",
    "fieldtype": "Data",
    "label": "Webhook Base URL"
+  },
+  {
+   "description": "Optional secret token for inbound DID callbacks. If set, add this token to the Vobiz inbound Answer URL.",
+   "fieldname": "inbound_callback_token",
+   "fieldtype": "Password",
+   "label": "Inbound Callback Token",
+   "no_copy": 1
   },
   {
    "fieldname": "call_section",

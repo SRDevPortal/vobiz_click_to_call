@@ -9,7 +9,7 @@ from frappe import _
 from vobiz_click_to_call.api.call import get_call_capability, get_call_status, restore_mapping_after_call
 from vobiz_click_to_call.api.recording import recording_proxy_url
 from vobiz_click_to_call.api.disposition import get_disposition_options_api
-from vobiz_click_to_call.services.disposition import CONNECTED_STATUSES, MISSED_STATUSES
+from vobiz_click_to_call.services.call_status import MISSED_STATUSES, status_bucket
 from vobiz_click_to_call.services.lead_disposition import get_lead_disposition_context
 from vobiz_click_to_call.services.settings import get_settings
 
@@ -283,6 +283,93 @@ def send_whatsapp_reply(conversation: str, body: str) -> dict[str, Any]:
 
 
 @frappe.whitelist()
+def get_whatsapp_templates(conversation: str, force_refresh: int | str = 0) -> dict[str, Any]:
+    if frappe.session.user == "Guest":
+        frappe.throw(_("Login required."))
+    _ensure_whatsapp_conversation_read(conversation)
+
+    try:
+        from wa_chat_hub.api.runtime import get_interakt_templates
+
+        response = get_interakt_templates(conversation=conversation, force_refresh=force_refresh)
+        result = response.get("result") or {}
+        return {
+            "success": True,
+            "templates": result.get("templates") or [],
+            "channel_account": result.get("channel_account"),
+            "count": result.get("count") or 0,
+        }
+    except Exception as exc:
+        frappe.log_error(frappe.get_traceback(), "Vobiz Workdesk WhatsApp Templates Failed")
+        return {"success": False, "templates": [], "message": str(exc)}
+
+
+@frappe.whitelist(methods=["POST"])
+def send_whatsapp_template(
+    conversation: str,
+    template_name: str,
+    language_code: str | None = None,
+    body_values: str | list | None = None,
+    header_values: str | list | None = None,
+    followup_body: str | None = None,
+    body_preview: str | None = None,
+    template_category: str | None = None,
+) -> dict[str, Any]:
+    if frappe.session.user == "Guest":
+        frappe.throw(_("Login required."))
+    if not (template_name or "").strip():
+        frappe.throw(_("Template is required."))
+    _ensure_whatsapp_conversation_read(conversation)
+
+    from wa_chat_hub.outbound import send_interakt_template_message
+    from wa_chat_hub.services import append_message
+
+    template = {
+        "template_name": template_name.strip(),
+        "language_code": (language_code or "").strip() or None,
+        "body_values": _list_from_template_values(body_values),
+        "header_values": _list_from_template_values(header_values),
+        "template_category": template_category or "",
+    }
+    try:
+        outbound = send_interakt_template_message(conversation, template)
+        delivery_status = outbound.get("delivery_status") or "Sent"
+    except Exception as exc:
+        frappe.log_error(frappe.get_traceback(), "Vobiz Workdesk WhatsApp Template Send Failed")
+        outbound = {
+            "conversation": conversation,
+            "sent": False,
+            "delivery_status": "Failed",
+            "template_name": template_name,
+            "error": str(exc),
+        }
+        delivery_status = "Failed"
+
+    convo = frappe.get_doc("Chat Conversation", conversation)
+    contact_phone = frappe.db.get_value("Chat Contact", convo.contact, "phone_number")
+    body_text = (body_preview or "").strip() or _("Template: {0}").format(template_name)
+    result = append_message({
+        "channel_account": convo.channel_account,
+        "phone_number": contact_phone,
+        "direction": "Outbound",
+        "sender_type": "Agent",
+        "content_type": "Template",
+        "body": body_text,
+        "delivery_status": delivery_status,
+        "channel_message_id": outbound.get("provider_message_id"),
+        "raw_transport_payload": outbound,
+        "template_category": template_category,
+    })
+
+    followup_body = (followup_body or "").strip()
+    if followup_body:
+        send_whatsapp_reply(conversation, followup_body)
+    else:
+        frappe.db.commit()
+    return {"success": True, "result": {**outbound, **result}, **_whatsapp_messages_page(conversation, 30)}
+
+
+@frappe.whitelist()
 def get_active_call() -> dict[str, Any]:
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
@@ -384,6 +471,7 @@ def _analytics_data(
         filters["user"] = agent_user
     elif not is_admin:
         filters["user"] = frappe.session.user
+    conditions, params = _analytics_sql_conditions(start, end, filters)
 
     meta = frappe.get_meta("Vobiz Call Log")
     fields = ["name", "user", "status", "duration", "billsec", "creation"]
@@ -409,21 +497,16 @@ def _analytics_data(
         )
         if field not in fields
     )
-    rows = frappe.get_all(
-        "Vobiz Call Log",
-        filters=filters,
-        fields=fields,
-        order_by="creation desc",
-        limit_page_length=5000,
-    )
-    all_rows = [_analytics_row(row) for row in rows]
-    filtered_rows = _filter_performance_rows(all_rows, status_filter)
-    summary = _performance_summary(all_rows)
-    filtered_summary = _performance_summary(filtered_rows)
+    summary = _analytics_summary_sql(conditions, params)
+    filtered_summary = _analytics_summary_sql(conditions, params, status_filter=status_filter)
     include_call_rows = bool(frappe.utils.cint(include_calls))
     call_limit = max(10, min(frappe.utils.cint(call_limit) or 50, ANALYTICS_CALL_LIMIT_MAX))
     call_offset = max(0, frappe.utils.cint(call_offset) or 0)
-    call_slice = filtered_rows[call_offset : call_offset + call_limit] if include_call_rows else []
+    call_slice = (
+        _analytics_call_rows_sql(conditions, params, fields, status_filter=status_filter, limit=call_limit, offset=call_offset)
+        if include_call_rows
+        else []
+    )
 
     return {
         "from_date": from_date,
@@ -436,17 +519,239 @@ def _analytics_data(
         "is_admin": is_admin,
         "summary": summary,
         "filtered_summary": filtered_summary,
-        "status_breakdown": _performance_status_breakdown(all_rows),
-        "outcome_breakdown": _performance_outcome_breakdown(all_rows),
-        "daily": _performance_by_day(all_rows, from_date, to_date),
-        "agents": _performance_by_user(filtered_rows),
+        "status_breakdown": _analytics_status_breakdown_sql(conditions, params),
+        "outcome_breakdown": _analytics_outcome_breakdown_sql(conditions, params),
+        "daily": _analytics_daily_sql(conditions, params, from_date, to_date),
+        "agents": _analytics_agents_sql(conditions, params, status_filter=status_filter),
         "calls": [_performance_call_row(row) for row in call_slice],
         "calls_loaded": include_call_rows,
         "call_limit": call_limit,
         "call_offset": call_offset,
-        "has_more_calls": include_call_rows and (call_offset + call_limit) < len(filtered_rows),
-        "matching_call_count": len(filtered_rows),
+        "has_more_calls": include_call_rows and (call_offset + call_limit) < filtered_summary.get("total", 0),
+        "matching_call_count": filtered_summary.get("total", 0),
     }
+
+
+def _analytics_sql_conditions(start: str, end: str, filters: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    params: dict[str, Any] = {"start": start, "end": end}
+    conditions = ["`creation` between %(start)s and %(end)s"]
+    if filters.get("reference_doctype"):
+        params["reference_doctype"] = filters["reference_doctype"]
+        conditions.append("`reference_doctype` = %(reference_doctype)s")
+    if filters.get("user"):
+        params["user"] = filters["user"]
+        conditions.append("`user` = %(user)s")
+    return " and ".join(conditions), params
+
+
+def _analytics_bucket_sql() -> str:
+    signal = "lower(concat_ws(' ', coalesce(`status`, ''), coalesce(`call_status`, ''), coalesce(`dial_status`, ''), coalesce(`hangup_cause`, '')))"
+    talk = _analytics_talk_sql()
+    return f"""
+        case
+            when coalesce(`billsec`, 0) > 0 or coalesce(`duration`, 0) >= 30 then 'connected'
+            when `status` in ('Connected', 'Completed') then 'connected'
+            when {signal} like '%%busy%%' then 'busy'
+            when {signal} like '%%no-answer%%' or {signal} like '%%no answer%%' or {signal} like '%%timeout%%' or {signal} like '%%unanswered%%' then 'no_answer'
+            when {signal} like '%%cancel%%' or {signal} like '%%reject%%' or {signal} like '%%decline%%' then 'cancelled'
+            when {signal} like '%%fail%%' or {signal} like '%%error%%' then 'failed'
+            when `status` in ('Failed', 'Busy', 'No Answer', 'Cancelled', 'Canceled') then 'missed'
+            else 'other'
+        end
+    """
+
+
+def _analytics_talk_sql() -> str:
+    return "greatest(coalesce(`billsec`, 0), coalesce(`duration`, 0))"
+
+
+def _analytics_bucket_filter_sql(status_filter: str | None) -> str:
+    status_filter = _analytics_status_filter(status_filter)
+    if status_filter == "connected":
+        return "where bucket = 'connected'"
+    if status_filter == "missed":
+        return "where bucket in ('missed', 'busy', 'no_answer', 'failed', 'cancelled')"
+    if status_filter in {"busy", "no_answer", "failed", "cancelled"}:
+        return f"where bucket = '{status_filter}'"
+    return ""
+
+
+def _analytics_summary_sql(conditions: str, params: dict[str, Any], status_filter: str | None = None) -> dict[str, Any]:
+    bucket_expr = _analytics_bucket_sql()
+    bucket_filter = _analytics_bucket_filter_sql(status_filter)
+    rows = frappe.db.sql(
+        f"""
+        select bucket, count(*) as call_count, sum(talk_seconds) as talk_seconds, sum(cost) as cost
+        from (
+            select {bucket_expr} as bucket, {_analytics_talk_sql()} as talk_seconds, coalesce(`cost`, 0) as cost
+            from `tabVobiz Call Log`
+            where {conditions}
+        ) analytics
+        {bucket_filter}
+        group by bucket
+        """,
+        params,
+        as_dict=True,
+    )
+    return _summary_from_bucket_rows(rows)
+
+
+def _summary_from_bucket_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    counts = {row.bucket: frappe.utils.cint(row.call_count) for row in rows}
+    total = sum(counts.values())
+    connected = counts.get("connected", 0)
+    missed = sum(counts.get(bucket, 0) for bucket in ("missed", "busy", "no_answer", "failed", "cancelled"))
+    talk_seconds = sum(
+        frappe.utils.cint(row.talk_seconds)
+        for row in rows
+        if row.bucket == "connected"
+    )
+    average_duration = round(talk_seconds / connected) if connected else 0
+    return {
+        "total": total,
+        "connected": connected,
+        "missed": missed,
+        "busy": counts.get("busy", 0),
+        "no_answer": counts.get("no_answer", 0),
+        "failed": counts.get("failed", 0),
+        "cancelled": counts.get("cancelled", 0),
+        "talk_seconds": talk_seconds,
+        "talk_time_label": _duration_label(talk_seconds),
+        "average_duration": average_duration,
+        "average_duration_label": _duration_label(average_duration),
+        "answer_rate": round((connected / total) * 100, 1) if total else 0,
+        "missed_rate": round((missed / total) * 100, 1) if total else 0,
+        "cost": round(sum(frappe.utils.flt(row.cost) for row in rows), 2),
+    }
+
+
+def _analytics_status_breakdown_sql(conditions: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+    summary = _analytics_summary_sql(conditions, params)
+    data = [
+        {"bucket": "connected", "label": _("Connected"), "count": summary.get("connected") or 0},
+        {"bucket": "missed", "label": _("Missed"), "count": summary.get("missed") or 0},
+    ]
+    other = next((row.get("count") for row in _analytics_outcome_breakdown_sql(conditions, params) if row.get("bucket") == "other"), 0)
+    if other:
+        data.append({"bucket": "other", "label": _("Other"), "count": other})
+    return [row for row in data if row["count"]]
+
+
+def _analytics_outcome_breakdown_sql(conditions: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+    bucket_expr = _analytics_bucket_sql()
+    rows = frappe.db.sql(
+        f"""
+        select bucket, count(*) as call_count, sum(talk_seconds) as talk_seconds, sum(cost) as cost
+        from (
+            select {bucket_expr} as bucket, {_analytics_talk_sql()} as talk_seconds, coalesce(`cost`, 0) as cost
+            from `tabVobiz Call Log`
+            where {conditions}
+        ) analytics
+        group by bucket
+        """,
+        params,
+        as_dict=True,
+    )
+    by_bucket = {row.bucket: row for row in rows}
+    data = []
+    for bucket in ["connected", "busy", "no_answer", "failed", "cancelled", "missed", "other"]:
+        row = by_bucket.get(bucket)
+        if not row:
+            continue
+        summary = _summary_from_bucket_rows([row])
+        data.append(
+            {
+                "bucket": bucket,
+                "label": _analytics_bucket_label(bucket),
+                "count": frappe.utils.cint(row.call_count),
+                "average_duration_label": summary.get("average_duration_label"),
+            }
+        )
+    return data
+
+
+def _analytics_daily_sql(conditions: str, params: dict[str, Any], from_date: str, to_date: str) -> list[dict[str, Any]]:
+    bucket_expr = _analytics_bucket_sql()
+    rows = frappe.db.sql(
+        f"""
+        select call_date, bucket, count(*) as call_count, sum(talk_seconds) as talk_seconds, sum(cost) as cost
+        from (
+            select date(`creation`) as call_date, {bucket_expr} as bucket, {_analytics_talk_sql()} as talk_seconds, coalesce(`cost`, 0) as cost
+            from `tabVobiz Call Log`
+            where {conditions}
+        ) analytics
+        group by call_date, bucket
+        """,
+        params,
+        as_dict=True,
+    )
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row.call_date), []).append(row)
+
+    start = frappe.utils.getdate(from_date)
+    end = frappe.utils.getdate(to_date)
+    days = []
+    current = start
+    while current <= end:
+        day = str(current)
+        days.append({"date": day, **_summary_from_bucket_rows(grouped.get(day, []))})
+        current = frappe.utils.add_days(current, 1)
+    return days
+
+
+def _analytics_agents_sql(conditions: str, params: dict[str, Any], status_filter: str | None = None) -> list[dict[str, Any]]:
+    bucket_expr = _analytics_bucket_sql()
+    bucket_filter = _analytics_bucket_filter_sql(status_filter)
+    rows = frappe.db.sql(
+        f"""
+        select agent, bucket, count(*) as call_count, sum(talk_seconds) as talk_seconds, sum(cost) as cost
+        from (
+            select coalesce(nullif(`user`, ''), 'Unassigned') as agent, {bucket_expr} as bucket, {_analytics_talk_sql()} as talk_seconds, coalesce(`cost`, 0) as cost
+            from `tabVobiz Call Log`
+            where {conditions}
+        ) analytics
+        {bucket_filter}
+        group by agent, bucket
+        """,
+        params,
+        as_dict=True,
+    )
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(row.agent or _("Unassigned"), []).append(row)
+    data = [{"user": user, **_summary_from_bucket_rows(user_rows)} for user, user_rows in grouped.items()]
+    return sorted(data, key=lambda row: row["total"], reverse=True)
+
+
+def _analytics_call_rows_sql(
+    conditions: str,
+    params: dict[str, Any],
+    fields: list[str],
+    *,
+    status_filter: str | None,
+    limit: int,
+    offset: int,
+) -> list[dict[str, Any]]:
+    bucket_expr = _analytics_bucket_sql()
+    bucket_filter = _analytics_bucket_filter_sql(status_filter)
+    select_fields = ", ".join(f"`{field}`" for field in fields)
+    query_params = {**params, "limit": int(limit), "offset": int(offset)}
+    return frappe.db.sql(
+        f"""
+        select *
+        from (
+            select {select_fields}, {bucket_expr} as bucket, {_analytics_talk_sql()} as talk_seconds
+            from `tabVobiz Call Log`
+            where {conditions}
+        ) analytics
+        {bucket_filter}
+        order by `creation` desc
+        limit %(limit)s offset %(offset)s
+        """,
+        query_params,
+        as_dict=True,
+    )
 
 
 def _performance_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -602,32 +907,7 @@ def _analytics_row(row) -> dict[str, Any]:
 
 
 def _analytics_bucket(row: dict[str, Any]) -> str:
-    status = str(row.get("status") or "").strip()
-    talk_seconds = frappe.utils.cint(row.get("billsec")) or frappe.utils.cint(row.get("duration"))
-    combined = " ".join(
-        str(row.get(fieldname) or "").strip().lower().replace("_", "-")
-        for fieldname in ("status", "call_status", "dial_status", "hangup_cause")
-    )
-    if talk_seconds > 0 and (
-        "completed" in combined
-        or "connected" in combined
-        or "normal-clearing" in combined
-        or "normal clearing" in combined
-    ):
-        return "connected"
-    if status in CONNECTED_STATUSES or status == "Connected":
-        return "connected"
-    if "busy" in combined:
-        return "busy"
-    if "no-answer" in combined or "no answer" in combined or "timeout" in combined or "unanswered" in combined:
-        return "no_answer"
-    if "cancel" in combined or "reject" in combined or "decline" in combined:
-        return "cancelled"
-    if "fail" in combined or "error" in combined:
-        return "failed"
-    if status in MISSED_STATUSES or status in {"Cancelled", "Canceled"}:
-        return "missed"
-    return "other"
+    return status_bucket(row)
 
 
 def _analytics_bucket_label(bucket: str) -> str:
@@ -1338,8 +1618,8 @@ def _vobiz_summary(reference_doctype: str, reference_name: str) -> dict[str, Any
 
 def _vobiz_summary_from_history(history: list[dict[str, Any]]) -> dict[str, Any]:
     latest = history[0] if history else {}
-    connected = len([row for row in history if row.get("status") in CONNECTED_STATUSES or row.get("status") == "Connected"])
-    missed = len([row for row in history if row.get("status") in MISSED_STATUSES or row.get("status") in {"Cancelled", "Canceled"}])
+    connected = len([row for row in history if status_bucket(row) == "connected"])
+    missed = len([row for row in history if status_bucket(row) in {"missed", "busy", "no_answer", "failed", "cancelled"}])
     return {
         "latest": latest,
         "history": history,
@@ -1576,3 +1856,18 @@ def _duration_label(seconds: int) -> str:
     if minutes:
         return f"{minutes}m {remainder:02d}s"
     return f"{remainder}s"
+
+
+def _list_from_template_values(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item or "").strip()]
+    text = str(value or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = frappe.parse_json(text)
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item or "").strip()]
+    except Exception:
+        pass
+    return [row.strip() for row in text.replace(",", "\n").splitlines() if row.strip()]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hmac
 import secrets
 from typing import Any
 from xml.sax.saxutils import escape, quoteattr
@@ -11,9 +12,16 @@ from werkzeug.wrappers import Response
 from vobiz_ai.api.call_log import make_outbound_call_key, sync_reference_links
 from vobiz_click_to_call.api.call import get_user_mapping, restore_mapping_after_call
 from vobiz_click_to_call.api.console import is_agent_console_online
+from vobiz_click_to_call.services.call_status import status_from_provider
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
 from vobiz_click_to_call.services.numbers import normalize_phone_number, phone_key, provider_phone_number
-from vobiz_click_to_call.services.settings import build_callback_url, get_default_country_code, get_settings
+from vobiz_click_to_call.services.settings import (
+    build_callback_url,
+    get_caller_ids,
+    get_default_country_code,
+    get_inbound_callback_token,
+    get_settings,
+)
 
 TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
 
@@ -23,6 +31,17 @@ def route():
     """Route inbound DID callbacks to the agent who last called this customer."""
     payload = _payload()
     event = _event_name(payload)
+    settings = get_settings()
+    default_country_code = get_default_country_code(settings)
+    did_number = normalize_phone_number(_first_value(payload, "To", "to", "Called", "did", "DID"), default_country_code=default_country_code)
+
+    if not _inbound_callback_allowed(payload, settings, did_number):
+        log_vobiz_event(
+            "Inbound route rejected: callback token or DID validation failed",
+            severity="Warning",
+            payload={"event": event, "did_number": did_number, "payload": _safe_payload(payload)},
+        )
+        return _plain_response("IGNORED") if event == "hangup" else _xml_response(_hangup_xml())
 
     if event == "hangup":
         call_log = find_existing_inbound_call(payload)
@@ -38,10 +57,7 @@ def route():
             update_inbound_call_event(call_log, payload)
         return _plain_response("OK")
 
-    settings = get_settings()
-    default_country_code = get_default_country_code(settings)
     customer_number = normalize_phone_number(_first_value(payload, "From", "from", "Caller", "caller_id"), default_country_code=default_country_code)
-    did_number = normalize_phone_number(_first_value(payload, "To", "to", "Called", "did", "DID"), default_country_code=default_country_code)
 
     if not customer_number:
         log_vobiz_event("Inbound route ignored: caller number missing", severity="Warning", payload=payload)
@@ -292,7 +308,16 @@ def update_inbound_call_event(doc, payload: dict[str, Any], *, commit: bool = Tr
     reason = _first_value(payload, "Reason", "HangupCause", "DialHangupCause", "hangup_cause")
 
     if event == "hangup":
-        doc.status = "Completed" if status == "completed" else "Failed"
+        doc.status = status_from_provider(
+            {
+                "status": status,
+                "call_status": status,
+                "hangup_cause": reason,
+                "duration": doc.duration or _safe_int(_first_value(payload, "Duration", "duration")),
+                "billsec": doc.billsec or _safe_int(_first_value(payload, "BillSec", "billsec", "BillSeconds", "bill_seconds")),
+            },
+            previous=doc.status,
+        ) or "Failed"
         doc.call_status = status or doc.call_status
         doc.hangup_cause = reason or doc.hangup_cause
         doc.end_time = _first_value(payload, "EndTime", "end_time") or frappe.utils.now()
@@ -343,6 +368,7 @@ def apply_provider_payload(doc, payload: dict[str, Any]) -> None:
         "domain": _first_value(payload, "Domain", "domain"),
         "event_timestamp": _first_value(payload, "Timestamp", "timestamp"),
         "duration": _safe_int(_first_value(payload, "Duration", "duration")),
+        "billsec": _safe_int(_first_value(payload, "BillSec", "billsec", "BillSeconds", "bill_seconds")),
         "ring_time": _safe_int(_first_value(payload, "RingTime", "ring_time")),
         "raw_payload": json.dumps(_safe_payload(payload), indent=2, default=str),
     }
@@ -406,6 +432,19 @@ def _mapping_can_receive(user: str, mapping: dict[str, Any]) -> bool:
         if status not in TERMINAL_STATUSES:
             return False
     return True
+
+
+def _inbound_callback_allowed(payload: dict[str, Any], settings, did_number: str) -> bool:
+    configured_dids = set(get_caller_ids(settings))
+    if configured_dids and (not did_number or did_number not in configured_dids):
+        return False
+
+    expected_token = get_inbound_callback_token(settings)
+    if not expected_token:
+        return True
+
+    received_token = _first_value(payload, "token", "Token", "callback_token", "inbound_token", "inbound_callback_token")
+    return hmac.compare_digest(str(expected_token), str(received_token or ""))
 
 
 def _mark_mapping_busy(user: str | None, call_log: str) -> None:

@@ -131,8 +131,10 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
     def test_vobiz_ai_provider_status_updates_are_normalized_to_terminal_states(self):
         self.assertIn("normalize_provider_update_status(target, values)", self.ai)
         self.assertIn("def normalize_provider_update_status", self.ai)
-        self.assertIn('"hangup"', self.ai)
-        self.assertIn('"Completed" if current_status == "Connected" else "Cancelled"', self.ai)
+        self.assertIn("normalize_status_values(current_status, values)", self.ai)
+        call_status = (APP / "services" / "call_status.py").read_text(encoding="utf-8")
+        self.assertIn("def status_from_provider", call_status)
+        self.assertIn("def status_bucket", call_status)
 
 
 if __name__ == "__main__":

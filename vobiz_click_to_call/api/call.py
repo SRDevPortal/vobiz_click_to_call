@@ -9,6 +9,7 @@ from frappe import _
 from vobiz_ai.api.call_log import create_outbound_call_log, sync_linked_summaries
 from vobiz_click_to_call.api.recording import recording_proxy_url
 from vobiz_click_to_call.services.client import VobizClient, extract_provider_id
+from vobiz_click_to_call.services.call_status import status_from_provider
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
 from vobiz_click_to_call.services.disposition import update_reference_call_metrics
 from vobiz_click_to_call.services.numbers import mask_phone, normalize_phone_number, numbers_match
@@ -335,7 +336,10 @@ def sync_live_call_if_finished(doc) -> None:
         message = str(exc).lower()
         if "not found" not in message and "call not found" not in message:
             return
-        doc.status = "Completed" if doc.status == "Connected" else "Cancelled"
+        doc.status = status_from_provider(
+            {"status": "completed", "call_status": "not found", "duration": doc.duration, "billsec": doc.billsec},
+            previous=doc.status,
+        ) or ("Completed" if doc.status == "Connected" else "Cancelled")
         doc.call_status = doc.call_status or "ended"
         doc.hangup_cause = doc.hangup_cause or "LIVE_CALL_NOT_FOUND"
         doc.end_time = doc.end_time or frappe.utils.now()
@@ -348,7 +352,7 @@ def sync_live_call_if_finished(doc) -> None:
 
     provider_status = _provider_live_status(response)
     if provider_status in {"completed", "hangup", "ended", "failed", "busy", "no-answer", "no answer", "cancelled", "canceled"}:
-        doc.status = _terminal_status_from_provider(provider_status, doc.status)
+        doc.status = _terminal_status_from_provider(provider_status, doc.status, doc)
         doc.call_status = provider_status
         doc.end_time = doc.end_time or frappe.utils.now()
         doc.response_json = merge_json(doc.response_json, {"live_status_response": response})
@@ -369,17 +373,15 @@ def _provider_live_status(response: dict[str, Any] | None) -> str:
     return ""
 
 
-def _terminal_status_from_provider(provider_status: str, current_status: str) -> str:
-    status = str(provider_status or "").strip().lower().replace("_", "-")
-    if "busy" in status:
-        return "Busy"
-    if "no-answer" in status or "no answer" in status or "timeout" in status:
-        return "No Answer"
-    if "fail" in status:
-        return "Failed"
-    if "cancel" in status:
-        return "Cancelled"
-    return "Completed" if current_status == "Connected" else "Cancelled"
+def _terminal_status_from_provider(provider_status: str, current_status: str, doc=None) -> str:
+    return status_from_provider(
+        {
+            "status": provider_status,
+            "duration": getattr(doc, "duration", 0) if doc else 0,
+            "billsec": getattr(doc, "billsec", 0) if doc else 0,
+        },
+        previous=current_status,
+    ) or current_status or "Completed"
 
 
 def get_reference_title(reference_doctype: str | None, reference_name: str | None) -> str:
@@ -527,6 +529,7 @@ def get_user_mapping(user: str) -> dict[str, Any] | None:
             "working_days",
             "team",
             "pipeline",
+            "queue_source",
             "fallback_user",
             "sr_medical_department",
             "sr_followup_id",

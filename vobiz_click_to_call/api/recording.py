@@ -96,11 +96,20 @@ def stream(call_log: str):
         if response.headers.get(header):
             response_headers[header] = response.headers[header]
 
+    def generate():
+        try:
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            response.close()
+
     return Response(
-        response.content,
+        generate(),
         status=response.status_code,
         headers=response_headers,
         content_type=response.headers.get("Content-Type") or _content_type(extension),
+        direct_passthrough=True,
     )
 
 

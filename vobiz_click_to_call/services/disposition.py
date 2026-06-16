@@ -4,6 +4,7 @@ import frappe
 from frappe import _
 
 from vobiz_ai.api.call_log import sync_linked_summaries
+from vobiz_click_to_call.services.call_status import status_bucket
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
 from vobiz_click_to_call.services.lead_disposition import sync_call_disposition_to_lead
 from vobiz_click_to_call.services.safety import block_number
@@ -178,7 +179,20 @@ def update_reference_call_metrics(reference_doctype: str | None, reference_name:
     rows = frappe.get_all(
         "Vobiz Call Log",
         filters={"reference_doctype": reference_doctype, "reference_name": reference_name},
-        fields=["name", "status", "creation", "user", "disposition", "follow_up_datetime"],
+        fields=[
+            "name",
+            "status",
+            "call_status",
+            "dial_status",
+            "hangup_cause",
+            "duration",
+            "billsec",
+            "recording_duration",
+            "creation",
+            "user",
+            "disposition",
+            "follow_up_datetime",
+        ],
         order_by="creation desc",
     )
     if not rows:
@@ -195,9 +209,11 @@ def update_reference_call_metrics(reference_doctype: str | None, reference_name:
     if "vobiz_total_call_attempts" in fields:
         values["vobiz_total_call_attempts"] = len(rows)
     if "vobiz_connected_call_count" in fields:
-        values["vobiz_connected_call_count"] = len([row for row in rows if row.status in CONNECTED_STATUSES])
+        values["vobiz_connected_call_count"] = len([row for row in rows if status_bucket(row) == "connected"])
     if "vobiz_missed_call_count" in fields:
-        values["vobiz_missed_call_count"] = len([row for row in rows if row.status in MISSED_STATUSES])
+        values["vobiz_missed_call_count"] = len(
+            [row for row in rows if status_bucket(row) in {"missed", "busy", "no_answer", "failed", "cancelled"}]
+        )
 
     last_disposition = next((row.disposition for row in rows if row.disposition), "")
     if "vobiz_last_disposition" in fields:
