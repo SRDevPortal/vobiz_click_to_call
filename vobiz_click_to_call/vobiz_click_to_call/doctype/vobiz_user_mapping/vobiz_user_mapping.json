@@ -11,6 +11,9 @@
   "queue_source",
   "agent_mobile",
   "caller_id",
+  "patient_routing_section",
+  "sr_medical_department",
+  "sr_followup_id",
   "availability_section",
   "accept_calls",
   "availability_status",
@@ -23,9 +26,9 @@
   "working_hours_end",
   "working_days",
   "routing_section",
+  "fallback_user",
   "team",
   "pipeline",
-  "fallback_user",
   "notes"
  ],
  "fields": [
@@ -54,7 +57,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Queue Source",
-   "options": "CRM Lead\nPatient"
+   "options": "CRM Lead\nPatient\nDiscontinued"
   },
   {
    "description": "The phone number Vobiz will dial after the customer answers.",
@@ -66,11 +69,38 @@
    "reqd": 1
   },
   {
-   "description": "Optional caller ID override for this user.",
+   "description": "Vobiz number assigned to this mapped user. Options are synced from Vobiz Settings > Caller IDs.",
+   "depends_on": "eval:doc.enabled",
    "fieldname": "caller_id",
-   "fieldtype": "Data",
-   "label": "Caller ID",
-   "options": "Phone"
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Vobiz Number",
+   "options": ""
+  },
+  {
+   "collapsible": 1,
+   "depends_on": "eval:doc.queue_source=='Patient'",
+   "fieldname": "patient_routing_section",
+   "fieldtype": "Section Break",
+   "label": "Patient Routing"
+  },
+  {
+   "depends_on": "eval:doc.queue_source=='Patient'",
+   "fieldname": "sr_medical_department",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Department",
+   "options": "Medical Department"
+  },
+  {
+   "depends_on": "eval:doc.queue_source=='Patient'",
+   "fieldname": "sr_followup_id",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Follow up ID",
+   "options": "\n0\n1\n2\n3\n4\n5\n6\n7\n8\n9"
   },
   {
    "fieldname": "availability_section",
@@ -166,6 +196,7 @@
   },
   {
    "description": "Reserved fallback mapped user when this user is unavailable.",
+   "depends_on": "eval:doc.queue_source=='Patient'",
    "fieldname": "fallback_user",
    "fieldtype": "Link",
    "label": "Fallback User",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from vobiz_click_to_call.api.webhook import _status_from_dial_status, _status_from_hangup
+from vobiz_click_to_call.api.console import _analytics_bucket
 
 
 class TestWebhookStatusMapping(unittest.TestCase):
@@ -15,6 +16,24 @@ class TestWebhookStatusMapping(unittest.TestCase):
     def test_connected_hangup_completes_call(self):
         self.assertEqual(_status_from_hangup("completed", "", previous="Connected"), "Completed")
         self.assertEqual(_status_from_hangup("hangup", "", previous="Connected"), "Completed")
+
+    def test_billable_normal_clearing_completes_call_even_without_prior_connected(self):
+        self.assertEqual(
+            _status_from_hangup("completed", "NORMAL_CLEARING", previous="Customer Answered", billsec=60),
+            "Completed",
+        )
+        self.assertEqual(
+            _analytics_bucket(
+                {
+                    "status": "Cancelled",
+                    "call_status": "completed",
+                    "hangup_cause": "NORMAL_CLEARING",
+                    "billsec": 60,
+                    "duration": 1,
+                }
+            ),
+            "connected",
+        )
 
     def test_specific_failure_signals_win_over_generic_completed(self):
         self.assertEqual(_status_from_hangup("completed", "busy", previous="Agent Ringing"), "Busy")

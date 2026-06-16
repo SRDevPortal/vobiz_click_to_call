@@ -13,6 +13,12 @@ frappe.pages['vobiz-agent-console'].on_page_show = function(wrapper) {
 	}
 };
 
+frappe.pages['vobiz-agent-console'].on_page_hide = function(wrapper) {
+	if (wrapper.vobiz_agent_console) {
+		wrapper.vobiz_agent_console.on_page_hide();
+	}
+};
+
 const VOBIZ_WHATSAPP_PAGE_SIZE = 30;
 
 class VobizAgentConsole {
@@ -85,13 +91,16 @@ class VobizAgentConsole {
 						<div class="vobiz-eyebrow">${__('APP / VOBIZ CALL CENTER / DIALER')}</div>
 						<h2>${__('Vobiz Agent Call Center')}</h2>
 					</div>
-					<div class="vobiz-agent-state">
-						<span class="vobiz-state-dot"></span>
-						<span data-role="availability">${__('Checking')}</span>
+					<div class="vobiz-head-actions">
+						<button class="btn btn-default btn-sm" data-action="open-analytics">
+							<i class="fa fa-line-chart"></i> ${__('Analytics')}
+						</button>
+						<div class="vobiz-agent-state">
+							<span class="vobiz-state-dot"></span>
+							<span data-role="availability">${__('Checking')}</span>
+						</div>
 					</div>
 				</div>
-
-				<div class="vobiz-stats" data-role="stats"></div>
 
 				<section class="vobiz-band vobiz-dialer-control">
 					<div>
@@ -115,7 +124,10 @@ class VobizAgentConsole {
 					<section class="vobiz-band vobiz-queue">
 						<div class="vobiz-section-title">
 							<h3 data-role="queue-title">${__('Lead Queue')}</h3>
-							<input class="form-control input-sm" data-role="search" placeholder="${__('Search')}">
+							<div class="vobiz-queue-tools">
+								<select class="form-control input-sm hidden" data-role="followup-day-filter"></select>
+								<input class="form-control input-sm" data-role="search" placeholder="${__('Search')}">
+							</div>
 						</div>
 						<div class="vobiz-table-wrap">
 							<table class="table table-sm vobiz-table">
@@ -125,6 +137,9 @@ class VobizAgentConsole {
 										<th style="width: 170px" data-role="queue-id-label">${__('CRM Lead ID')}</th>
 										<th>${__('Name')}</th>
 										<th>${__('Phone')}</th>
+										<th class="vobiz-patient-col hidden">${__('Department')}</th>
+										<th class="vobiz-patient-col hidden">${__('Follow-up ID')}</th>
+										<th class="vobiz-patient-col hidden">${__('Day')}</th>
 										<th>${__('Status')}</th>
 										<th>${__('Next Action')}</th>
 										<th style="width: 88px">${__('Action')}</th>
@@ -185,14 +200,21 @@ class VobizAgentConsole {
 				.vobiz-console-head { align-items: center; display: flex; justify-content: space-between; margin-bottom: 20px; }
 				.vobiz-console-head h2 { font-size: 22px; font-weight: 700; margin: 0; }
 				.vobiz-eyebrow { color: #6b7280; font-size: 11px; font-weight: 700; letter-spacing: .04em; margin-bottom: 4px; }
+				.vobiz-head-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
 				.vobiz-agent-state { align-items: center; background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; display: flex; gap: 8px; padding: 8px 12px; }
 				.vobiz-state-dot { background: #16a34a; border-radius: 50%; height: 9px; width: 9px; }
-				.vobiz-stats { display: grid; gap: 16px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 16px; }
+				.vobiz-stats { display: grid; gap: 16px; grid-template-columns: repeat(6, minmax(0, 1fr)); margin-bottom: 16px; }
 				.vobiz-stat { background: #fff; border: 1px solid #ebeef2; border-radius: 8px; padding: 18px; }
 				.vobiz-stat.clickable { cursor: pointer; transition: border-color .15s ease, transform .15s ease; }
 				.vobiz-stat.clickable:hover { border-color: #b8d8ff; transform: translateY(-1px); }
 				.vobiz-stat strong { display: block; font-size: 28px; line-height: 1.1; margin-top: 10px; }
 				.vobiz-stat span { color: #4b5563; font-size: 12px; font-weight: 700; }
+				.vobiz-stat small { color: #6b7280; display: block; font-size: 11px; margin-top: 7px; min-height: 15px; }
+				.vobiz-stat.danger { border-top: 4px solid #dc2626; }
+				.vobiz-stat.success { border-top: 4px solid #16a34a; }
+				.vobiz-stat.warning { border-top: 4px solid #ca8a04; }
+				.vobiz-stat.info { border-top: 4px solid #0284c7; }
+				.vobiz-stat.neutral { border-top: 4px solid #64748b; }
 				.vobiz-performance-head { align-items: center; display: flex; justify-content: space-between; margin-bottom: 14px; }
 				.vobiz-performance-head h4 { font-size: 18px; font-weight: 800; margin: 2px 0 0; }
 				.vobiz-perf-kpis { display: grid; gap: 12px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 18px; }
@@ -212,10 +234,14 @@ class VobizAgentConsole {
 				.vobiz-layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) 320px; }
 				.vobiz-section-title { align-items: center; display: flex; gap: 12px; justify-content: space-between; margin-bottom: 12px; }
 				.vobiz-section-title h3 { font-size: 15px; font-weight: 700; margin: 0; }
+				.vobiz-queue-tools { display: flex; gap: 8px; justify-content: flex-end; min-width: 280px; }
+				.vobiz-queue-tools select { max-width: 150px; }
+				.vobiz-queue-tools input { max-width: 260px; }
 				.vobiz-table-wrap { overflow-x: auto; }
 				.vobiz-table { margin: 0; table-layout: fixed; }
 				.vobiz-table th { color: #6b7280; font-size: 11px; font-weight: 700; }
 				.vobiz-table td { overflow: hidden; text-overflow: ellipsis; vertical-align: middle; white-space: nowrap; }
+				.vobiz-table .hidden { display: none; }
 				.vobiz-person { align-items: center; display: flex; gap: 9px; min-width: 0; }
 				.vobiz-avatar { align-items: center; background: #eaf3ff; border-radius: 50%; color: #2563eb; display: inline-flex; flex: 0 0 auto; font-weight: 700; height: 28px; justify-content: center; width: 28px; }
 				.vobiz-status { font-size: 12px; font-weight: 700; }
@@ -279,6 +305,7 @@ class VobizAgentConsole {
 				.vobiz-call-route-icon { color: #059669; }
 				.vobiz-workdesk-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 				.vobiz-workdesk-card { border: 1px solid #eef0f3; border-radius: 8px; min-width: 0; overflow-x: hidden; padding: 12px; }
+				.vobiz-workdesk-wide { grid-column: 1 / -1; }
 				.vobiz-workdesk-card h4 { font-size: 13px; font-weight: 800; margin: 0 0 10px; }
 				.vobiz-field-grid { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 				.vobiz-field { background: #f9fafb; border-radius: 6px; min-height: 54px; padding: 8px; }
@@ -346,9 +373,9 @@ class VobizAgentConsole {
 	bind() {
 		const $main = this.page.main;
 		$main.on('click', '[data-action="refresh"]', () => this.load());
+		$main.on('click', '[data-action="open-analytics"]', () => frappe.set_route('vobiz-agent-analytics'));
 		$main.on('click', '[data-action="toggle-auto"]', () => this.toggle_auto_dial());
 		$main.on('click', '[data-action="auto-report"]', () => this.open_auto_dial_report());
-		$main.on('click', '[data-action="performance"]', (e) => this.open_performance_dialog($(e.currentTarget).data('metric')));
 		$main.on('click', '[data-action="call-row"]', (e) => {
 			e.stopPropagation();
 			this.call_row($(e.currentTarget).closest('tr').data('index'));
@@ -367,18 +394,41 @@ class VobizAgentConsole {
 		$main.on('change', '[data-role="row-check"]', () => this.update_selected_count());
 		$main.on('click', '[data-role="row-check"]', (e) => e.stopPropagation());
 		$main.on('input', '[data-role="search"]', () => this.queue_search_changed());
+		$main.on('change', '[data-role="followup-day-filter"]', () => this.load());
 		$(document).on('visibilitychange.vobiz-agent-console', () => {
 			if (document.hidden) {
 				this.stop_console_heartbeat();
+				this.mark_console_offline();
 			} else if (this.is_console_visible()) {
 				this.start_console_heartbeat();
 			}
 		});
+		$(document).on('page-change.vobiz-agent-console route-change.vobiz-agent-console', () => {
+			setTimeout(() => {
+				if (!this.is_console_visible()) {
+					this.stop_console_heartbeat();
+					this.mark_console_offline();
+				}
+			}, 0);
+		});
+		window.addEventListener('pagehide', () => {
+			this.stop_console_heartbeat();
+			this.mark_console_offline(true);
+		});
 	}
 
 	load() {
+		if (!this.is_console_visible()) {
+			this.stop_console_heartbeat();
+			return;
+		}
 		const search = (this.page.main.find('[data-role="search"]').val() || '').trim();
-		frappe.call('vobiz_click_to_call.api.console.get_agent_console_data', { limit: 500, search }).then((r) => {
+		const followup_day = (this.page.main.find('[data-role="followup-day-filter"]').val() || '').trim();
+		frappe.call('vobiz_click_to_call.api.console.get_agent_console_data', {
+			limit: 500,
+			search,
+			followup_day
+		}).then((r) => {
 			const data = r.message || {};
 			this.state.queue = data.queue || [];
 			this.state.queue_meta = Object.assign(this.default_queue_meta(), data.queue_meta || {});
@@ -388,7 +438,6 @@ class VobizAgentConsole {
 			if (!this.state.lead_disposition_context || !this.state.lead_disposition_context.name) {
 				this.state.lead_disposition_context = { options: (data.dispositions || []).map(value => ({ name: value })) };
 			}
-			this.render_summary(data.summary || {});
 			this.render_availability(data.availability || {}, data.active_call || {});
 			this.render_queue();
 			this.render_dispositions();
@@ -414,7 +463,13 @@ class VobizAgentConsole {
 	on_page_show() {
 		this.state.restore_checked = false;
 		this.start_console_heartbeat();
+		this.load();
 		this.restore_workdesk_dialog();
+	}
+
+	on_page_hide() {
+		this.stop_console_heartbeat();
+		this.mark_console_offline();
 	}
 
 	start_polling() {
@@ -425,8 +480,9 @@ class VobizAgentConsole {
 			clearInterval(this.timer);
 			clearTimeout(this.search_timer);
 			this.stop_console_heartbeat();
+			this.mark_console_offline(true);
 			this.unbind_realtime();
-			$(document).off('visibilitychange.vobiz-agent-console');
+			$(document).off('visibilitychange.vobiz-agent-console page-change.vobiz-agent-console route-change.vobiz-agent-console');
 		});
 	}
 
@@ -438,7 +494,7 @@ class VobizAgentConsole {
 			if (this.is_console_visible() && !document.hidden) {
 				this.send_console_heartbeat();
 			}
-		}, 10000);
+		}, 5000);
 	}
 
 	stop_console_heartbeat() {
@@ -449,6 +505,25 @@ class VobizAgentConsole {
 	send_console_heartbeat() {
 		frappe.call({
 			method: 'vobiz_click_to_call.api.console.heartbeat_agent_console',
+			type: 'POST',
+			freeze: false,
+			args: {}
+		});
+	}
+
+	mark_console_offline(useKeepalive) {
+		const url = '/api/method/vobiz_click_to_call.api.console.mark_agent_console_offline';
+		if (useKeepalive && window.fetch) {
+			fetch(url, {
+				method: 'POST',
+				keepalive: true,
+				headers: { 'X-Frappe-CSRF-Token': frappe.csrf_token || '' },
+				credentials: 'same-origin'
+			}).catch(() => {});
+			return;
+		}
+		frappe.call({
+			method: 'vobiz_click_to_call.api.console.mark_agent_console_offline',
 			type: 'POST',
 			freeze: false,
 			args: {}
@@ -535,26 +610,10 @@ class VobizAgentConsole {
 		});
 	}
 
-	render_summary(summary) {
-		const stats = [
-			{ metric: 'connected', label: __('Connected'), value: summary.connected || 0, icon: 'fa-phone', color: '#16a34a' },
-			{ metric: 'missed', label: __('Missed'), value: summary.missed || 0, icon: 'fa-phone', color: '#dc2626' },
-			{ metric: 'total', label: __('Avg Call Duration'), value: summary.average_duration_label || '0s', icon: 'fa-clock-o', color: '#0284c7' },
-			{ metric: 'total', label: __('Total Call'), value: summary.total || 0, icon: 'fa-bar-chart', color: '#ca8a04' },
-		];
-		this.page.main.find('[data-role="stats"]').html(stats.map(s => `
-			<div class="vobiz-stat clickable" data-action="performance" data-metric="${frappe.utils.escape_html(s.metric)}">
-				<div class="vobiz-icon" style="color:${s.color}"><i class="fa ${s.icon}"></i></div>
-				<strong>${frappe.utils.escape_html(String(s.value))}</strong>
-				<span>${frappe.utils.escape_html(s.label)}</span>
-			</div>
-		`).join(''));
-	}
-
 	render_availability(capability, active_call) {
-		const status = active_call.availability_status || capability.availability_status || (capability.can_call ? 'Available' : 'Unavailable');
+		const status = active_call && active_call.name ? 'Busy' : 'Console Online';
 		this.page.main.find('[data-role="availability"]').text(status);
-		this.page.main.find('.vobiz-state-dot').css('background', status === 'Available' ? '#16a34a' : status === 'Busy' ? '#f97316' : '#9ca3af');
+		this.page.main.find('.vobiz-state-dot').css('background', status === 'Busy' ? '#f97316' : '#16a34a');
 	}
 
 	render_queue() {
@@ -562,9 +621,9 @@ class VobizAgentConsole {
 		const query = (this.page.main.find('[data-role="search"]').val() || '').toLowerCase();
 		const rows = this.state.queue
 			.map((row, index) => ({ ...row, index }))
-			.filter(row => !query || [row.name, row.title, row.company, row.phone, row.status, row.next_action].join(' ').toLowerCase().includes(query));
+			.filter(row => !query || [row.name, row.title, row.company, row.phone, row.status, row.next_action, row.sr_medical_department, row.sr_followup_id, row.sr_followup_day].join(' ').toLowerCase().includes(query));
 		this.page.main.find('[data-role="queue"]').html(rows.map(row => this.row_html(row)).join('') || `
-			<tr><td colspan="7" class="text-muted text-center">${frappe.utils.escape_html(this.queue_meta_value('empty_message'))}</td></tr>
+			<tr><td colspan="${this.queue_colspan()}" class="text-muted text-center">${frappe.utils.escape_html(this.queue_meta_value('empty_message'))}</td></tr>
 		`);
 		this.update_selected_count();
 	}
@@ -573,6 +632,31 @@ class VobizAgentConsole {
 		const meta = this.state.queue_meta || this.default_queue_meta();
 		this.page.main.find('[data-role="queue-title"]').text(meta.title || __('Lead Queue'));
 		this.page.main.find('[data-role="queue-id-label"]').text(meta.id_label || __('CRM Lead ID'));
+		this.page.main.find('.vobiz-patient-col').toggleClass('hidden', (meta.doctype || '') !== 'Patient');
+		this.render_followup_day_filter(meta);
+	}
+
+	queue_colspan() {
+		const meta = this.state.queue_meta || this.default_queue_meta();
+		return (meta.doctype || '') === 'Patient' ? 10 : 7;
+	}
+
+	render_followup_day_filter(meta) {
+		const $filter = this.page.main.find('[data-role="followup-day-filter"]');
+		if ((meta.doctype || '') !== 'Patient') {
+			$filter.addClass('hidden').val('');
+			return;
+		}
+		const current = $filter.val() || '';
+		const options = String(meta.followup_day_options || '').split('\n').map(value => value.trim()).filter(Boolean);
+		$filter.html([
+			`<option value="">${__('All Follow-up Days')}</option>`,
+			...options.map(value => `<option value="${frappe.utils.escape_html(value)}">${frappe.utils.escape_html(value)}</option>`)
+		].join(''));
+		if (current && options.includes(current)) {
+			$filter.val(current);
+		}
+		$filter.removeClass('hidden');
 	}
 
 	queue_meta_value(key) {
@@ -590,6 +674,9 @@ class VobizAgentConsole {
 				<td><code>${frappe.utils.escape_html(row.name || '')}</code></td>
 				<td><div class="vobiz-person"><span class="vobiz-avatar">${frappe.utils.escape_html(initials)}</span><span>${frappe.utils.escape_html(row.title || row.name || '')}</span></div></td>
 				<td>${frappe.utils.escape_html(row.phone || '')}</td>
+				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_medical_department || '')}</td>
+				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_followup_id || '')}</td>
+				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_followup_day || '')}</td>
 				<td><span class="vobiz-status ${frappe.utils.escape_html(statusClass)}">${frappe.utils.escape_html(row.status || '')}</span></td>
 				<td>${frappe.utils.escape_html(row.next_action || '')}</td>
 				<td>
@@ -599,6 +686,10 @@ class VobizAgentConsole {
 				</td>
 			</tr>
 		`;
+	}
+
+	is_patient_queue() {
+		return ((this.state.queue_meta || {}).doctype || '') === 'Patient';
 	}
 
 	update_selected_count() {
@@ -690,7 +781,7 @@ class VobizAgentConsole {
 		const last = active.last_call || {};
 		this.page.main.find('[data-role="call-status"]').text(active.status || last.status || __('Idle'));
 		if (active.reference_name) {
-			this.page.main.find('[data-role="focus-name"]').text(active.reference_name);
+			this.page.main.find('[data-role="focus-name"]').text(active.reference_title || active.reference_name);
 			this.page.main.find('[data-role="focus-meta"]').text(`${active.reference_doctype || ''} • ${active.customer_number_display || ''}`);
 		} else if (last.status) {
 			this.page.main.find('[data-role="focus-meta"]').text(__('Last call {0}', [last.status]));
@@ -716,7 +807,7 @@ class VobizAgentConsole {
 			rows.push(`<div><strong>${__('Recording')}</strong>: ${frappe.utils.escape_html(call.recording_status)}</div>`);
 		}
 		if (call.recording_url) {
-			const recordingUrl = call.recording_download_url || `/api/method/vobiz_click_to_call.api.recording.download?call_log=${encodeURIComponent(call.name || '')}`;
+			const recordingUrl = call.recording_download_url || `/api/method/vobiz_click_to_call.api.recording.stream?call_log=${encodeURIComponent(call.name || '')}`;
 			rows.push(`<div><a href="${frappe.utils.escape_html(recordingUrl)}" target="_blank" rel="noopener">${__('Open Recording')}</a></div>`);
 		}
 		if (call.transcript_status) {
@@ -1265,12 +1356,6 @@ class VobizAgentConsole {
 	refresh_workdesk_live_call() {
 		const callLog = this.state.workdesk_live_call_log;
 		if (!callLog || this.state.workdesk_live_polling) return;
-		const active = this.state.active_call || {};
-		if (active.name === callLog) {
-			this.state.workdesk_live_call = active;
-			this.render_workdesk_live_call();
-			return;
-		}
 
 		this.state.workdesk_live_polling = true;
 		frappe.call({
@@ -1280,6 +1365,9 @@ class VobizAgentConsole {
 			const call = r.message || {};
 			if (call.name) {
 				this.state.workdesk_live_call = call;
+				if ((this.state.active_call || {}).name === call.name) {
+					this.state.active_call = this.is_terminal_status(call.status) ? { last_call: call } : call;
+				}
 				this.render_workdesk_live_call();
 				if (this.is_terminal_status(call.status)) {
 					this.state.active_call = { last_call: call };
@@ -1628,6 +1716,7 @@ class VobizAgentConsole {
 
 	workdesk_vobiz_html(workdesk, history) {
 		const vobiz = workdesk.vobiz || {};
+		const rows = this.call_history_latest_first(history || vobiz.history || []);
 		return `
 			<div class="vobiz-workdesk-grid">
 				<div class="vobiz-workdesk-card">
@@ -1640,10 +1729,8 @@ class VobizAgentConsole {
 					</div>
 				</div>
 				<div class="vobiz-workdesk-card">
-					<h4>${__('Transcript / Audio')}</h4>
-					${this.detail_transcript_html(history || vobiz.history || [])}
-					<hr>
-					${this.detail_audio_html(history || vobiz.history || [])}
+					<h4>${__('Audio Recordings')}</h4>
+					${this.detail_audio_html(rows)}
 				</div>
 			</div>
 		`;
@@ -2103,8 +2190,16 @@ class VobizAgentConsole {
 		`;
 	}
 
+	call_history_latest_first(history) {
+		return (history || []).slice().sort((a, b) => {
+			const left = new Date(a.creation || 0).getTime() || 0;
+			const right = new Date(b.creation || 0).getTime() || 0;
+			return right - left;
+		});
+	}
+
 	detail_transcript_html(history) {
-		const rows = history.filter(row => row.transcript_text || row.transcript_status || row.ai_summary);
+		const rows = this.call_history_latest_first(history).filter(row => row.transcript_text || row.transcript_status || row.ai_summary);
 		return rows.map(row => `
 			<div class="vobiz-audio-card">
 				<div><strong>${frappe.utils.escape_html(row.name)}</strong></div>
@@ -2116,14 +2211,14 @@ class VobizAgentConsole {
 	}
 
 	detail_audio_html(history) {
-		const rows = history.filter(row => row.recording_url || row.recording_status);
+		const rows = this.call_history_latest_first(history).filter(row => row.recording_url || row.recording_status);
 		return `
 			<div class="vobiz-audio-list">
 				${rows.map(row => `
 					<div class="vobiz-audio-card">
 						<div><strong>${frappe.utils.escape_html(row.name)}</strong></div>
 						<div class="text-muted">${frappe.datetime.str_to_user(row.creation)} • ${frappe.utils.escape_html(row.recording_status || row.status || '')} • ${frappe.utils.escape_html(row.duration_label || '')}</div>
-						${row.recording_download_url ? `<audio controls src="${frappe.utils.escape_html(row.recording_download_url)}" style="width:100%; margin-top:8px;"></audio>` : `<div class="text-muted">${__('No audio file yet')}</div>`}
+						${this.audio_player_html(row) || `<div class="text-muted">${__('No audio file yet')}</div>`}
 					</div>
 				`).join('') || `<div class="text-muted">${__('No recording available for this lead.')}</div>`}
 			</div>
@@ -2131,7 +2226,7 @@ class VobizAgentConsole {
 	}
 
 	audio_player_html(row) {
-		const url = row.recording_download_url || (row.name && row.recording_url ? `/api/method/vobiz_click_to_call.api.recording.download?call_log=${encodeURIComponent(row.name)}` : '');
+		const url = row.recording_download_url || (row.name && row.recording_url ? `/api/method/vobiz_click_to_call.api.recording.stream?call_log=${encodeURIComponent(row.name)}` : '');
 		if (!url) return '';
 		return `<audio controls preload="none" src="${frappe.utils.escape_html(url)}" style="width:100%; margin-top:8px;"></audio>`;
 	}
@@ -2473,160 +2568,6 @@ class VobizAgentConsole {
 				</div>
 			</div>
 		`);
-	}
-
-	open_performance_dialog(metric) {
-		metric = metric || 'total';
-		const label = this.performance_metric_label(metric);
-		frappe.call('vobiz_click_to_call.api.console.get_call_performance', { status_filter: metric }).then((r) => {
-			const data = r.message || {};
-			const summary = data.summary || {};
-			const overall = data.overall || summary;
-			const dialog = new frappe.ui.Dialog({
-				title: data.is_admin ? __('Team Call Performance - {0}', [label]) : __('My Call Performance - {0}', [label]),
-				size: 'extra-large',
-				fields: [{ fieldname: 'performance', fieldtype: 'HTML' }]
-			});
-			dialog.show();
-			const $wrapper = dialog.get_field('performance').$wrapper;
-			$wrapper.html(`
-				<div class="vobiz-performance">
-					<div class="vobiz-performance-head">
-						<div>
-							<div class="text-muted">${__('Today')}</div>
-							<h4>${frappe.utils.escape_html(label)} ${__('Calls')}</h4>
-						</div>
-						<div class="text-muted">${__('Overall today')}: ${overall.connected || 0} ${__('connected')} / ${overall.missed || 0} ${__('missed')} / ${overall.total || 0} ${__('total')}</div>
-					</div>
-					<div class="vobiz-perf-kpis">
-						<div class="vobiz-perf-kpi"><span>${__('Showing')}</span><strong>${summary.total || 0}</strong></div>
-						<div class="vobiz-perf-kpi"><span>${__('Connected')}</span><strong>${summary.connected || 0}</strong></div>
-						<div class="vobiz-perf-kpi"><span>${__('Missed')}</span><strong>${summary.missed || 0}</strong></div>
-						<div class="vobiz-perf-kpi"><span>${__('Avg Duration')}</span><strong>${frappe.utils.escape_html(summary.average_duration_label || '0s')}</strong></div>
-					</div>
-					${data.is_admin ? this.performance_agents_html(data.agents || [], metric) : ''}
-					${this.performance_calls_html(data.calls || [], metric)}
-				</div>
-			`);
-			$wrapper.on('click', '[data-performance-call]', (e) => {
-				const $button = $(e.currentTarget);
-				this.call_performance_row({
-					doctype: $button.data('doctype'),
-					name: $button.data('name'),
-					phone: $button.data('phone')
-				});
-			});
-		});
-	}
-
-	performance_metric_label(metric) {
-		if (metric === 'connected') return __('Connected');
-		if (metric === 'missed') return __('Missed');
-		return __('All');
-	}
-
-	performance_agents_html(agents, metric) {
-		return `
-			<div class="vobiz-performance-section">
-				<h4>${__('Agent Performance')} <span class="text-muted">(${frappe.utils.escape_html(this.performance_metric_label(metric))})</span></h4>
-				<div class="vobiz-table-wrap">
-				<table class="table table-sm vobiz-performance-table">
-					<thead>
-						<tr>
-							<th>${__('User')}</th>
-							<th>${__('Connected')}</th>
-							<th>${__('Missed')}</th>
-							<th>${__('Avg Duration')}</th>
-							<th>${__('Total Calls')}</th>
-						</tr>
-					</thead>
-					<tbody>
-						${agents.map(row => `
-							<tr>
-								<td>${frappe.utils.escape_html(row.user || '')}</td>
-								<td>${row.connected || 0}</td>
-								<td>${row.missed || 0}</td>
-								<td>${frappe.utils.escape_html(row.average_duration_label || '0s')}</td>
-								<td>${row.total || 0}</td>
-							</tr>
-						`).join('') || `<tr><td colspan="5" class="text-muted text-center">${__('No agent calls found today.')}</td></tr>`}
-					</tbody>
-				</table>
-				</div>
-			</div>
-		`;
-	}
-
-	performance_calls_html(calls, metric) {
-		return `
-			<div class="vobiz-performance-section">
-			<h4>${__('Call Data')} <span class="text-muted">(${frappe.utils.escape_html(this.performance_metric_label(metric))})</span></h4>
-			<div class="vobiz-table-wrap">
-				<table class="table table-sm vobiz-performance-table">
-					<thead>
-						<tr>
-							<th>${__('Call Log')}</th>
-							<th>${__('User')}</th>
-							<th>${__('User Mobile')}</th>
-							<th>${__('Lead')}</th>
-							<th>${__('Status')}</th>
-							<th>${__('Duration')}</th>
-							<th>${__('Disposition')}</th>
-							<th>${__('Time')}</th>
-							<th>${__('Action')}</th>
-						</tr>
-					</thead>
-					<tbody>
-						${calls.map(row => `
-							<tr>
-								<td><a href="/app/vobiz-call-log/${frappe.utils.escape_html(row.name || '')}"><code>${frappe.utils.escape_html(row.name || '')}</code></a></td>
-								<td>${frappe.utils.escape_html(row.user || '')}</td>
-								<td>${frappe.utils.escape_html(row.user_mobile || '')}</td>
-								<td>${row.reference_name ? `<a href="/app/${frappe.router.slug(row.reference_doctype || 'CRM Lead')}/${frappe.utils.escape_html(row.reference_name)}"><code>${frappe.utils.escape_html(row.reference_name)}</code></a>` : ''}</td>
-								<td>${frappe.utils.escape_html(row.status || '')}</td>
-								<td>${frappe.utils.escape_html(row.duration_label || '0s')}</td>
-								<td>${frappe.utils.escape_html(row.disposition || '')}</td>
-								<td>${row.creation ? frappe.datetime.str_to_user(row.creation) : ''}</td>
-								<td>
-									<button class="btn btn-xs btn-primary" data-performance-call
-										data-doctype="${frappe.utils.escape_html(row.reference_doctype || '')}"
-										data-name="${frappe.utils.escape_html(row.reference_name || '')}"
-										data-phone="${frappe.utils.escape_html(row.customer_number || '')}"
-										${!row.reference_name || !row.customer_number ? 'disabled' : ''}>
-										<i class="fa fa-phone"></i> ${__('Call')}
-									</button>
-								</td>
-							</tr>
-						`).join('') || `<tr><td colspan="9" class="text-muted text-center">${__('No calls found today.')}</td></tr>`}
-					</tbody>
-				</table>
-			</div>
-			</div>
-		`;
-	}
-
-	call_performance_row(row) {
-		if (!row || !row.doctype || !row.name || !row.phone) {
-			frappe.msgprint(__('This call row does not have enough lead information to call again.'));
-			return;
-		}
-		const callRow = {
-			doctype: row.doctype,
-			name: row.name,
-			title: row.name,
-			phone: row.phone
-		};
-		this.start_call_for_row(callRow).then(() => {
-			frappe.call('vobiz_click_to_call.api.console.get_reference_context', {
-				reference_doctype: callRow.doctype,
-				reference_name: callRow.name,
-				lite: 1
-			}).then((r) => {
-				this.state.context = r.message || {};
-				this.apply_context_dispositions(this.state.context);
-				this.open_detail_dialog(callRow, r.message || {});
-			});
-		});
 	}
 
 	cancel_call() {

@@ -44,10 +44,38 @@ def get_caller_id(settings=None, mapping: dict | None = None) -> str:
     caller_id = (
         (mapping or {}).get("caller_id")
         or settings.default_caller_id
+        or _first_caller_id(settings)
         or frappe.conf.get("vobiz_default_caller_id")
         or ""
     )
     return normalize_phone_number(caller_id, default_country_code=default_country_code)
+
+
+def get_caller_ids(settings=None) -> list[str]:
+    settings = settings or get_settings()
+    default_country_code = get_default_country_code(settings)
+    raw_values = []
+    raw_values.extend(_split_lines(getattr(settings, "caller_ids", "") or ""))
+    raw_values.append(getattr(settings, "default_caller_id", "") or "")
+    raw_values.append(frappe.conf.get("vobiz_default_caller_id") or "")
+
+    numbers = []
+    seen = set()
+    for value in raw_values:
+        number = normalize_phone_number(value, default_country_code=default_country_code)
+        if number and number not in seen:
+            numbers.append(number)
+            seen.add(number)
+    return numbers
+
+
+def _first_caller_id(settings=None) -> str:
+    ids = get_caller_ids(settings)
+    return ids[0] if ids else ""
+
+
+def _split_lines(value: str) -> list[str]:
+    return [row.strip() for row in str(value or "").replace(",", "\n").splitlines() if row.strip()]
 
 
 def get_openai_api_key(settings=None) -> str:

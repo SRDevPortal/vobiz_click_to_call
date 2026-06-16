@@ -84,7 +84,7 @@ def get_call_capability(reference_doctype: str | None = None, reference_name: st
             return {"can_call": False, "reason": _("Document not found.")}
 
         doc = frappe.get_doc(reference_doctype, reference_name)
-        if not doc.has_permission("read"):
+        if not doc.has_permission("read") and not has_mapped_patient_access(reference_doctype, reference_name):
             return {"can_call": False, "reason": _("You do not have permission to read this document.")}
 
     return {
@@ -127,7 +127,7 @@ def start_call(
         frappe.throw(_("{0} {1} was not found.").format(reference_doctype, reference_name))
 
     doc = frappe.get_doc(reference_doctype, reference_name)
-    if not doc.has_permission("read"):
+    if not doc.has_permission("read") and not has_mapped_patient_access(reference_doctype, reference_name):
         frappe.throw(_("You do not have permission to call from this document."))
 
     mapping = get_user_mapping(frappe.session.user)
@@ -284,11 +284,14 @@ def get_call_status(call_log: str) -> dict[str, Any]:
     if "System Manager" not in frappe.get_roles() and doc.user != frappe.session.user:
         frappe.throw(_("Not permitted."))
 
+    sync_live_call_if_finished(doc)
+
     return {
         "name": doc.name,
         "status": doc.status,
         "reference_doctype": doc.reference_doctype,
         "reference_name": doc.reference_name,
+        "reference_title": get_reference_title(doc.reference_doctype, doc.reference_name),
         "call_status": doc.call_status,
         "dial_status": doc.dial_status,
         "hangup_cause": doc.hangup_cause,
@@ -317,6 +320,83 @@ def get_call_status(call_log: str) -> dict[str, Any]:
         "billsec": doc.billsec,
         "can_cancel": doc.status not in TERMINAL_STATUSES,
     }
+
+
+def sync_live_call_if_finished(doc) -> None:
+    if doc.status in TERMINAL_STATUSES:
+        return
+    call_uuid = doc.call_uuid or doc.a_leg_uuid or doc.b_leg_uuid
+    if not call_uuid:
+        return
+
+    try:
+        response = VobizClient(get_settings()).retrieve_live_call(call_uuid)
+    except Exception as exc:
+        message = str(exc).lower()
+        if "not found" not in message and "call not found" not in message:
+            return
+        doc.status = "Completed" if doc.status == "Connected" else "Cancelled"
+        doc.call_status = doc.call_status or "ended"
+        doc.hangup_cause = doc.hangup_cause or "LIVE_CALL_NOT_FOUND"
+        doc.end_time = doc.end_time or frappe.utils.now()
+        doc.response_json = merge_json(doc.response_json, {"live_status_warning": str(exc)})
+        doc.save(ignore_permissions=True)
+        restore_mapping_after_call(doc.name)
+        update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
+        frappe.db.commit()
+        return
+
+    provider_status = _provider_live_status(response)
+    if provider_status in {"completed", "hangup", "ended", "failed", "busy", "no-answer", "no answer", "cancelled", "canceled"}:
+        doc.status = _terminal_status_from_provider(provider_status, doc.status)
+        doc.call_status = provider_status
+        doc.end_time = doc.end_time or frappe.utils.now()
+        doc.response_json = merge_json(doc.response_json, {"live_status_response": response})
+        doc.save(ignore_permissions=True)
+        restore_mapping_after_call(doc.name)
+        update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
+        frappe.db.commit()
+
+
+def _provider_live_status(response: dict[str, Any] | None) -> str:
+    if not isinstance(response, dict):
+        return ""
+    for source in (response, response.get("data") if isinstance(response.get("data"), dict) else {}):
+        for key in ("status", "call_status", "CallStatus", "state"):
+            value = source.get(key)
+            if value not in (None, ""):
+                return str(value).strip().lower().replace("_", "-")
+    return ""
+
+
+def _terminal_status_from_provider(provider_status: str, current_status: str) -> str:
+    status = str(provider_status or "").strip().lower().replace("_", "-")
+    if "busy" in status:
+        return "Busy"
+    if "no-answer" in status or "no answer" in status or "timeout" in status:
+        return "No Answer"
+    if "fail" in status:
+        return "Failed"
+    if "cancel" in status:
+        return "Cancelled"
+    return "Completed" if current_status == "Connected" else "Cancelled"
+
+
+def get_reference_title(reference_doctype: str | None, reference_name: str | None) -> str:
+    if not reference_doctype or not reference_name or not frappe.db.exists(reference_doctype, reference_name):
+        return reference_name or ""
+    meta = frappe.get_meta(reference_doctype)
+    fields = []
+    for fieldname in ("patient_name", "lead_name", "customer_name", "first_name", "company_name", "title"):
+        if meta.has_field(fieldname):
+            fields.append(fieldname)
+    if not fields:
+        return reference_name
+    row = frappe.db.get_value(reference_doctype, reference_name, fields, as_dict=True) or {}
+    for fieldname in fields:
+        if row.get(fieldname):
+            return row.get(fieldname)
+    return reference_name
 
 
 @frappe.whitelist()
@@ -448,10 +528,33 @@ def get_user_mapping(user: str) -> dict[str, Any] | None:
             "team",
             "pipeline",
             "fallback_user",
+            "sr_medical_department",
+            "sr_followup_id",
         ],
         limit=1,
     )
     return rows[0] if rows else None
+
+
+def has_mapped_patient_access(reference_doctype: str, reference_name: str, user: str | None = None) -> bool:
+    if reference_doctype != "Patient" or not frappe.db.exists("DocType", "Patient"):
+        return False
+    mapping = get_user_mapping(user or frappe.session.user)
+    if not mapping or (mapping.get("queue_source") or "").strip() != "Patient":
+        return False
+    meta = frappe.get_meta("Patient")
+    filters: dict[str, Any] = {"name": reference_name}
+    if meta.has_field("sr_medical_department"):
+        department = mapping.get("sr_medical_department")
+        if not department:
+            return False
+        filters["sr_medical_department"] = department
+    if meta.has_field("sr_followup_id"):
+        followup_id = mapping.get("sr_followup_id")
+        if followup_id in (None, ""):
+            return False
+        filters["sr_followup_id"] = str(followup_id)
+    return bool(frappe.db.exists("Patient", filters))
 
 
 def get_mapping_unavailable_reason(mapping: dict[str, Any]) -> str:

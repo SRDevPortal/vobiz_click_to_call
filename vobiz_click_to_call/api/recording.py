@@ -7,6 +7,7 @@ import requests
 import frappe
 from frappe import _
 from frappe.rate_limiter import rate_limit
+from werkzeug.wrappers import Response
 
 from vobiz_click_to_call.services.settings import get_auth_credentials, get_settings
 
@@ -49,7 +50,65 @@ def download(call_log: str):
     frappe.local.response["display_content_as"] = "inline"
 
 
+@frappe.whitelist()
+@rate_limit(limit=120, seconds=60)
+def stream(call_log: str):
+    if frappe.session.user == "Guest":
+        frappe.throw(_("Login required."))
+
+    doc = frappe.get_doc("Vobiz Call Log", call_log)
+    if not _can_access_recording(doc):
+        frappe.throw(_("Not permitted."))
+    if not doc.recording_url:
+        frappe.throw(_("Recording URL is not available yet."))
+    if not _is_allowed_recording_url(doc.recording_url):
+        frappe.throw(_("Recording URL is not trusted."))
+
+    settings = get_settings()
+    auth_id, auth_token = get_auth_credentials(settings)
+    if not auth_id or not auth_token:
+        frappe.throw(_("Vobiz Auth ID/Auth Token are not configured."))
+
+    headers = {
+        "X-Auth-ID": auth_id,
+        "X-Auth-Token": auth_token,
+    }
+    range_header = (getattr(frappe.request, "headers", {}) or {}).get("Range")
+    if range_header:
+        headers["Range"] = range_header
+
+    response = requests.get(
+        doc.recording_url,
+        headers=headers,
+        timeout=int(settings.http_timeout or 20),
+        stream=True,
+    )
+    if response.status_code >= 400:
+        frappe.throw(_("Unable to fetch Vobiz recording: {0}").format(response.text or response.reason))
+
+    extension = _extension_from_url(doc.recording_url)
+    response_headers = {
+        "Accept-Ranges": response.headers.get("Accept-Ranges", "bytes"),
+        "Cache-Control": "private, max-age=300",
+        "Content-Disposition": f'inline; filename="{doc.name}{extension}"',
+    }
+    for header in ("Content-Range", "Content-Length"):
+        if response.headers.get(header):
+            response_headers[header] = response.headers[header]
+
+    return Response(
+        response.content,
+        status=response.status_code,
+        headers=response_headers,
+        content_type=response.headers.get("Content-Type") or _content_type(extension),
+    )
+
+
 def recording_proxy_url(call_log: str) -> str:
+    return f"/api/method/vobiz_click_to_call.api.recording.stream?call_log={frappe.utils.quote(call_log)}"
+
+
+def recording_download_url(call_log: str) -> str:
     return f"/api/method/vobiz_click_to_call.api.recording.download?call_log={frappe.utils.quote(call_log)}"
 
 

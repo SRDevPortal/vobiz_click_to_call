@@ -163,7 +163,13 @@ def hangup(call_log: str | None = None, token: str | None = None):
     if hangup_cause:
         doc.hangup_cause = hangup_cause
 
-    doc.status = _status_from_hangup(status, hangup_cause, previous=doc.status)
+    doc.status = _status_from_hangup(
+        status,
+        hangup_cause,
+        previous=doc.status,
+        billsec=doc.billsec,
+        duration=doc.duration,
+    )
     if not doc.end_time:
         doc.end_time = frappe.utils.now()
 
@@ -568,7 +574,18 @@ def _dial_completed_without_bridge(payload: dict, previous_status: str | None) -
     return not b_leg and dial_action != "connected" and previous_status not in {"Connected", "Completed"}
 
 
-def _status_from_hangup(call_status: str | None, hangup_cause: str | None, *, previous: str) -> str:
+def _has_billable_talk_time(billsec=None, duration=None) -> bool:
+    return _safe_int(billsec) > 0 or _safe_int(duration) >= 30
+
+
+def _status_from_hangup(
+    call_status: str | None,
+    hangup_cause: str | None,
+    *,
+    previous: str,
+    billsec=None,
+    duration=None,
+) -> str:
     status = str(call_status or "").strip().lower().replace("_", "-")
     cause = str(hangup_cause or "").strip().lower().replace("_", "-")
     combined = f"{status} {cause}"
@@ -581,6 +598,10 @@ def _status_from_hangup(call_status: str | None, hangup_cause: str | None, *, pr
         return "Cancelled"
     if "fail" in combined or "error" in combined:
         return "Failed"
+    if _has_billable_talk_time(billsec, duration) and (
+        status in {"completed", "hangup"} or cause in {"normal-clearing", "normal clearing"}
+    ):
+        return "Completed"
     if previous in {"Busy", "No Answer", "Failed", "Cancelled", "Canceled"} and status in {"completed", "hangup"}:
         return previous
     if previous in {"Agent Answered", "Customer Answered", "Agent Ringing"} and status in {"completed", "hangup"}:

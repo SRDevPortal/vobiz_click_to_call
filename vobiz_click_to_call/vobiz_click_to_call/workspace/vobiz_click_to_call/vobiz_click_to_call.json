@@ -1,6 +1,6 @@
 {
  "charts": [],
- "content": "[{\"id\": \"vctc_header\", \"type\": \"header\", \"data\": {\"text\": \"Vobiz Click To Call\", \"level\": 4, \"col\": 12}}, {\"id\": \"vctc_agent_console\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Agent Console\", \"col\": 3}}, {\"id\": \"vctc_settings\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Settings\", \"col\": 3}}, {\"id\": \"vctc_user_mapping\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"User Mapping\", \"col\": 3}}, {\"id\": \"vctc_blocked_numbers\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Blocked Numbers\", \"col\": 3}}]",
+ "content": "[{\"id\": \"vctc_header\", \"type\": \"header\", \"data\": {\"text\": \"Vobiz Click To Call\", \"level\": 4, \"col\": 12}}, {\"id\": \"vctc_agent_console\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Agent Console\", \"col\": 3}}, {\"id\": \"vctc_analytics\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Analytics\", \"col\": 3}}, {\"id\": \"vctc_settings\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Settings\", \"col\": 3}}, {\"id\": \"vctc_user_mapping\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"User Mapping\", \"col\": 3}}, {\"id\": \"vctc_blocked_numbers\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Blocked Numbers\", \"col\": 3}}]",
  "creation": "2026-05-28 11:10:35.585574",
  "custom_blocks": [],
  "docstatus": 0,
@@ -19,6 +19,16 @@
    "label": "Agent Console",
    "link_count": 0,
    "link_to": "vobiz-agent-console",
+   "link_type": "Page",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Analytics",
+   "link_count": 0,
+   "link_to": "vobiz-agent-analytics",
    "link_type": "Page",
    "onboard": 0,
    "type": "Link"
@@ -71,6 +81,13 @@
    "icon": "phone",
    "label": "Agent Console",
    "link_to": "vobiz-agent-console",
+   "type": "Page"
+  },
+  {
+   "doc_view": "",
+   "icon": "line-chart",
+   "label": "Analytics",
+   "link_to": "vobiz-agent-analytics",
    "type": "Page"
   },
   {

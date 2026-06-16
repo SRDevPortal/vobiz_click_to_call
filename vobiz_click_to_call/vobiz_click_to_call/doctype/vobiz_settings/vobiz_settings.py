@@ -6,16 +6,26 @@ from frappe.model.document import Document
 
 from vobiz_click_to_call.services.ai import DEFAULT_AI_DISPOSITION_SYSTEM_PROMPT
 from vobiz_click_to_call.services.numbers import normalize_phone_number
-from vobiz_click_to_call.services.settings import normalize_public_callback_base_url, validate_public_callback_base_url
+from vobiz_click_to_call.services.settings import (
+    get_caller_ids,
+    normalize_public_callback_base_url,
+    validate_public_callback_base_url,
+)
 
 
 class VobizSettings(Document):
     def validate(self):
         self.base_url = (self.base_url or "https://api.vobiz.ai/api/v1").strip().rstrip("/")
         self.default_country_code = (self.default_country_code or "+91").strip()
+        self.caller_ids = self.normalize_caller_ids()
         if self.default_caller_id:
             self.default_caller_id = normalize_phone_number(
                 self.default_caller_id,
+                default_country_code=self.default_country_code,
+            )
+        if self.enable_end_fallback and self.end_fallback_mobile:
+            self.end_fallback_mobile = normalize_phone_number(
+                self.end_fallback_mobile,
                 default_country_code=self.default_country_code,
             )
         self.allowed_doctypes = (self.allowed_doctypes or "CRM Lead\nContact\nPatient\nCustomer").strip()
@@ -30,6 +40,8 @@ class VobizSettings(Document):
         )
         self.agent_ring_timeout = self.agent_ring_timeout or 30
         self.max_call_duration = self.max_call_duration or 3600
+        if self.enable_end_fallback and not self.end_fallback_mobile:
+            frappe.throw(_("End Fallback Mobile is required when End Fallback is enabled."))
         self.max_call_attempts_per_reference_per_day = self.max_call_attempts_per_reference_per_day or 0
         self.max_calls_per_user_per_day = self.max_calls_per_user_per_day or 0
         self.http_timeout = self.http_timeout or 20
@@ -61,10 +73,24 @@ class VobizSettings(Document):
         if not (auth_id and auth_token):
             frappe.throw(_("Vobiz Auth ID and Auth Token are required when Vobiz Settings is enabled."))
 
-        if not (self.default_caller_id or frappe.conf.get("vobiz_default_caller_id")):
-            frappe.throw(_("Default Caller ID is required when Vobiz Settings is enabled."))
+        if not get_caller_ids(self):
+            frappe.throw(_("At least one Caller ID is required when Vobiz Settings is enabled."))
 
         validate_public_callback_base_url(self.webhook_base_url or frappe.conf.get("vobiz_webhook_base_url") or frappe.utils.get_url())
+
+    def normalize_caller_ids(self) -> str:
+        values = []
+        seen = set()
+        for value in (self.caller_ids or "").replace(",", "\n").splitlines():
+            number = normalize_phone_number(value.strip(), default_country_code=self.default_country_code)
+            if number and number not in seen:
+                values.append(number)
+                seen.add(number)
+        if self.default_caller_id:
+            number = normalize_phone_number(self.default_caller_id, default_country_code=self.default_country_code)
+            if number and number not in seen:
+                values.insert(0, number)
+        return "\n".join(values)
 
     def sync_ai_disposition_options(self) -> list[str]:
         options = get_sr_lead_disposition_options()
@@ -102,3 +128,10 @@ def sync_ai_disposition_options() -> dict:
         "count": len(options),
         "options": settings.ai_disposition_options or "",
     }
+
+
+@frappe.whitelist()
+def get_caller_id_options() -> list[str]:
+    if "System Manager" not in frappe.get_roles():
+        frappe.throw(_("Not permitted."))
+    return get_caller_ids(frappe.get_single("Vobiz Settings"))

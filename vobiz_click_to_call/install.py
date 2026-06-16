@@ -30,6 +30,7 @@ def ensure_defaults():
 
     defaults = {
         "base_url": "https://api.vobiz.ai/api/v1",
+        "caller_ids": "",
         "default_country_code": "+91",
         "allowed_doctypes": "CRM Lead\nContact\nPatient\nCustomer",
         "default_call_flow": "Customer First",
@@ -41,6 +42,8 @@ def ensure_defaults():
         "agent_ring_timeout": 30,
         "http_timeout": 20,
         "max_call_duration": 3600,
+        "enable_end_fallback": 0,
+        "end_fallback_mobile": "",
         "store_raw_payloads": 1,
         "prevent_blocked_numbers": 1,
         "max_call_attempts_per_reference_per_day": 0,

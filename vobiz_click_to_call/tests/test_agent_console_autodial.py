@@ -11,6 +11,20 @@ AGENT_CONSOLE_JS = (
     / "vobiz_agent_console"
     / "vobiz_agent_console.js"
 )
+AGENT_ANALYTICS_JS = (
+    Path(__file__).resolve().parents[1]
+    / "vobiz_click_to_call"
+    / "page"
+    / "vobiz_agent_analytics"
+    / "vobiz_agent_analytics.js"
+)
+AGENT_ANALYTICS_JSON = (
+    Path(__file__).resolve().parents[1]
+    / "vobiz_click_to_call"
+    / "page"
+    / "vobiz_agent_analytics"
+    / "vobiz_agent_analytics.json"
+)
 CONSOLE_API = Path(__file__).resolve().parents[1] / "api" / "console.py"
 USER_MAPPING_JSON = (
     Path(__file__).resolve().parents[1]
@@ -158,6 +172,17 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn('"attachment_file"', console)
         self.assertIn('row["attachment_url"]', console)
 
+    def test_workdesk_vobiz_shows_audio_only(self):
+        vobiz_source = self.method_source("workdesk_vobiz_html", "workdesk_whatsapp_html")
+        audio_source = self.method_source("detail_audio_html", "audio_player_html")
+
+        self.assertIn("Audio Recordings", vobiz_source)
+        self.assertIn("detail_audio_html(rows)", vobiz_source)
+        self.assertNotIn("detail_transcript_tabs_html(rows)", vobiz_source)
+        self.assertNotIn("__('Transcript')", vobiz_source)
+        self.assertNotIn("Transcript / Audio", vobiz_source)
+        self.assertIn("this.audio_player_html(row)", audio_source)
+
     def test_lead_dispositions_are_contextual_in_console(self):
         select_source = self.method_source("select_row", "render_focus")
         call_row_source = self.method_source("call_row", "detail_key")
@@ -203,23 +228,88 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         mapping_json = USER_MAPPING_JSON.read_text(encoding="utf-8")
 
         self.assertIn('"fieldname": "queue_source"', mapping_json)
-        self.assertIn('"options": "CRM Lead\\nPatient"', mapping_json)
+        self.assertIn('"options": "CRM Lead\\nPatient\\nDiscontinued"', mapping_json)
+        self.assertIn('"fieldname": "sr_medical_department"', mapping_json)
+        self.assertIn('"fieldname": "sr_followup_id"', mapping_json)
         self.assertIn("QUEUE_SOURCE_DOCTYPES", console)
         self.assertIn('"Patient": "Patient"', console)
+        self.assertIn('"Discontinued": "CRM Lead"', console)
         self.assertIn('"queue_meta": _queue_meta(queue_source, queue_doctype)', console)
-        self.assertIn('filters["created_by_agent"] = frappe.session.user', console)
+        self.assertIn('filters["sr_medical_department"]', console)
+        self.assertIn('filters["sr_followup_id"]', console)
+        self.assertIn('filters["sr_followup_day"]', console)
+        self.assertIn('filters["vobiz_last_call_status"]', console)
         self.assertIn("this.state.queue_meta = Object.assign", self.source)
         self.assertIn("queue_meta_value('summary_tab_label')", self.source)
 
+    def test_agent_console_dashboard_uses_filtered_analytics(self):
+        console = CONSOLE_API.read_text(encoding="utf-8")
+        analytics = AGENT_ANALYTICS_JS.read_text(encoding="utf-8")
+        analytics_json = AGENT_ANALYTICS_JSON.read_text(encoding="utf-8")
+
+        self.assertIn("def get_analytics(", console)
+        self.assertIn("agent_user: str | None = None", console)
+        self.assertIn("include_calls: int | str = 0", console)
+        self.assertIn("call_limit: int | str = 50", console)
+        self.assertIn('"calls_loaded": include_call_rows', console)
+        self.assertIn('"has_more_calls": include_call_rows', console)
+        self.assertIn('"recording_url"', console)
+        self.assertIn('"recording_download_url": recording_proxy_url', console)
+        self.assertIn('"agent_options": _analytics_agent_options(is_admin)', console)
+        self.assertIn("def _analytics_agent_options", console)
+        self.assertIn("def _can_view_all_analytics_agents", console)
+        self.assertIn('"Call Center Manager"', console)
+        self.assertIn('"Vobiz Manager"', console)
+        self.assertIn('"agents": _performance_by_user(filtered_rows)', console)
+        self.assertIn("def _analytics_data(", console)
+        self.assertIn("ANALYTICS_STATUS_OPTIONS", console)
+        self.assertIn('"status_breakdown": _performance_status_breakdown(all_rows)', console)
+        self.assertIn('"outcome_breakdown": _performance_outcome_breakdown(all_rows)', console)
+        self.assertIn('"daily": _performance_by_day(all_rows, from_date, to_date)', console)
+        self.assertIn("vobiz-agent-analytics", analytics_json)
+        self.assertIn("frappe.pages['vobiz-agent-analytics']", analytics)
+        self.assertIn("render_daily_chart", analytics)
+        self.assertIn("render_agent_chart", analytics)
+        self.assertIn("vobiz-daily-chart", analytics)
+        self.assertIn("vobiz-axis-chart", analytics)
+        self.assertIn("vobiz-agent-card", analytics)
+        self.assertIn("agent_card_html", analytics)
+        self.assertIn("schedule_load", analytics)
+        self.assertIn("load_calls", analytics)
+        self.assertIn("render_calls_placeholder", analytics)
+        self.assertIn("clear_filters", analytics)
+        self.assertIn("Clear All Filters", analytics)
+        self.assertIn('data-action="clear-filters"', analytics)
+        self.assertNotIn("Apply Filters", analytics)
+        self.assertNotIn('data-action="apply"', analytics)
+        self.assertIn("include_calls: 0", analytics)
+        self.assertIn("include_calls: 1", analytics)
+        self.assertIn('data-action="load-calls"', analytics)
+        self.assertIn('data-action="load-more-calls"', analytics)
+        self.assertIn('data-action="play-recording"', analytics)
+        self.assertIn('data-action="stop-recording"', analytics)
+        self.assertIn('data-role="recording-time"', analytics)
+        self.assertIn("recording_button_html", analytics)
+        self.assertIn("play_recording", analytics)
+        self.assertIn("stop_recording", analytics)
+        self.assertIn("format_audio_time", analytics)
+        self.assertIn("vobiz-spectrum", analytics)
+        self.assertIn("vobiz-spectrum-pulse", analytics)
+        self.assertIn("Recording", analytics)
+        self.assertIn("recording_download_url", analytics)
+        self.assertIn('data-role="agent-user"', analytics)
+        self.assertIn("All Agents", analytics)
+        self.assertNotIn("Status Totals", analytics)
+        self.assertNotIn("Status Breakdown", analytics)
+        self.assertIn('data-role="calls"', analytics)
+        self.assertIn("connected calls only", analytics)
+        self.assertIn("frappe.set_route('vobiz-agent-analytics')", self.source)
+        self.assertNotIn('data-role="analytics-from-date"', self.source)
+
     def test_global_desk_scripts_do_not_call_vobiz_apis_on_home(self):
-        availability = (PUBLIC_JS / "availability.js").read_text(encoding="utf-8")
         click_to_call = (PUBLIC_JS / "click_to_call.js").read_text(encoding="utf-8")
         list_dialer = (PUBLIC_JS / "list_dialer.js").read_text(encoding="utf-8")
 
-        self.assertIn("function shouldLoadAvailability()", availability)
-        self.assertIn('window.location.pathname === "/app/home"', availability)
-        self.assertIn('route[0] === "Form" || route[0] === "List" || route[0] === "vobiz-agent-console"', availability)
-        self.assertIn("if (!shouldLoadAvailability()) return", availability)
         self.assertIn("function shouldLoadAllowedDoctypes()", click_to_call)
         self.assertIn('window.location.pathname === "/app/home"', click_to_call)
         self.assertIn('route[0] === "Form" || route[0] === "List"', click_to_call)

@@ -9,6 +9,7 @@
   "auth_id",
   "auth_token",
   "base_url",
+  "caller_ids",
   "default_caller_id",
   "default_country_code",
   "webhook_base_url",
@@ -18,6 +19,8 @@
   "manual_disposition_options",
   "agent_ring_timeout",
   "max_call_duration",
+  "enable_end_fallback",
+  "end_fallback_mobile",
   "safety_section",
   "prevent_blocked_numbers",
   "max_call_attempts_per_reference_per_day",
@@ -77,9 +80,17 @@
    "label": "Base URL"
   },
   {
-   "description": "Vobiz caller ID / DID used for customer and agent call legs.",
+   "description": "Enter one Vobiz caller ID / DID per line. You can also separate numbers with commas. These numbers will appear as selectable Vobiz Numbers in User Mapping.",
+   "fieldname": "caller_ids",
+   "fieldtype": "Small Text",
+   "label": "Caller IDs",
+   "options": "Phone"
+  },
+  {
+   "description": "Legacy default caller ID. Use Caller IDs above and select a Vobiz Number on each user mapping.",
    "fieldname": "default_caller_id",
    "fieldtype": "Data",
+   "hidden": 1,
    "label": "Default Caller ID",
    "options": "Phone"
   },
@@ -133,6 +144,20 @@
    "fieldname": "max_call_duration",
    "fieldtype": "Int",
    "label": "Max Call Duration"
+  },
+  {
+   "default": "0",
+   "description": "When enabled, inbound callbacks are finally routed to the End Fallback Mobile if mapped agents do not answer.",
+   "fieldname": "enable_end_fallback",
+   "fieldtype": "Check",
+   "label": "Enable End Fallback"
+  },
+  {
+   "depends_on": "eval:doc.enable_end_fallback",
+   "fieldname": "end_fallback_mobile",
+   "fieldtype": "Data",
+   "label": "End Fallback Mobile",
+   "options": "Phone"
   },
   {
    "collapsible": 1,

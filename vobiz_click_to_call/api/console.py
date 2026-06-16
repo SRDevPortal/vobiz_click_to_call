@@ -19,9 +19,12 @@ LEAD_DOCTYPE_CANDIDATES = ("CRM Lead", "Lead", "Patient", "Customer")
 QUEUE_SOURCE_DOCTYPES = {
     "CRM Lead": "CRM Lead",
     "Patient": "Patient",
+    "Discontinued": "CRM Lead",
 }
 HTML_TAG_RE = re.compile(r"<[^>]*>")
-CONSOLE_SESSION_TTL_SECONDS = 25
+CONSOLE_SESSION_TTL_SECONDS = 12
+ANALYTICS_STATUS_OPTIONS = ("total", "connected", "missed", "busy", "no_answer", "failed", "cancelled")
+ANALYTICS_CALL_LIMIT_MAX = 100
 
 
 def _console_session_key(user: str) -> str:
@@ -39,6 +42,7 @@ def heartbeat_agent_console() -> dict[str, Any]:
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
 
+    _mark_console_user_available()
     frappe.cache().set_value(
         _console_session_key(frappe.session.user),
         frappe.utils.now(),
@@ -50,8 +54,41 @@ def heartbeat_agent_console() -> dict[str, Any]:
     }
 
 
+@frappe.whitelist(methods=["GET", "POST"])
+def mark_agent_console_offline() -> dict[str, Any]:
+    if frappe.session.user == "Guest":
+        return {"online": False}
+
+    frappe.cache().delete_value(_console_session_key(frappe.session.user))
+    mapping_name = frappe.db.get_value("Vobiz User Mapping", {"user": frappe.session.user, "enabled": 1}, "name")
+    if mapping_name:
+        current_call_log = frappe.db.get_value("Vobiz User Mapping", mapping_name, "current_call_log")
+        active = False
+        if current_call_log and frappe.db.exists("Vobiz Call Log", current_call_log):
+            status = frappe.db.get_value("Vobiz Call Log", current_call_log, "status")
+            active = status not in TERMINAL_STATUSES
+        if not active:
+            frappe.db.set_value(
+                "Vobiz User Mapping",
+                mapping_name,
+                {
+                    "availability_status": "Offline",
+                    "accept_calls": 0,
+                    "current_call_log": "",
+                    "last_status_at": frappe.utils.now(),
+                },
+                update_modified=True,
+            )
+            frappe.db.commit()
+    return {"online": False}
+
+
 @frappe.whitelist()
-def get_agent_console_data(limit: int | str = 25, search: str | None = None) -> dict[str, Any]:
+def get_agent_console_data(
+    limit: int | str = 25,
+    search: str | None = None,
+    followup_day: str | None = None,
+) -> dict[str, Any]:
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
 
@@ -61,14 +98,36 @@ def get_agent_console_data(limit: int | str = 25, search: str | None = None) -> 
     queue_source = _agent_queue_source(agent)
     queue_doctype = _queue_doctype_for_source(queue_source)
     return {
-        "summary": _call_summary(),
         "availability": get_call_capability(),
         "active_call": _active_call(),
-        "queue": _lead_queue(limit, search, agent=agent, queue_source=queue_source),
+        "queue": _lead_queue(limit, search, agent=agent, queue_source=queue_source, followup_day=followup_day),
         "queue_meta": _queue_meta(queue_source, queue_doctype),
         "dispositions": get_disposition_options_api(),
         "ai_disposition_enabled": bool(settings.enable_ai_disposition),
     }
+
+
+def _mark_console_user_available() -> None:
+    mapping_name = frappe.db.get_value("Vobiz User Mapping", {"user": frappe.session.user, "enabled": 1}, "name")
+    if not mapping_name:
+        return
+    current_call_log = frappe.db.get_value("Vobiz User Mapping", mapping_name, "current_call_log")
+    if current_call_log and frappe.db.exists("Vobiz Call Log", current_call_log):
+        status = frappe.db.get_value("Vobiz Call Log", current_call_log, "status")
+        if status not in TERMINAL_STATUSES:
+            return
+    frappe.db.set_value(
+        "Vobiz User Mapping",
+        mapping_name,
+        {
+            "availability_status": "Available",
+            "accept_calls": 1,
+            "current_call_log": "",
+            "last_status_at": frappe.utils.now(),
+        },
+        update_modified=True,
+    )
+    frappe.db.commit()
 
 
 @frappe.whitelist()
@@ -118,9 +177,30 @@ def _get_permitted_reference(reference_doctype: str, reference_name: str):
         frappe.throw(_("Reference not found."))
 
     doc = frappe.get_doc(reference_doctype, reference_name)
-    if not doc.has_permission("read"):
+    if not doc.has_permission("read") and not _has_mapped_patient_access(reference_doctype, reference_name):
         frappe.throw(_("Not permitted."), frappe.PermissionError)
     return doc
+
+
+def _has_mapped_patient_access(reference_doctype: str, reference_name: str) -> bool:
+    if reference_doctype != "Patient":
+        return False
+    agent = _agent_context()
+    if (agent.get("queue_source") or "").strip() != "Patient":
+        return False
+    meta = frappe.get_meta("Patient")
+    filters: dict[str, Any] = {"name": reference_name}
+    if meta.has_field("sr_medical_department"):
+        department = agent.get("sr_medical_department")
+        if not department:
+            return False
+        filters["sr_medical_department"] = department
+    if meta.has_field("sr_followup_id"):
+        followup_id = agent.get("sr_followup_id")
+        if followup_id in (None, ""):
+            return False
+        filters["sr_followup_id"] = str(followup_id)
+    return bool(frappe.db.exists("Patient", filters))
 
 
 @frappe.whitelist()
@@ -210,101 +290,206 @@ def get_active_call() -> dict[str, Any]:
 
 
 @frappe.whitelist()
-def get_call_performance(status_filter: str | None = None) -> dict[str, Any]:
+def get_call_performance(
+    status_filter: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    queue_source: str | None = None,
+    agent_user: str | None = None,
+) -> dict[str, Any]:
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
 
-    start = f"{frappe.utils.today()} 00:00:00"
-    end = f"{frappe.utils.today()} 23:59:59"
-    filters: dict[str, Any] = {"creation": ["between", [start, end]]}
-    is_admin = "System Manager" in frappe.get_roles()
-    if not is_admin:
-        filters["user"] = frappe.session.user
-
-    rows = frappe.get_all(
-        "Vobiz Call Log",
-        filters=filters,
-        fields=[
-            "name",
-            "user",
-            "status",
-            "duration",
-            "billsec",
-            "creation",
-            "reference_doctype",
-            "reference_name",
-            "customer_number",
-            "user_mobile",
-            "disposition",
-        ],
-        order_by="creation desc",
-        limit_page_length=1000,
+    agent = _agent_context()
+    data = _analytics_data(
+        from_date=from_date,
+        to_date=to_date,
+        status_filter=status_filter,
+        queue_source=queue_source or _agent_queue_source(agent),
+        agent_user=agent_user,
+        agent=agent,
+        include_calls=1,
+        call_limit=50,
     )
-    filtered_rows = _filter_performance_rows(rows, status_filter)
     return {
-        "is_admin": is_admin,
-        "status_filter": status_filter or "total",
-        "summary": _performance_summary(filtered_rows),
-        "overall": _performance_summary(rows),
-        "agents": _performance_by_user(filtered_rows) if is_admin else [],
-        "calls": [_performance_call_row(row) for row in filtered_rows[:100]],
+        "is_admin": data.get("is_admin"),
+        "status_filter": data.get("status_filter"),
+        "summary": data.get("filtered_summary"),
+        "overall": data.get("summary"),
+        "agents": data.get("agents"),
+        "calls": data.get("calls"),
+        "from_date": data.get("from_date"),
+        "to_date": data.get("to_date"),
+        "queue_source": data.get("queue_source"),
     }
 
 
+@frappe.whitelist()
+def get_analytics(
+    from_date: str | None = None,
+    to_date: str | None = None,
+    status_filter: str | None = None,
+    queue_source: str | None = None,
+    agent_user: str | None = None,
+    include_calls: int | str = 0,
+    call_limit: int | str = 50,
+    call_offset: int | str = 0,
+) -> dict[str, Any]:
+    if frappe.session.user == "Guest":
+        frappe.throw(_("Login required."))
+
+    agent = _agent_context()
+    return _analytics_data(
+        from_date=from_date,
+        to_date=to_date,
+        status_filter=status_filter,
+        queue_source=queue_source or _agent_queue_source(agent),
+        agent_user=agent_user,
+        agent=agent,
+        include_calls=include_calls,
+        call_limit=call_limit,
+        call_offset=call_offset,
+    )
+
+
 def _call_summary() -> dict[str, Any]:
-    start = f"{frappe.utils.today()} 00:00:00"
-    end = f"{frappe.utils.today()} 23:59:59"
+    return _analytics_data().get("summary", {})
+
+
+def _analytics_data(
+    from_date: str | None = None,
+    to_date: str | None = None,
+    status_filter: str | None = None,
+    queue_source: str | None = None,
+    agent_user: str | None = None,
+    agent: dict[str, Any] | None = None,
+    include_calls: int | str = 0,
+    call_limit: int | str = 50,
+    call_offset: int | str = 0,
+) -> dict[str, Any]:
+    from_date, to_date = _analytics_date_range(from_date, to_date)
+    status_filter = _analytics_status_filter(status_filter)
+    queue_source = queue_source if queue_source in QUEUE_SOURCE_DOCTYPES else _agent_queue_source(agent)
+    start = f"{from_date} 00:00:00"
+    end = f"{to_date} 23:59:59"
     filters: dict[str, Any] = {"creation": ["between", [start, end]]}
-    if "System Manager" not in frappe.get_roles():
+    if queue_source == "Patient":
+        filters["reference_doctype"] = "Patient"
+    elif queue_source in {"CRM Lead", "Discontinued"}:
+        filters["reference_doctype"] = "CRM Lead"
+
+    is_admin = _can_view_all_analytics_agents()
+    agent_user = (agent_user or "").strip()
+    if is_admin and agent_user:
+        filters["user"] = agent_user
+    elif not is_admin:
         filters["user"] = frappe.session.user
 
+    meta = frappe.get_meta("Vobiz Call Log")
+    fields = ["name", "user", "status", "duration", "billsec", "creation"]
+    fields.extend(
+        field
+        for field in _existing_fields(
+            meta,
+            (
+                "call_status",
+                "dial_status",
+                "hangup_cause",
+                "reference_doctype",
+                "reference_name",
+                "customer_number",
+                "user_mobile",
+                "caller_id",
+                "disposition",
+                "cost",
+                "call_flow",
+                "recording_status",
+                "recording_url",
+            ),
+        )
+        if field not in fields
+    )
     rows = frappe.get_all(
         "Vobiz Call Log",
         filters=filters,
-        fields=["status", "duration", "billsec"],
-        limit_page_length=1000,
+        fields=fields,
+        order_by="creation desc",
+        limit_page_length=5000,
     )
-    connected = [row for row in rows if row.status in CONNECTED_STATUSES or row.status == "Connected"]
-    missed = [row for row in rows if row.status in MISSED_STATUSES or row.status in {"Cancelled", "Canceled"}]
-    durations = [frappe.utils.cint(row.billsec or row.duration) for row in rows if frappe.utils.cint(row.billsec or row.duration)]
-    average_duration = round(sum(durations) / len(durations)) if durations else 0
+    all_rows = [_analytics_row(row) for row in rows]
+    filtered_rows = _filter_performance_rows(all_rows, status_filter)
+    summary = _performance_summary(all_rows)
+    filtered_summary = _performance_summary(filtered_rows)
+    include_call_rows = bool(frappe.utils.cint(include_calls))
+    call_limit = max(10, min(frappe.utils.cint(call_limit) or 50, ANALYTICS_CALL_LIMIT_MAX))
+    call_offset = max(0, frappe.utils.cint(call_offset) or 0)
+    call_slice = filtered_rows[call_offset : call_offset + call_limit] if include_call_rows else []
 
     return {
-        "connected": len(connected),
-        "missed": len(missed),
-        "total": len(rows),
-        "average_duration": average_duration,
-        "average_duration_label": _duration_label(average_duration),
+        "from_date": from_date,
+        "to_date": to_date,
+        "status_filter": status_filter,
+        "queue_source": queue_source,
+        "queue_sources": list(QUEUE_SOURCE_DOCTYPES.keys()),
+        "agent_user": filters.get("user") or "",
+        "agent_options": _analytics_agent_options(is_admin),
+        "is_admin": is_admin,
+        "summary": summary,
+        "filtered_summary": filtered_summary,
+        "status_breakdown": _performance_status_breakdown(all_rows),
+        "outcome_breakdown": _performance_outcome_breakdown(all_rows),
+        "daily": _performance_by_day(all_rows, from_date, to_date),
+        "agents": _performance_by_user(filtered_rows),
+        "calls": [_performance_call_row(row) for row in call_slice],
+        "calls_loaded": include_call_rows,
+        "call_limit": call_limit,
+        "call_offset": call_offset,
+        "has_more_calls": include_call_rows and (call_offset + call_limit) < len(filtered_rows),
+        "matching_call_count": len(filtered_rows),
     }
 
 
 def _performance_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    connected = [row for row in rows if row.status in CONNECTED_STATUSES or row.status == "Connected"]
-    missed = [row for row in rows if row.status in MISSED_STATUSES or row.status in {"Cancelled", "Canceled"}]
-    durations = [frappe.utils.cint(row.billsec or row.duration) for row in rows if frappe.utils.cint(row.billsec or row.duration)]
-    average_duration = round(sum(durations) / len(durations)) if durations else 0
+    connected = [row for row in rows if row.get("bucket") == "connected"]
+    missed = [row for row in rows if row.get("bucket") in {"missed", "busy", "no_answer", "failed", "cancelled"}]
+    connected_seconds = [frappe.utils.cint(row.get("talk_seconds")) for row in connected if frappe.utils.cint(row.get("talk_seconds"))]
+    total_talk_seconds = sum(connected_seconds)
+    average_duration = round(total_talk_seconds / len(connected)) if connected else 0
+    total = len(rows)
     return {
-        "total": len(rows),
+        "total": total,
         "connected": len(connected),
         "missed": len(missed),
+        "busy": len([row for row in rows if row.get("bucket") == "busy"]),
+        "no_answer": len([row for row in rows if row.get("bucket") == "no_answer"]),
+        "failed": len([row for row in rows if row.get("bucket") == "failed"]),
+        "cancelled": len([row for row in rows if row.get("bucket") == "cancelled"]),
+        "talk_seconds": total_talk_seconds,
+        "talk_time_label": _duration_label(total_talk_seconds),
         "average_duration": average_duration,
         "average_duration_label": _duration_label(average_duration),
+        "answer_rate": round((len(connected) / total) * 100, 1) if total else 0,
+        "missed_rate": round((len(missed) / total) * 100, 1) if total else 0,
+        "cost": round(sum(frappe.utils.flt(row.get("cost")) for row in rows), 2),
     }
 
 
 def _filter_performance_rows(rows: list[dict[str, Any]], status_filter: str | None) -> list[dict[str, Any]]:
-    status_filter = (status_filter or "total").strip().lower()
+    status_filter = _analytics_status_filter(status_filter)
+    missed_buckets = {"missed", "busy", "no_answer", "failed", "cancelled"}
     if status_filter == "connected":
-        return [row for row in rows if row.status in CONNECTED_STATUSES or row.status == "Connected"]
+        return [row for row in rows if row.get("bucket") == "connected"]
     if status_filter == "missed":
-        return [row for row in rows if row.status in MISSED_STATUSES or row.status in {"Cancelled", "Canceled"}]
+        return [row for row in rows if row.get("bucket") in missed_buckets]
+    if status_filter in {"busy", "no_answer", "failed", "cancelled"}:
+        return [row for row in rows if row.get("bucket") == status_filter]
     return rows
 
 
 def _performance_by_user(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
-        grouped.setdefault(row.user or _("Unassigned"), []).append(row)
+        grouped.setdefault(row.get("user") or _("Unassigned"), []).append(row)
     data = []
     for user, user_rows in grouped.items():
         data.append({"user": user, **_performance_summary(user_rows)})
@@ -312,19 +497,195 @@ def _performance_by_user(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _performance_call_row(row) -> dict[str, Any]:
-    seconds = frappe.utils.cint(row.billsec or row.duration)
     return {
-        "name": row.name,
-        "user": row.user,
-        "status": row.status,
-        "duration_label": _duration_label(seconds),
-        "creation": row.creation,
-        "reference_doctype": row.reference_doctype,
-        "reference_name": row.reference_name,
-        "customer_number": row.customer_number,
-        "user_mobile": row.user_mobile,
-        "disposition": row.disposition,
+        "name": row.get("name"),
+        "user": row.get("user"),
+        "status": row.get("status"),
+        "bucket": row.get("bucket"),
+        "bucket_label": row.get("bucket_label"),
+        "duration_label": _duration_label(row.get("talk_seconds")),
+        "creation": row.get("creation"),
+        "reference_doctype": row.get("reference_doctype"),
+        "reference_name": row.get("reference_name"),
+        "customer_number": row.get("customer_number"),
+        "user_mobile": row.get("user_mobile"),
+        "caller_id": row.get("caller_id"),
+        "disposition": row.get("disposition"),
+        "recording_status": row.get("recording_status"),
+        "recording_download_url": recording_proxy_url(row.get("name")) if row.get("bucket") == "connected" and row.get("recording_url") else "",
     }
+
+
+def _analytics_agent_options(is_admin: bool) -> list[str]:
+    if not is_admin:
+        return [frappe.session.user]
+
+    values: list[str] = []
+    if frappe.db.exists("DocType", "Vobiz User Mapping"):
+        try:
+            values.extend(
+                frappe.get_all(
+                    "Vobiz User Mapping",
+                    filters={"enabled": 1},
+                    pluck="user",
+                    order_by="user asc",
+                )
+            )
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "Vobiz analytics agent options failed")
+
+    values.extend(
+        frappe.get_all(
+            "Vobiz Call Log",
+            filters={"user": ["is", "set"]},
+            pluck="user",
+            distinct=True,
+            order_by="user asc",
+            limit_page_length=500,
+        )
+    )
+
+    cleaned = []
+    seen = set()
+    for value in values:
+        value = (value or "").strip()
+        if value and value not in seen:
+            cleaned.append(value)
+            seen.add(value)
+    return cleaned
+
+
+def _can_view_all_analytics_agents() -> bool:
+    if frappe.session.user == "Administrator":
+        return True
+    roles = set(frappe.get_roles())
+    manager_roles = {
+        "System Manager",
+        "Manager",
+        "Vobiz Manager",
+        "Call Center Manager",
+        "Sales Manager",
+    }
+    return bool(roles.intersection(manager_roles))
+
+
+def _analytics_date_range(from_date: str | None, to_date: str | None) -> tuple[str, str]:
+    today = frappe.utils.today()
+    try:
+        start = frappe.utils.getdate(from_date or today)
+    except Exception:
+        start = frappe.utils.getdate(today)
+    try:
+        end = frappe.utils.getdate(to_date or today)
+    except Exception:
+        end = frappe.utils.getdate(today)
+    if start > end:
+        start, end = end, start
+    return str(start), str(end)
+
+
+def _analytics_status_filter(status_filter: str | None) -> str:
+    status_filter = (status_filter or "total").strip().lower().replace("-", "_")
+    return status_filter if status_filter in ANALYTICS_STATUS_OPTIONS else "total"
+
+
+def _analytics_row(row) -> dict[str, Any]:
+    data = row.as_dict() if callable(getattr(row, "as_dict", None)) else dict(row)
+    bucket = _analytics_bucket(data)
+    billsec = frappe.utils.cint(data.get("billsec"))
+    duration = frappe.utils.cint(data.get("duration"))
+    data["bucket"] = bucket
+    data["bucket_label"] = _analytics_bucket_label(bucket)
+    data["talk_seconds"] = billsec or duration
+    data["cost"] = frappe.utils.flt(data.get("cost"))
+    return data
+
+
+def _analytics_bucket(row: dict[str, Any]) -> str:
+    status = str(row.get("status") or "").strip()
+    talk_seconds = frappe.utils.cint(row.get("billsec")) or frappe.utils.cint(row.get("duration"))
+    combined = " ".join(
+        str(row.get(fieldname) or "").strip().lower().replace("_", "-")
+        for fieldname in ("status", "call_status", "dial_status", "hangup_cause")
+    )
+    if talk_seconds > 0 and (
+        "completed" in combined
+        or "connected" in combined
+        or "normal-clearing" in combined
+        or "normal clearing" in combined
+    ):
+        return "connected"
+    if status in CONNECTED_STATUSES or status == "Connected":
+        return "connected"
+    if "busy" in combined:
+        return "busy"
+    if "no-answer" in combined or "no answer" in combined or "timeout" in combined or "unanswered" in combined:
+        return "no_answer"
+    if "cancel" in combined or "reject" in combined or "decline" in combined:
+        return "cancelled"
+    if "fail" in combined or "error" in combined:
+        return "failed"
+    if status in MISSED_STATUSES or status in {"Cancelled", "Canceled"}:
+        return "missed"
+    return "other"
+
+
+def _analytics_bucket_label(bucket: str) -> str:
+    return {
+        "connected": _("Connected"),
+        "missed": _("Missed"),
+        "busy": _("Busy"),
+        "no_answer": _("No Answer"),
+        "failed": _("Failed"),
+        "cancelled": _("Cancelled"),
+        "other": _("Other"),
+    }.get(bucket, _("Other"))
+
+
+def _performance_status_breakdown(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    summary = _performance_summary(rows)
+    data = [
+        {"bucket": "connected", "label": _("Connected"), "count": summary.get("connected") or 0},
+        {"bucket": "missed", "label": _("Missed"), "count": summary.get("missed") or 0},
+    ]
+    other = len([row for row in rows if row.get("bucket") == "other"])
+    if other:
+        data.append({"bucket": "other", "label": _("Other"), "count": other})
+    return [row for row in data if row["count"]]
+
+
+def _performance_outcome_breakdown(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    order = ["connected", "busy", "no_answer", "failed", "cancelled", "missed", "other"]
+    grouped: dict[str, list[dict[str, Any]]] = {key: [] for key in order}
+    for row in rows:
+        grouped.setdefault(row.get("bucket") or "other", []).append(row)
+    return [
+        {
+            "bucket": bucket,
+            "label": _analytics_bucket_label(bucket),
+            "count": len(grouped.get(bucket, [])),
+            "average_duration_label": _performance_summary(grouped.get(bucket, [])).get("average_duration_label"),
+        }
+        for bucket in order
+        if grouped.get(bucket)
+    ]
+
+
+def _performance_by_day(rows: list[dict[str, Any]], from_date: str, to_date: str) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        day = str(frappe.utils.getdate(row.get("creation"))) if row.get("creation") else ""
+        grouped.setdefault(day, []).append(row)
+
+    start = frappe.utils.getdate(from_date)
+    end = frappe.utils.getdate(to_date)
+    days = []
+    current = start
+    while current <= end:
+        day = str(current)
+        days.append({"date": day, **_performance_summary(grouped.get(day, []))})
+        current = frappe.utils.add_days(current, 1)
+    return days
 
 
 def _active_call() -> dict[str, Any] | None:
@@ -368,6 +729,9 @@ def _agent_context() -> dict[str, Any]:
     fields = ["name", "agent_mobile", "caller_id", "availability_status"]
     if meta.has_field("queue_source") and frappe.db.has_column("Vobiz User Mapping", "queue_source"):
         fields.append("queue_source")
+    for fieldname in ("sr_medical_department", "sr_followup_id", "fallback_user"):
+        if meta.has_field(fieldname) and frappe.db.has_column("Vobiz User Mapping", fieldname):
+            fields.append(fieldname)
 
     return frappe.db.get_value(
         "Vobiz User Mapping",
@@ -397,6 +761,18 @@ def _queue_meta(queue_source: str, doctype: str) -> dict[str, str]:
             "summary_tab_label": _("Patient"),
             "data_label": _("Patient Data"),
             "empty_message": _("No callable patients found"),
+            "followup_day_options": "\n".join(_patient_followup_day_options()),
+        }
+    if queue_source == "Discontinued":
+        return {
+            "source": queue_source,
+            "doctype": doctype,
+            "title": _("Discontinued / Missed Call Queue"),
+            "id_label": _("CRM Lead ID"),
+            "selected_label": _("leads"),
+            "summary_tab_label": _("CRM Lead"),
+            "data_label": _("CRM Lead Data"),
+            "empty_message": _("No missed or discontinued CRM leads found"),
         }
     return {
         "source": queue_source,
@@ -415,15 +791,16 @@ def _lead_queue(
     search: str | None = None,
     agent: dict[str, Any] | None = None,
     queue_source: str | None = None,
+    followup_day: str | None = None,
 ) -> list[dict[str, Any]]:
     queue_source = queue_source or _agent_queue_source(agent)
     preferred_doctype = _queue_doctype_for_source(queue_source)
     if preferred_doctype and frappe.db.exists("DocType", preferred_doctype):
-        return _queue_for_doctype(preferred_doctype, limit, search, queue_source=queue_source)
+        return _queue_for_doctype(preferred_doctype, limit, search, queue_source=queue_source, agent=agent, followup_day=followup_day)
 
     for doctype in LEAD_DOCTYPE_CANDIDATES:
         if frappe.db.exists("DocType", doctype):
-            rows = _queue_for_doctype(doctype, limit, search, queue_source=queue_source)
+            rows = _queue_for_doctype(doctype, limit, search, queue_source=queue_source, agent=agent, followup_day=followup_day)
             if doctype == "CRM Lead":
                 return rows
             if rows:
@@ -436,6 +813,8 @@ def _queue_for_doctype(
     limit: int,
     search: str | None = None,
     queue_source: str | None = None,
+    agent: dict[str, Any] | None = None,
+    followup_day: str | None = None,
 ) -> list[dict[str, Any]]:
     meta = frappe.get_meta(doctype)
     fields = ["name", "modified"]
@@ -460,13 +839,16 @@ def _queue_for_doctype(
             "vobiz_next_follow_up",
             "lead_owner",
             "created_by_agent",
+            "sr_medical_department",
+            "sr_followup_id",
+            "sr_followup_day",
             "owner",
         ),
     ):
         if fieldname not in fields:
             fields.append(fieldname)
 
-    filters = _queue_filters(meta, queue_source=queue_source)
+    filters = _queue_filters(meta, queue_source=queue_source, agent=agent, followup_day=followup_day)
     query = (search or "").strip()
     search_fields = _queue_search_fields(meta, fields) if query else []
     rows = frappe.get_all(
@@ -480,17 +862,36 @@ def _queue_for_doctype(
     return [_reference_row(doctype, row) for row in rows]
 
 
-def _queue_filters(meta, queue_source: str | None = None) -> dict[str, Any]:
+def _queue_filters(meta, queue_source: str | None = None, agent: dict[str, Any] | None = None, followup_day: str | None = None) -> dict[str, Any]:
     filters: dict[str, Any] = {}
     if meta.has_field("disabled"):
         filters["disabled"] = ["!=", 1]
     if meta.has_field("vobiz_do_not_call"):
         filters["vobiz_do_not_call"] = ["!=", 1]
-    if meta.name == "Patient" and queue_source == "Patient" and meta.has_field("created_by_agent"):
-        filters["created_by_agent"] = frappe.session.user
+    if meta.name == "Patient" and queue_source == "Patient":
+        if meta.has_field("sr_medical_department"):
+            department = (agent or {}).get("sr_medical_department")
+            filters["sr_medical_department"] = department or "__no_patient_department_mapping__"
+        if meta.has_field("sr_followup_id"):
+            followup_id = (agent or {}).get("sr_followup_id")
+            filters["sr_followup_id"] = followup_id if followup_id not in (None, "") else "__no_patient_followup_mapping__"
+        if followup_day and meta.has_field("sr_followup_day"):
+            filters["sr_followup_day"] = followup_day
+    if meta.name == "CRM Lead" and queue_source == "Discontinued" and meta.has_field("vobiz_last_call_status"):
+        filters["vobiz_last_call_status"] = ["in", sorted(MISSED_STATUSES | {"Cancelled", "Canceled"})]
     if meta.name == "CRM Lead" and meta.has_field("lead_owner") and not _can_view_all_queue_leads():
         filters["lead_owner"] = frappe.session.user
     return filters
+
+
+def _patient_followup_day_options() -> list[str]:
+    if not frappe.db.exists("DocType", "Patient"):
+        return []
+    meta = frappe.get_meta("Patient")
+    field = meta.get_field("sr_followup_day")
+    if not field:
+        return []
+    return [row.strip() for row in (field.options or "").splitlines() if row.strip()]
 
 
 def _queue_search_fields(meta, loaded_fields: list[str]) -> list[str]:
@@ -548,6 +949,9 @@ def _reference_row(doctype: str, doc) -> dict[str, Any]:
         "phone_field": phone_field.get("fieldname"),
         "status": status,
         "next_action": str(next_action),
+        "sr_medical_department": data.get("sr_medical_department"),
+        "sr_followup_id": data.get("sr_followup_id"),
+        "sr_followup_day": data.get("sr_followup_day"),
         "owner": data.get("lead_owner") or data.get("created_by_agent") or data.get("owner"),
     }
 

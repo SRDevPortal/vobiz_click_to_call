@@ -9,7 +9,6 @@ after_install = "vobiz_click_to_call.install.after_install"
 after_migrate = "vobiz_click_to_call.install.after_migrate"
 
 app_include_js = [
-    "/assets/vobiz_click_to_call/js/availability.js",
     "/assets/vobiz_click_to_call/js/click_to_call.js",
     "/assets/vobiz_click_to_call/js/list_dialer.js",
     "/assets/vobiz_click_to_call/js/call_log.js",
@@ -17,6 +16,7 @@ app_include_js = [
 
 doctype_js = {
     "Vobiz Settings": "public/js/vobiz_settings.js",
+    "Vobiz User Mapping": "public/js/vobiz_user_mapping.js",
 }
 
 doc_events = {

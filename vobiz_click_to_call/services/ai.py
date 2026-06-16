@@ -304,6 +304,17 @@ def normalize_provider_update_status(target_call_log: str, values: dict[str, Any
     if not signal:
         return values
 
+    billsec = frappe.utils.cint(values.get("billsec"))
+    duration = frappe.utils.cint(values.get("duration"))
+    if (billsec > 0 or duration >= 30) and (
+        "completed" in signal
+        or "connected" in signal
+        or "normal-clearing" in signal
+        or "normal clearing" in signal
+    ):
+        values["status"] = "Completed"
+        return values
+
     if "busy" in signal:
         values["status"] = "Busy"
     elif "no-answer" in signal or "no answer" in signal or "timeout" in signal or "unanswered" in signal:
