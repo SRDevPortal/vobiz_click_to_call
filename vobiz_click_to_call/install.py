@@ -44,6 +44,8 @@ def ensure_defaults():
         "max_call_duration": 3600,
         "enable_end_fallback": 0,
         "end_fallback_mobile": "",
+        "enable_busy_callback_ai_fallback": 0,
+        "busy_callback_ai_fallback_mobile": "",
         "store_raw_payloads": 1,
         "prevent_blocked_numbers": 1,
         "max_call_attempts_per_reference_per_day": 0,
@@ -76,6 +78,7 @@ def ensure_defaults():
         settings.save(ignore_permissions=True)
 
     ensure_crm_lead_fields()
+    ensure_crm_lead_disposition_optional()
     ensure_vobiz_call_log_disposition_field()
 
 
@@ -98,6 +101,38 @@ def ensure_vobiz_call_log_disposition_field(extra_options: list[str] | None = No
         make_property_setter("Vobiz Call Log", "disposition", "options", "", "Text", validate_fields_for_doctype=False)
     make_property_setter("Vobiz Call Log", "disposition", "reqd", "0", "Check", validate_fields_for_doctype=False)
     frappe.clear_cache(doctype="Vobiz Call Log")
+
+
+def ensure_crm_lead_disposition_optional():
+    if not frappe.db.exists("DocType", "CRM Lead"):
+        return
+
+    fields = ("sr_lead_disposition", "lead_disposition", "disposition")
+    meta = frappe.get_meta("CRM Lead")
+    from frappe.custom.doctype.property_setter.property_setter import make_property_setter
+
+    for fieldname in fields:
+        if not meta.has_field(fieldname):
+            continue
+        make_property_setter("CRM Lead", fieldname, "reqd", "0", "Check", validate_fields_for_doctype=False)
+        make_property_setter(
+            "CRM Lead",
+            fieldname,
+            "mandatory_depends_on",
+            "",
+            "Text",
+            validate_fields_for_doctype=False,
+        )
+        custom_field = frappe.db.get_value("Custom Field", {"dt": "CRM Lead", "fieldname": fieldname}, "name")
+        if custom_field:
+            frappe.db.set_value(
+                "Custom Field",
+                custom_field,
+                {"reqd": 0, "mandatory_depends_on": ""},
+                update_modified=False,
+            )
+
+    frappe.clear_cache(doctype="CRM Lead")
 
 
 def get_vobiz_call_log_disposition_options(extra_options: list[str] | None = None) -> str:

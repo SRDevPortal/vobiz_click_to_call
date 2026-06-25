@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -88,6 +89,7 @@ def get_agent_console_data(
     limit: int | str = 25,
     search: str | None = None,
     followup_day: str | None = None,
+    filters: str | list | None = None,
 ) -> dict[str, Any]:
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
@@ -100,7 +102,14 @@ def get_agent_console_data(
     return {
         "availability": get_call_capability(),
         "active_call": _active_call(),
-        "queue": _lead_queue(limit, search, agent=agent, queue_source=queue_source, followup_day=followup_day),
+        "queue": _lead_queue(
+            limit,
+            search,
+            agent=agent,
+            queue_source=queue_source,
+            followup_day=followup_day,
+            user_filters=filters,
+        ),
         "queue_meta": _queue_meta(queue_source, queue_doctype),
         "dispositions": get_disposition_options_api(),
         "ai_disposition_enabled": bool(settings.enable_ai_disposition),
@@ -170,6 +179,17 @@ def get_workdesk_tab(reference_doctype: str, reference_name: str, tab: str) -> d
     return _workdesk_context(reference_doctype, reference_name, doc, lite=True)
 
 
+@frappe.whitelist(methods=["POST"])
+def save_reference_note(reference_doctype: str, reference_name: str, note: str) -> dict[str, Any]:
+    doc = _get_permitted_reference(reference_doctype, reference_name)
+    note = (note or "").strip()
+    if not note:
+        frappe.throw(_("Note is required."))
+    doc.add_comment("Comment", note)
+    frappe.db.commit()
+    return {"success": True, "reference_doctype": reference_doctype, "reference_name": reference_name}
+
+
 def _get_permitted_reference(reference_doctype: str, reference_name: str):
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
@@ -191,15 +211,15 @@ def _has_mapped_patient_access(reference_doctype: str, reference_name: str) -> b
     meta = frappe.get_meta("Patient")
     filters: dict[str, Any] = {"name": reference_name}
     if meta.has_field("sr_medical_department"):
-        department = agent.get("sr_medical_department")
-        if not department:
+        departments = _split_values(agent.get("sr_medical_departments"), first=agent.get("sr_medical_department"))
+        if not departments:
             return False
-        filters["sr_medical_department"] = department
+        filters["sr_medical_department"] = ["in", departments]
     if meta.has_field("sr_followup_id"):
-        followup_id = agent.get("sr_followup_id")
-        if followup_id in (None, ""):
+        followup_ids = _split_values(agent.get("sr_followup_ids"), first=agent.get("sr_followup_id"))
+        if not followup_ids:
             return False
-        filters["sr_followup_id"] = str(followup_id)
+        filters["sr_followup_id"] = ["in", followup_ids]
     return bool(frappe.db.exists("Patient", filters))
 
 
@@ -466,9 +486,15 @@ def _analytics_data(
         filters["reference_doctype"] = "CRM Lead"
 
     is_admin = _can_view_all_analytics_agents()
+    team_scope = [] if is_admin else _team_member_users_for_leader(frappe.session.user)
     agent_user = (agent_user or "").strip()
     if is_admin and agent_user:
         filters["user"] = agent_user
+    elif team_scope:
+        if agent_user and agent_user in team_scope:
+            filters["user"] = agent_user
+        else:
+            filters["users"] = team_scope
     elif not is_admin:
         filters["user"] = frappe.session.user
     conditions, params = _analytics_sql_conditions(start, end, filters)
@@ -515,8 +541,9 @@ def _analytics_data(
         "queue_source": queue_source,
         "queue_sources": list(QUEUE_SOURCE_DOCTYPES.keys()),
         "agent_user": filters.get("user") or "",
-        "agent_options": _analytics_agent_options(is_admin),
+        "agent_options": _analytics_agent_options(is_admin, team_scope=team_scope),
         "is_admin": is_admin,
+        "is_team_leader": bool(team_scope),
         "summary": summary,
         "filtered_summary": filtered_summary,
         "status_breakdown": _analytics_status_breakdown_sql(conditions, params),
@@ -541,6 +568,11 @@ def _analytics_sql_conditions(start: str, end: str, filters: dict[str, Any]) -> 
     if filters.get("user"):
         params["user"] = filters["user"]
         conditions.append("`user` = %(user)s")
+    if filters.get("users"):
+        users = [user for user in filters["users"] if user]
+        if users:
+            params["users"] = tuple(users)
+            conditions.append("`user` in %(users)s")
     return " and ".join(conditions), params
 
 
@@ -821,7 +853,9 @@ def _performance_call_row(row) -> dict[str, Any]:
     }
 
 
-def _analytics_agent_options(is_admin: bool) -> list[str]:
+def _analytics_agent_options(is_admin: bool, team_scope: list[str] | None = None) -> list[str]:
+    if team_scope:
+        return team_scope
     if not is_admin:
         return [frappe.session.user]
 
@@ -872,6 +906,29 @@ def _can_view_all_analytics_agents() -> bool:
         "Sales Manager",
     }
     return bool(roles.intersection(manager_roles))
+
+
+def _team_member_users_for_leader(team_leader: str | None) -> list[str]:
+    team_leader = (team_leader or "").strip()
+    if not team_leader or not frappe.db.exists("DocType", "Team") or not frappe.db.exists("DocType", "Team User"):
+        return []
+    teams = frappe.get_all("Team", filters={"team_lead": team_leader, "is_active": 1}, pluck="name")
+    if not teams:
+        return []
+    members = frappe.get_all(
+        "Team User",
+        filters={"parent": ["in", teams], "is_active": 1},
+        pluck="user",
+        order_by="user asc",
+    )
+    users = [team_leader]
+    seen = {team_leader}
+    for user in members:
+        user = (user or "").strip()
+        if user and user not in seen:
+            users.append(user)
+            seen.add(user)
+    return users
 
 
 def _analytics_date_range(from_date: str | None, to_date: str | None) -> tuple[str, str]:
@@ -1009,7 +1066,16 @@ def _agent_context() -> dict[str, Any]:
     fields = ["name", "agent_mobile", "caller_id", "availability_status"]
     if meta.has_field("queue_source") and frappe.db.has_column("Vobiz User Mapping", "queue_source"):
         fields.append("queue_source")
-    for fieldname in ("sr_medical_department", "sr_followup_id", "fallback_user"):
+    for fieldname in (
+        "sr_medical_department",
+        "sr_medical_departments",
+        "sr_followup_id",
+        "sr_followup_ids",
+        "fallback_user",
+        "fallback_users",
+        "team",
+        "team_leader",
+    ):
         if meta.has_field(fieldname) and frappe.db.has_column("Vobiz User Mapping", fieldname):
             fields.append(fieldname)
 
@@ -1072,15 +1138,32 @@ def _lead_queue(
     agent: dict[str, Any] | None = None,
     queue_source: str | None = None,
     followup_day: str | None = None,
+    user_filters: str | list | None = None,
 ) -> list[dict[str, Any]]:
     queue_source = queue_source or _agent_queue_source(agent)
     preferred_doctype = _queue_doctype_for_source(queue_source)
     if preferred_doctype and frappe.db.exists("DocType", preferred_doctype):
-        return _queue_for_doctype(preferred_doctype, limit, search, queue_source=queue_source, agent=agent, followup_day=followup_day)
+        return _queue_for_doctype(
+            preferred_doctype,
+            limit,
+            search,
+            queue_source=queue_source,
+            agent=agent,
+            followup_day=followup_day,
+            user_filters=user_filters,
+        )
 
     for doctype in LEAD_DOCTYPE_CANDIDATES:
         if frappe.db.exists("DocType", doctype):
-            rows = _queue_for_doctype(doctype, limit, search, queue_source=queue_source, agent=agent, followup_day=followup_day)
+            rows = _queue_for_doctype(
+                doctype,
+                limit,
+                search,
+                queue_source=queue_source,
+                agent=agent,
+                followup_day=followup_day,
+                user_filters=user_filters,
+            )
             if doctype == "CRM Lead":
                 return rows
             if rows:
@@ -1095,6 +1178,7 @@ def _queue_for_doctype(
     queue_source: str | None = None,
     agent: dict[str, Any] | None = None,
     followup_day: str | None = None,
+    user_filters: str | list | None = None,
 ) -> list[dict[str, Any]]:
     meta = frappe.get_meta(doctype)
     fields = ["name", "modified"]
@@ -1122,13 +1206,15 @@ def _queue_for_doctype(
             "sr_medical_department",
             "sr_followup_id",
             "sr_followup_day",
+            "team",
             "owner",
         ),
     ):
         if fieldname not in fields:
             fields.append(fieldname)
 
-    filters = _queue_filters(meta, queue_source=queue_source, agent=agent, followup_day=followup_day)
+    filters = _queue_filter_list(meta, queue_source=queue_source, agent=agent, followup_day=followup_day)
+    filters.extend(_safe_user_filters(meta, user_filters))
     query = (search or "").strip()
     search_fields = _queue_search_fields(meta, fields) if query else []
     rows = frappe.get_all(
@@ -1150,18 +1236,76 @@ def _queue_filters(meta, queue_source: str | None = None, agent: dict[str, Any] 
         filters["vobiz_do_not_call"] = ["!=", 1]
     if meta.name == "Patient" and queue_source == "Patient":
         if meta.has_field("sr_medical_department"):
-            department = (agent or {}).get("sr_medical_department")
-            filters["sr_medical_department"] = department or "__no_patient_department_mapping__"
+            departments = _split_values((agent or {}).get("sr_medical_departments"), first=(agent or {}).get("sr_medical_department"))
+            filters["sr_medical_department"] = ["in", departments] if departments else "__no_patient_department_mapping__"
         if meta.has_field("sr_followup_id"):
-            followup_id = (agent or {}).get("sr_followup_id")
-            filters["sr_followup_id"] = followup_id if followup_id not in (None, "") else "__no_patient_followup_mapping__"
+            followup_ids = _split_values((agent or {}).get("sr_followup_ids"), first=(agent or {}).get("sr_followup_id"))
+            filters["sr_followup_id"] = ["in", followup_ids] if followup_ids else "__no_patient_followup_mapping__"
         if followup_day and meta.has_field("sr_followup_day"):
             filters["sr_followup_day"] = followup_day
     if meta.name == "CRM Lead" and queue_source == "Discontinued" and meta.has_field("vobiz_last_call_status"):
         filters["vobiz_last_call_status"] = ["in", sorted(MISSED_STATUSES | {"Cancelled", "Canceled"})]
-    if meta.name == "CRM Lead" and meta.has_field("lead_owner") and not _can_view_all_queue_leads():
-        filters["lead_owner"] = frappe.session.user
     return filters
+
+
+def _queue_filter_list(meta, queue_source: str | None = None, agent: dict[str, Any] | None = None, followup_day: str | None = None) -> list[list[Any]]:
+    rows = []
+    for fieldname, value in _queue_filters(meta, queue_source=queue_source, agent=agent, followup_day=followup_day).items():
+        if isinstance(value, (list, tuple)) and len(value) >= 2:
+            rows.append([meta.name, fieldname, value[0], value[1]])
+        else:
+            rows.append([meta.name, fieldname, "=", value])
+    return rows
+
+
+def _safe_user_filters(meta, raw_filters: str | list | None) -> list[list[Any]]:
+    filters = _parse_user_filters(raw_filters)
+    standard_fields = {
+        "name",
+        "owner",
+        "creation",
+        "modified",
+        "modified_by",
+        "docstatus",
+        "idx",
+    }
+    allowed_ops = {
+        "=", "!=", ">", "<", ">=", "<=", "like", "not like", "in", "not in",
+        "is", "is not", "between", "timespan", "previous", "next",
+    }
+    safe = []
+    for item in filters:
+        if not isinstance(item, (list, tuple)):
+            continue
+        if len(item) >= 4:
+            doctype, fieldname, operator, value = item[:4]
+        elif len(item) == 3:
+            doctype, fieldname, operator, value = meta.name, item[0], item[1], item[2]
+        else:
+            continue
+        if doctype and doctype != meta.name:
+            continue
+        fieldname = str(fieldname or "")
+        operator = str(operator or "=").lower()
+        if fieldname not in standard_fields and not meta.has_field(fieldname):
+            continue
+        if operator not in allowed_ops:
+            continue
+        safe.append([meta.name, fieldname, operator, value])
+    return safe
+
+
+def _parse_user_filters(raw_filters: str | list | None) -> list:
+    if not raw_filters:
+        return []
+    if isinstance(raw_filters, str):
+        try:
+            parsed = json.loads(raw_filters)
+        except Exception:
+            return []
+    else:
+        parsed = raw_filters
+    return parsed if isinstance(parsed, list) else []
 
 
 def _patient_followup_day_options() -> list[str]:
@@ -1205,6 +1349,18 @@ def _can_view_all_queue_leads() -> bool:
     return frappe.session.user == "Administrator" or "System Manager" in frappe.get_roles()
 
 
+def _split_values(value: str | None, first: str | None = None) -> list[str]:
+    values = []
+    seen = set()
+    for raw in [first or "", value or ""]:
+        for row in str(raw).replace(",", "\n").splitlines():
+            row = row.strip()
+            if row and row not in seen:
+                values.append(row)
+                seen.add(row)
+    return values
+
+
 def _reference_row(doctype: str, doc) -> dict[str, Any]:
     data = doc.as_dict() if callable(getattr(doc, "as_dict", None)) else dict(doc)
     title = (
@@ -1232,6 +1388,7 @@ def _reference_row(doctype: str, doc) -> dict[str, Any]:
         "sr_medical_department": data.get("sr_medical_department"),
         "sr_followup_id": data.get("sr_followup_id"),
         "sr_followup_day": data.get("sr_followup_day"),
+        "team": data.get("team"),
         "owner": data.get("lead_owner") or data.get("created_by_agent") or data.get("owner"),
     }
 
@@ -1380,6 +1537,7 @@ def _lead_details(
         "sr_lead_disposition",
         "source",
         "sr_lead_pipeline",
+        "team",
         "lead_score",
         "lead_lan",
         "lead_temperature",

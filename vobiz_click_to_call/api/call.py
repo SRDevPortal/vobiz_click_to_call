@@ -511,10 +511,11 @@ def get_user_mapping(user: str) -> dict[str, Any] | None:
     if not frappe.db.exists("DocType", "Vobiz User Mapping"):
         return None
 
+    meta = frappe.get_meta("Vobiz User Mapping")
     rows = frappe.get_all(
         "Vobiz User Mapping",
         filters={"user": user, "enabled": 1},
-        fields=[
+        fields=_existing_mapping_fields(meta, [
             "name",
             "user",
             "agent_mobile",
@@ -528,15 +529,23 @@ def get_user_mapping(user: str) -> dict[str, Any] | None:
             "working_hours_end",
             "working_days",
             "team",
+            "team_leader",
             "pipeline",
             "queue_source",
             "fallback_user",
+            "fallback_users",
             "sr_medical_department",
+            "sr_medical_departments",
             "sr_followup_id",
-        ],
+            "sr_followup_ids",
+        ]),
         limit=1,
     )
     return rows[0] if rows else None
+
+
+def _existing_mapping_fields(meta, fields: list[str]) -> list[str]:
+    return [fieldname for fieldname in fields if fieldname == "name" or meta.has_field(fieldname)]
 
 
 def has_mapped_patient_access(reference_doctype: str, reference_name: str, user: str | None = None) -> bool:
@@ -548,16 +557,28 @@ def has_mapped_patient_access(reference_doctype: str, reference_name: str, user:
     meta = frappe.get_meta("Patient")
     filters: dict[str, Any] = {"name": reference_name}
     if meta.has_field("sr_medical_department"):
-        department = mapping.get("sr_medical_department")
-        if not department:
+        departments = _split_mapping_values(mapping.get("sr_medical_departments"), first=mapping.get("sr_medical_department"))
+        if not departments:
             return False
-        filters["sr_medical_department"] = department
+        filters["sr_medical_department"] = ["in", departments]
     if meta.has_field("sr_followup_id"):
-        followup_id = mapping.get("sr_followup_id")
-        if followup_id in (None, ""):
+        followup_ids = _split_mapping_values(mapping.get("sr_followup_ids"), first=mapping.get("sr_followup_id"))
+        if not followup_ids:
             return False
-        filters["sr_followup_id"] = str(followup_id)
+        filters["sr_followup_id"] = ["in", followup_ids]
     return bool(frappe.db.exists("Patient", filters))
+
+
+def _split_mapping_values(value: str | None, first: str | None = None) -> list[str]:
+    values = []
+    seen = set()
+    for raw in [first or "", value or ""]:
+        for row in str(raw).replace(",", "\n").splitlines():
+            row = row.strip()
+            if row and row not in seen:
+                values.append(row)
+                seen.add(row)
+    return values
 
 
 def get_mapping_unavailable_reason(mapping: dict[str, Any]) -> str:

@@ -46,6 +46,8 @@ class VobizAgentConsole {
 			disposition_prompted_call_log: null,
 			navigating_from_workdesk: false,
 			last_callback_call_log: null,
+			queue_filters: [],
+			filter_group: null,
 			auto_dial: {
 				running: false,
 				in_flight: false,
@@ -126,6 +128,9 @@ class VobizAgentConsole {
 							<h3 data-role="queue-title">${__('Lead Queue')}</h3>
 							<div class="vobiz-queue-tools">
 								<select class="form-control input-sm hidden" data-role="followup-day-filter"></select>
+								<button class="btn btn-default btn-sm vobiz-filter-btn" data-action="open-filters">
+									<i class="fa fa-filter filter-icon"></i> <span class="button-label">${__('Filters')}</span>
+								</button>
 								<input class="form-control input-sm" data-role="search" placeholder="${__('Search')}">
 							</div>
 						</div>
@@ -140,6 +145,7 @@ class VobizAgentConsole {
 										<th class="vobiz-patient-col hidden">${__('Department')}</th>
 										<th class="vobiz-patient-col hidden">${__('Follow-up ID')}</th>
 										<th class="vobiz-patient-col hidden">${__('Day')}</th>
+										<th class="vobiz-team-col">${__('Team')}</th>
 										<th>${__('Status')}</th>
 										<th>${__('Next Action')}</th>
 										<th style="width: 88px">${__('Action')}</th>
@@ -235,6 +241,8 @@ class VobizAgentConsole {
 				.vobiz-section-title { align-items: center; display: flex; gap: 12px; justify-content: space-between; margin-bottom: 12px; }
 				.vobiz-section-title h3 { font-size: 15px; font-weight: 700; margin: 0; }
 				.vobiz-queue-tools { display: flex; gap: 8px; justify-content: flex-end; min-width: 280px; }
+				.vobiz-filter-btn { align-items: center !important; display: inline-flex !important; flex: 0 0 auto; gap: 6px; justify-content: center; min-width: 86px; white-space: nowrap !important; width: auto !important; }
+				.vobiz-filter-btn .filter-icon, .vobiz-filter-btn .button-label { display: inline-block; line-height: 1; white-space: nowrap; }
 				.vobiz-queue-tools select { max-width: 150px; }
 				.vobiz-queue-tools input { max-width: 260px; }
 				.vobiz-table-wrap { overflow-x: auto; }
@@ -388,6 +396,7 @@ class VobizAgentConsole {
 		$main.on('click', '[data-action="open-analytics"]', () => frappe.set_route('vobiz-agent-analytics'));
 		$main.on('click', '[data-action="toggle-auto"]', () => this.toggle_auto_dial());
 		$main.on('click', '[data-action="auto-report"]', () => this.open_auto_dial_report());
+		$main.on('click', '[data-action="open-filters"]', () => this.open_filter_popover());
 		$main.on('click', '[data-action="call-row"]', (e) => {
 			e.stopPropagation();
 			this.call_row($(e.currentTarget).closest('tr').data('index'));
@@ -439,11 +448,13 @@ class VobizAgentConsole {
 		frappe.call('vobiz_click_to_call.api.console.get_agent_console_data', {
 			limit: 500,
 			search,
-			followup_day
+			followup_day,
+			filters: JSON.stringify(this.state.queue_filters || [])
 		}).then((r) => {
 			const data = r.message || {};
 			this.state.queue = data.queue || [];
 			this.state.queue_meta = Object.assign(this.default_queue_meta(), data.queue_meta || {});
+			this.reset_filter_group_if_doctype_changed();
 			this.state.active_call = data.active_call || null;
 			this.state.dispositions = data.dispositions || [];
 			this.state.ai_disposition_enabled = Boolean(data.ai_disposition_enabled);
@@ -452,6 +463,7 @@ class VobizAgentConsole {
 			}
 			this.render_availability(data.availability || {}, data.active_call || {});
 			this.render_queue();
+			this.render_filter_button();
 			this.render_dispositions();
 			this.render_manual_disposition_visibility();
 			this.render_active_call();
@@ -633,7 +645,7 @@ class VobizAgentConsole {
 		const query = (this.page.main.find('[data-role="search"]').val() || '').toLowerCase();
 		const rows = this.state.queue
 			.map((row, index) => ({ ...row, index }))
-			.filter(row => !query || [row.name, row.title, row.company, row.phone, row.status, row.next_action, row.sr_medical_department, row.sr_followup_id, row.sr_followup_day].join(' ').toLowerCase().includes(query));
+			.filter(row => !query || [row.name, row.title, row.company, row.phone, row.status, row.next_action, row.team, row.sr_medical_department, row.sr_followup_id, row.sr_followup_day].join(' ').toLowerCase().includes(query));
 		this.page.main.find('[data-role="queue"]').html(rows.map(row => this.row_html(row)).join('') || `
 			<tr><td colspan="${this.queue_colspan()}" class="text-muted text-center">${frappe.utils.escape_html(this.queue_meta_value('empty_message'))}</td></tr>
 		`);
@@ -645,12 +657,59 @@ class VobizAgentConsole {
 		this.page.main.find('[data-role="queue-title"]').text(meta.title || __('Lead Queue'));
 		this.page.main.find('[data-role="queue-id-label"]').text(meta.id_label || __('CRM Lead ID'));
 		this.page.main.find('.vobiz-patient-col').toggleClass('hidden', (meta.doctype || '') !== 'Patient');
+		this.page.main.find('.vobiz-team-col').toggleClass('hidden', (meta.doctype || '') === 'Patient');
 		this.render_followup_day_filter(meta);
 	}
 
 	queue_colspan() {
 		const meta = this.state.queue_meta || this.default_queue_meta();
-		return (meta.doctype || '') === 'Patient' ? 10 : 7;
+		return (meta.doctype || '') === 'Patient' ? 10 : 8;
+	}
+
+	reset_filter_group_if_doctype_changed() {
+		const doctype = this.queue_meta_value('doctype');
+		if (this.state.filter_doctype && this.state.filter_doctype !== doctype) {
+			this.state.queue_filters = [];
+			this.state.filter_group = null;
+		}
+		this.state.filter_doctype = doctype;
+	}
+
+	open_filter_popover() {
+		const doctype = this.queue_meta_value('doctype');
+		const $button = this.page.main.find('[data-action="open-filters"]');
+		if (!doctype || !frappe.ui.FilterGroup) {
+			frappe.msgprint(__('Filters are not available on this page.'));
+			return;
+		}
+		if (this.state.filter_group && this.state.filter_doctype === doctype) {
+			return;
+		}
+		frappe.model.with_doctype(doctype, () => {
+			this.state.filter_doctype = doctype;
+			this.state.filter_group = new frappe.ui.FilterGroup({
+				doctype,
+				parent_doctype: doctype,
+				filter_button: $button,
+				filters: this.state.queue_filters || [],
+				on_change: () => {
+					this.state.queue_filters = this.state.filter_group.get_filters();
+					this.render_filter_button();
+					this.load();
+				}
+			});
+			$button.popover('toggle');
+		});
+	}
+
+	render_filter_button() {
+		const count = (this.state.queue_filters || []).length;
+		const $button = this.page.main.find('[data-action="open-filters"]');
+		$button
+			.toggleClass('btn-primary-light', count > 0)
+			.toggleClass('btn-default', count === 0)
+			.find('.button-label')
+			.html(count ? __('Filters {0}', [`<span class="filter-label">${count}</span>`]) : __('Filters'));
 	}
 
 	render_followup_day_filter(meta) {
@@ -689,6 +748,7 @@ class VobizAgentConsole {
 				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_medical_department || '')}</td>
 				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_followup_id || '')}</td>
 				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_followup_day || '')}</td>
+				<td class="vobiz-team-col ${this.is_patient_queue() ? 'hidden' : ''}">${frappe.utils.escape_html(row.team || '')}</td>
 				<td><span class="vobiz-status ${frappe.utils.escape_html(statusClass)}">${frappe.utils.escape_html(row.status || '')}</span></td>
 				<td>${frappe.utils.escape_html(row.next_action || '')}</td>
 				<td>
@@ -1251,6 +1311,13 @@ class VobizAgentConsole {
 						<div data-workdesk-live-call>${this.workdesk_live_call_html(row)}</div>
 						<ul class="vobiz-guidance-list">${((context.guidance || {}).script || []).map(line => `<li>${frappe.utils.escape_html(line)}</li>`).join('')}</ul>
 					</div>
+					<div class="vobiz-workdesk-card vobiz-workdesk-wide">
+						<h4>${__('Notes')}</h4>
+						<textarea class="form-control" rows="4" data-workdesk-note placeholder="${__('Write call notes')}" data-reference-doctype="${frappe.utils.escape_html(row.doctype || '')}" data-reference-name="${frappe.utils.escape_html(row.name || '')}"></textarea>
+						<div class="vobiz-workdesk-actions">
+							<button class="btn btn-primary btn-sm" data-workdesk-action="save-note"><i class="fa fa-sticky-note-o"></i> ${__('Save Note')}</button>
+						</div>
+					</div>
 				</div>
 			</div>
 		`;
@@ -1527,13 +1594,14 @@ class VobizAgentConsole {
 	}
 
 	workdesk_encounters_html(workdesk) {
+		const rows = workdesk.encounters || [];
 		return this.workdesk_related_html(__('Patient Encounters'), workdesk.encounters || [], 'Patient Encounter', (row) => [
 			row.patient_name || row.patient || '',
 			row.sr_encounter_type || '',
 			row.sr_encounter_status || '',
 			row.encounter_date || '',
 			row.invoiced ? __('Invoiced') : ''
-		].filter(Boolean).join(' • '), __('No previous encounter found.'), {
+		].filter(Boolean).join(' • '), rows.length ? __('Encounter already present.') : __('No previous encounter found.'), {
 			label: __('Create Encounter'),
 			action: 'new-encounter',
 			icon: 'fa-file-text-o'
@@ -1671,6 +1739,7 @@ class VobizAgentConsole {
 						<button class="btn btn-xs btn-default" data-open-doc data-doctype="${frappe.utils.escape_html(doctype)}" data-name="${frappe.utils.escape_html(row.name || '')}">${__('Open')}</button>
 					</div>
 				`).join('') || this.workdesk_empty_action_html(emptyText, emptyAction)}
+				${rows.length && emptyAction ? this.workdesk_inline_action_html(emptyAction) : ''}
 			</div>
 		`;
 	}
@@ -1681,6 +1750,16 @@ class VobizAgentConsole {
 		}
 		return `
 			<div class="vobiz-empty">${frappe.utils.escape_html(emptyText)}</div>
+			<div style="margin-top:12px;">
+				<button class="btn btn-primary btn-sm" data-workdesk-action="${frappe.utils.escape_html(emptyAction.action)}">
+					<i class="fa ${frappe.utils.escape_html(emptyAction.icon || 'fa-plus')}"></i> ${frappe.utils.escape_html(emptyAction.label)}
+				</button>
+			</div>
+		`;
+	}
+
+	workdesk_inline_action_html(emptyAction) {
+		return `
 			<div style="margin-top:12px;">
 				<button class="btn btn-primary btn-sm" data-workdesk-action="${frappe.utils.escape_html(emptyAction.action)}">
 					<i class="fa ${frappe.utils.escape_html(emptyAction.icon || 'fa-plus')}"></i> ${frappe.utils.escape_html(emptyAction.label)}
@@ -1895,6 +1974,8 @@ class VobizAgentConsole {
 			frappe.set_route('Form', row.doctype, row.name);
 		} else if (action === 'new-encounter') {
 			this.new_doc_with_defaults('Patient Encounter', (workdesk.create_defaults || {})['Patient Encounter'] || {}, row);
+		} else if (action === 'save-note') {
+			this.save_workdesk_note(row, $body);
 		} else if (action === 'new-appointment') {
 			this.new_doc_with_defaults('Patient Appointment', (workdesk.create_defaults || {})['Patient Appointment'] || {}, row);
 		} else if (action === 'new-invoice') {
@@ -1905,6 +1986,27 @@ class VobizAgentConsole {
 			}
 			setTimeout(() => this.open_whatsapp(row, $body), 60);
 		}
+	}
+
+	save_workdesk_note(row, $body) {
+		const $input = ($body || this.state.active_workdesk_body).find('[data-workdesk-note]').first();
+		const note = ($input.val() || '').trim();
+		if (!note) {
+			frappe.show_alert({ message: __('Add a note first.'), indicator: 'orange' });
+			return;
+		}
+		frappe.call({
+			method: 'vobiz_click_to_call.api.console.save_reference_note',
+			args: {
+				reference_doctype: row.doctype,
+				reference_name: row.name,
+				note
+			},
+			type: 'POST'
+		}).then(() => {
+			$input.val('');
+			frappe.show_alert({ message: __('Note saved'), indicator: 'green' });
+		});
 	}
 
 	new_doc_with_defaults(doctype, defaults, row) {
@@ -2800,25 +2902,24 @@ class VobizAgentConsole {
 				},
 				{
 					fieldname: 'disposition',
-					fieldtype: 'Select',
-					label: __('SR Lead Disposition'),
-					options: [''].concat(options).join('\n'),
-					reqd: 1,
-					default: suggested
-				},
+						fieldtype: 'Select',
+						label: __('SR Lead Disposition'),
+						options: [''].concat(options).join('\n'),
+						default: suggested
+					},
 				{
 					fieldname: 'notes',
 					fieldtype: 'Small Text',
 					label: __('Notes'),
 					default: notes
 				}
-			],
-			primary_action_label: __('Save Disposition'),
-			primary_action: (values) => {
-				if ((statusOptions.length && !values.lead_status) || !values.disposition) {
-					frappe.msgprint(__('Select CRM status and SR lead disposition.'));
-					return;
-				}
+				],
+				primary_action_label: __('Save Disposition'),
+				primary_action: (values) => {
+					if (statusOptions.length && !values.lead_status) {
+						frappe.msgprint(__('Select CRM status.'));
+						return;
+					}
 				dialog.get_primary_btn().prop('disabled', true).text(__('Saving...'));
 				frappe.call('vobiz_click_to_call.api.disposition.save_disposition', {
 					call_log: call.name,
@@ -2869,8 +2970,8 @@ class VobizAgentConsole {
 			frappe.msgprint(__('No active call selected.'));
 			return;
 		}
-		if ((statusOptions.length && !leadStatus) || !disposition) {
-			frappe.msgprint(__('Select CRM status and SR lead disposition.'));
+		if (statusOptions.length && !leadStatus) {
+			frappe.msgprint(__('Select CRM status.'));
 			return;
 		}
 		frappe.call('vobiz_click_to_call.api.disposition.save_disposition', {

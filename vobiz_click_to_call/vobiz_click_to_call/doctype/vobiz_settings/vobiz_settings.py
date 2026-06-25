@@ -28,6 +28,11 @@ class VobizSettings(Document):
                 self.end_fallback_mobile,
                 default_country_code=self.default_country_code,
             )
+        if self.enable_busy_callback_ai_fallback and self.busy_callback_ai_fallback_mobile:
+            self.busy_callback_ai_fallback_mobile = normalize_phone_number(
+                self.busy_callback_ai_fallback_mobile,
+                default_country_code=self.default_country_code,
+            )
         self.allowed_doctypes = (self.allowed_doctypes or "CRM Lead\nContact\nPatient\nCustomer").strip()
         self.default_call_flow = self.default_call_flow or "Customer First"
         if self.webhook_base_url:
@@ -42,6 +47,8 @@ class VobizSettings(Document):
         self.max_call_duration = self.max_call_duration or 3600
         if self.enable_end_fallback and not self.end_fallback_mobile:
             frappe.throw(_("End Fallback Mobile is required when End Fallback is enabled."))
+        if self.enable_busy_callback_ai_fallback and not self.busy_callback_ai_fallback_mobile:
+            frappe.throw(_("Busy Callback AI Fallback Mobile is required when Busy Callback AI Fallback is enabled."))
         self.max_call_attempts_per_reference_per_day = self.max_call_attempts_per_reference_per_day or 0
         self.max_calls_per_user_per_day = self.max_calls_per_user_per_day or 0
         self.http_timeout = self.http_timeout or 20

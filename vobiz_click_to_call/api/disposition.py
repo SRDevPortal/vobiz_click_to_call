@@ -38,7 +38,7 @@ def get_lead_disposition_context_api(
 @frappe.whitelist()
 def save_disposition(
     call_log: str,
-    disposition: str,
+    disposition: str | None = None,
     notes: str = "",
     lead_status: str | None = None,
     follow_up_datetime: str | None = None,

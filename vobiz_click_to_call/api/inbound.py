@@ -47,6 +47,9 @@ def route():
         call_log = find_existing_inbound_call(payload)
         if call_log:
             update_inbound_call_event(call_log, payload)
+            if call_log.status in TERMINAL_STATUSES:
+                restore_mapping_after_call(call_log.name)
+                frappe.db.commit()
         else:
             log_vobiz_event("Inbound hangup ignored: matching call log not found", severity="Warning", payload=payload)
         return _plain_response("OK")
@@ -94,6 +97,7 @@ def route():
         payload,
         target_user=target.get("user") or previous.user,
         route_type=target.get("route_type") or "last_agent",
+        origin_user=previous.user,
     )
     update_inbound_call_event(call_log, payload, commit=False)
     if target.get("is_mapped_agent"):
@@ -132,6 +136,23 @@ def dial_action(call_log: str | None = None, token: str | None = None):
     apply_provider_payload(doc, payload)
     status = str(_first_value(payload, "DialCallStatus", "dial_call_status", "DialStatus", "dial_status", "Status", "status") or "").strip().lower()
     failed = _dial_failed(status) or _dial_completed_without_bridge(payload, doc.status)
+    if failed:
+        next_target = _next_inbound_fallback(doc)
+        if next_target.get("agent_mobile"):
+            settings = get_settings()
+            restore_mapping_after_call(doc.name)
+            doc.user = next_target.get("user") or doc.user
+            doc.agent_number = next_target["agent_mobile"]
+            doc.user_mobile = next_target["agent_mobile"]
+            doc.status = "Agent Ringing"
+            doc.error_message = next_target.get("message") or "Mapped agent did not answer; routing to fallback agent."
+            _mark_route_attempted(doc, doc.user)
+            doc.save(ignore_permissions=True)
+            if next_target.get("is_mapped_agent"):
+                _mark_mapping_busy(doc.user, doc.name)
+            frappe.db.commit()
+            return _xml_response(_dial_agent_xml(doc, next_target["agent_mobile"], settings))
+
     if failed and _should_try_end_fallback(doc):
         settings = get_settings()
         end_mobile = _end_fallback_mobile(settings)
@@ -207,6 +228,7 @@ def create_inbound_call_log(
     payload: dict[str, Any],
     target_user: str | None = None,
     route_type: str = "last_agent",
+    origin_user: str | None = None,
 ):
     doc = frappe.get_doc(
         {
@@ -241,6 +263,8 @@ def create_inbound_call_log(
             "error_message": f"Inbound route: {route_type}",
         }
     )
+    _set_request_data(doc, "fallback_origin_user", origin_user or previous.user)
+    _set_request_data(doc, "fallback_attempted_users", [target_user or previous.user])
     apply_provider_payload(doc, payload)
     doc.crm_lead = previous.crm_lead
     doc.patient = previous.patient
@@ -379,35 +403,62 @@ def apply_provider_payload(doc, payload: dict[str, Any]) -> None:
 
 def resolve_inbound_target(previous, settings=None) -> dict[str, Any]:
     settings = settings or get_settings()
-    is_patient = previous.reference_doctype == "Patient" or bool(previous.patient)
     mapping = get_user_mapping(previous.user)
     primary_mobile = _mapping_mobile(mapping, previous.user_mobile)
 
-    if not is_patient:
-        if mapping and primary_mobile and _mapping_can_receive(previous.user, mapping):
-            return {"user": previous.user, "agent_mobile": primary_mobile, "route_type": "last_agent", "is_mapped_agent": True}
-        return {"reason": "Mapped agent is not active on Vobiz Agent Console."}
-
     if mapping and primary_mobile and _mapping_can_receive(previous.user, mapping):
-        return {"user": previous.user, "agent_mobile": primary_mobile, "route_type": "patient_last_agent", "is_mapped_agent": True}
+        return {"user": previous.user, "agent_mobile": primary_mobile, "route_type": "last_agent", "is_mapped_agent": True}
 
-    fallback_user = (mapping or {}).get("fallback_user")
-    if fallback_user:
+    for fallback_user in _fallback_users(mapping):
         fallback_mapping = get_user_mapping(fallback_user)
         fallback_mobile = _mapping_mobile(fallback_mapping, "")
         if fallback_mapping and fallback_mobile and _mapping_can_receive(fallback_user, fallback_mapping):
             return {
                 "user": fallback_user,
                 "agent_mobile": fallback_mobile,
-                "route_type": "patient_fallback_user",
+                "route_type": "fallback_user",
                 "is_mapped_agent": True,
             }
+
+    busy_ai_mobile = _busy_callback_ai_fallback_mobile(settings)
+    if busy_ai_mobile:
+        return {"user": previous.user, "agent_mobile": busy_ai_mobile, "route_type": "busy_callback_ai_fallback", "is_mapped_agent": False}
 
     end_mobile = _end_fallback_mobile(settings)
     if end_mobile:
         return {"user": previous.user, "agent_mobile": end_mobile, "route_type": "end_fallback_mobile", "is_mapped_agent": False}
 
-    return {"reason": "Patient last agent and fallback user were unavailable, and end fallback is disabled."}
+    return {"reason": "Last agent and fallback users were unavailable, and callback fallback is disabled."}
+
+
+def _next_inbound_fallback(doc) -> dict[str, Any]:
+    origin_user = _request_data(doc, "fallback_origin_user") or doc.user
+    attempted = set(_request_data(doc, "fallback_attempted_users") or [])
+    mapping = get_user_mapping(origin_user)
+    for fallback_user in _fallback_users(mapping):
+        if fallback_user in attempted:
+            continue
+        fallback_mapping = get_user_mapping(fallback_user)
+        fallback_mobile = _mapping_mobile(fallback_mapping, "")
+        if fallback_mapping and fallback_mobile and _mapping_can_receive(fallback_user, fallback_mapping):
+            return {
+                "user": fallback_user,
+                "agent_mobile": fallback_mobile,
+                "route_type": "fallback_user",
+                "is_mapped_agent": True,
+                "message": "Mapped agent did not answer; routing to fallback agent.",
+            }
+    busy_ai_mobile = _busy_callback_ai_fallback_mobile()
+    if busy_ai_mobile and not _request_flag(doc, "busy_callback_ai_fallback_attempted"):
+        _set_request_flag(doc, "busy_callback_ai_fallback_attempted", True)
+        return {
+            "user": origin_user,
+            "agent_mobile": busy_ai_mobile,
+            "route_type": "busy_callback_ai_fallback",
+            "is_mapped_agent": False,
+            "message": "All mapped agents were unavailable; routing to busy callback AI fallback.",
+        }
+    return {}
 
 
 def _active_agent_mobile(previous) -> str:
@@ -421,6 +472,20 @@ def _mapping_mobile(mapping: dict[str, Any] | None, fallback: str = "") -> str:
     if not mapping:
         return normalize_phone_number(fallback, default_country_code=get_default_country_code())
     return normalize_phone_number(mapping.get("agent_mobile") or fallback, default_country_code=get_default_country_code())
+
+
+def _fallback_users(mapping: dict[str, Any] | None) -> list[str]:
+    if not mapping:
+        return []
+    values = []
+    seen = set()
+    for raw in (mapping.get("fallback_user") or "", mapping.get("fallback_users") or ""):
+        for row in str(raw).replace(",", "\n").splitlines():
+            row = row.strip()
+            if row and row not in seen:
+                values.append(row)
+                seen.add(row)
+    return values
 
 
 def _mapping_can_receive(user: str, mapping: dict[str, Any]) -> bool:
@@ -471,6 +536,16 @@ def _end_fallback_mobile(settings=None) -> str:
     if not frappe.utils.cint(getattr(settings, "enable_end_fallback", 0)):
         return ""
     return normalize_phone_number(getattr(settings, "end_fallback_mobile", "") or "", default_country_code=get_default_country_code(settings))
+
+
+def _busy_callback_ai_fallback_mobile(settings=None) -> str:
+    settings = settings or get_settings()
+    if not frappe.utils.cint(getattr(settings, "enable_busy_callback_ai_fallback", 0)):
+        return ""
+    return normalize_phone_number(
+        getattr(settings, "busy_callback_ai_fallback_mobile", "") or "",
+        default_country_code=get_default_country_code(settings),
+    )
 
 
 def _dial_agent_xml(call_log, agent_mobile: str, settings) -> str:
@@ -556,12 +631,33 @@ def _request_flag(doc, key: str) -> bool:
 
 
 def _set_request_flag(doc, key: str, value: Any) -> None:
+    _set_request_data(doc, key, value)
+
+
+def _request_data(doc, key: str):
+    try:
+        data = json.loads(doc.request_json or "{}")
+    except Exception:
+        return None
+    return data.get(key)
+
+
+def _set_request_data(doc, key: str, value: Any) -> None:
     try:
         data = json.loads(doc.request_json or "{}")
     except Exception:
         data = {}
     data[key] = value
     doc.request_json = json.dumps(data, indent=2, default=str)
+
+
+def _mark_route_attempted(doc, user: str | None) -> None:
+    if not user:
+        return
+    attempted = _request_data(doc, "fallback_attempted_users") or []
+    if user not in attempted:
+        attempted.append(user)
+    _set_request_data(doc, "fallback_attempted_users", attempted)
 
 
 def _wait_xml() -> str:

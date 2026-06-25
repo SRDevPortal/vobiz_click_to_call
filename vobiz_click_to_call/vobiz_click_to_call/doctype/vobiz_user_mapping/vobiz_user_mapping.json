@@ -13,7 +13,9 @@
   "caller_id",
   "patient_routing_section",
   "sr_medical_department",
+  "sr_medical_departments",
   "sr_followup_id",
+  "sr_followup_ids",
   "availability_section",
   "accept_calls",
   "availability_status",
@@ -27,7 +29,9 @@
   "working_days",
   "routing_section",
   "fallback_user",
+  "fallback_users",
   "team",
+  "team_leader",
   "pipeline",
   "notes"
  ],
@@ -95,12 +99,28 @@
   },
   {
    "depends_on": "eval:doc.queue_source=='Patient'",
+   "description": "Optional. Add one department per line to route this user to multiple patient departments.",
+   "fieldname": "sr_medical_departments",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "Departments"
+  },
+  {
+   "depends_on": "eval:doc.queue_source=='Patient'",
    "fieldname": "sr_followup_id",
    "fieldtype": "Select",
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Follow up ID",
    "options": "\n0\n1\n2\n3\n4\n5\n6\n7\n8\n9"
+  },
+  {
+   "depends_on": "eval:doc.queue_source=='Patient'",
+   "description": "Optional. Add one follow up ID per line, or separate IDs with commas.",
+   "fieldname": "sr_followup_ids",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "Follow up IDs"
   },
   {
    "fieldname": "availability_section",
@@ -181,11 +201,21 @@
    "label": "Routing"
   },
   {
-   "description": "Optional team label for reports and future routing.",
+   "description": "Team used for leader visibility and reports.",
    "fieldname": "team",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "in_standard_filter": 1,
-   "label": "Team"
+   "label": "Team",
+   "options": "Team"
+  },
+  {
+   "description": "Editable team leader. Auto-filled from Team > Team Lead when the Team value matches a Team.",
+   "fieldname": "team_leader",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Team Leader",
+   "options": "User"
   },
   {
    "description": "Optional pipeline label for reports and future pipeline-based caller mapping.",
@@ -195,12 +225,17 @@
    "label": "Pipeline"
   },
   {
-   "description": "Reserved fallback mapped user when this user is unavailable.",
-   "depends_on": "eval:doc.queue_source=='Patient'",
+   "description": "First fallback mapped user when this user is unavailable.",
    "fieldname": "fallback_user",
    "fieldtype": "Link",
    "label": "Fallback User",
    "options": "User"
+  },
+  {
+   "description": "Fallback mapped users in priority order. Add one user per line, or separate users with commas.",
+   "fieldname": "fallback_users",
+   "fieldtype": "Small Text",
+   "label": "Fallback Users"
   },
   {
    "fieldname": "notes",
@@ -209,7 +244,7 @@
   }
  ],
  "links": [],
- "modified": "2026-05-22 00:00:00.000000",
+ "modified": "2026-06-24 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Vobiz Click To Call",
  "name": "Vobiz User Mapping",

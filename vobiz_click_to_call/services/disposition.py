@@ -20,7 +20,7 @@ DND_DISPOSITIONS = {"Wrong Number", "Invalid Number", "Do Not Call"}
 def save_call_disposition(
     *,
     call_log: str,
-    disposition: str,
+    disposition: str | None = None,
     notes: str = "",
     lead_status: str | None = None,
     follow_up_datetime: str | None = None,
@@ -32,24 +32,23 @@ def save_call_disposition(
     lead_status = (lead_status or "").strip()
     disposition = (disposition or "").strip()
     notes = (notes or "").strip()
-    if not disposition:
-        frappe.throw(_("Disposition is required."))
     allowed_dispositions = get_manual_disposition_options(
         reference_doctype=doc.reference_doctype,
         reference_name=doc.reference_name,
         lead_status=lead_status,
     )
-    if allowed_dispositions and disposition not in allowed_dispositions:
+    if disposition and allowed_dispositions and disposition not in allowed_dispositions:
         frappe.throw(_("Invalid disposition."))
 
-    sync_call_log_disposition_options(disposition)
+    if disposition:
+        sync_call_log_disposition_options(disposition)
     doc.disposition = disposition
     doc.disposition_notes = notes
     doc.follow_up_datetime = follow_up_datetime
     doc.disposition_by = frappe.session.user
     doc.disposition_at = frappe.utils.now()
 
-    if mark_dnd or disposition in DND_DISPOSITIONS:
+    if disposition and (mark_dnd or disposition in DND_DISPOSITIONS):
         block_number(
             phone_number=doc.customer_number,
             reason="Wrong Number" if disposition in {"Wrong Number", "Invalid Number"} else "Do Not Call",
@@ -64,7 +63,7 @@ def save_call_disposition(
         doc.follow_up_todo = upsert_follow_up_todo(doc, follow_up_datetime)
 
     doc.save(ignore_permissions=True)
-    lead_sync = sync_call_disposition_safely(doc, disposition, lead_status)
+    lead_sync = sync_call_disposition_safely(doc, disposition, lead_status) if (disposition or lead_status) else {"synced": False, "reason": "No CRM status or disposition provided."}
     update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
     sync_linked_summaries(doc)
     add_disposition_comment(doc)
@@ -95,7 +94,7 @@ def assert_user_can_update_disposition(doc) -> None:
         frappe.throw(_("Not permitted."))
 
 
-def sync_call_disposition_safely(doc, disposition: str, lead_status: str | None = None) -> dict:
+def sync_call_disposition_safely(doc, disposition: str | None = None, lead_status: str | None = None) -> dict:
     try:
         result = sync_call_disposition_to_lead(doc, disposition, lead_status)
         if not result.get("synced"):
@@ -253,7 +252,7 @@ def add_disposition_comment(call_log_doc) -> None:
     try:
         ref = frappe.get_doc(call_log_doc.reference_doctype, call_log_doc.reference_name)
         text = (
-            f"Vobiz call disposition: {call_log_doc.disposition}\n\n"
+            f"Vobiz call disposition: {call_log_doc.disposition or '-'}\n\n"
             f"Status: {call_log_doc.status}\n"
             f"Notes: {call_log_doc.disposition_notes or '-'}"
         )

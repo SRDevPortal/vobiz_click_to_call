@@ -111,7 +111,20 @@ def sync_call_disposition_to_lead(call_log_doc, disposition: str, lead_status: s
 
     disposition = (disposition or "").strip()
     if not disposition:
-        return {"synced": False, "reason": "Disposition is empty."}
+        if not lead_status:
+            return {"synced": False, "reason": "Disposition and lead status are empty."}
+        lead = frappe.get_doc(CRM_LEAD, call_log_doc.reference_name)
+        if lead.meta.has_field("status"):
+            lead.set("status", lead_status)
+            lead.save(ignore_permissions=True)
+            return {
+                "synced": True,
+                "lead": lead.name,
+                "status": lead.get("status"),
+                "disposition": "",
+                "disposition_field": get_lead_disposition_field(frappe.get_meta(CRM_LEAD)) or "",
+            }
+        return {"synced": False, "reason": "CRM Lead status field not found."}
 
     filters = {"sr_disposition_name": disposition, "is_active": 1}
     if lead_status:
