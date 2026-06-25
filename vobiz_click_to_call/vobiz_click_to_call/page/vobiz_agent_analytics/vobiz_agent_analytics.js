@@ -349,9 +349,10 @@ class VobizAgentAnalytics {
 		this.page.main.find('[data-role="status-filter"]').val(data.status_filter || this.state.status_filter);
 		const agents = data.agent_options || [];
 		const $agent = this.page.main.find('[data-role="agent-user"]');
-		if (data.is_admin) {
+		if (data.is_admin || data.is_team_leader) {
+			const label = data.is_admin ? __('All Agents') : __('All Team Agents');
 			$agent.prop('disabled', false).html([
-				`<option value="">${__('All Agents')}</option>`,
+				`<option value="">${label}</option>`,
 				...agents.map(value => `<option value="${this.escape(value)}">${this.escape(value)}</option>`)
 			].join(''));
 			$agent.val(data.agent_user || this.state.agent_user || '');

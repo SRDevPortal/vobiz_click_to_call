@@ -490,6 +490,9 @@ def _analytics_data(
         filters["reference_doctype"] = "CRM Lead"
 
     is_admin = _can_view_all_analytics_agents()
+    if not is_admin and queue_source in {"CRM Lead", "Discontinued", COMBINED_QUEUE_SOURCE}:
+        _apply_visible_crm_lead_scope(filters)
+
     team_scope = [] if is_admin else _team_member_users_for_leader(frappe.session.user)
     agent_user = (agent_user or "").strip()
     if is_admin and agent_user:
@@ -569,6 +572,16 @@ def _analytics_sql_conditions(start: str, end: str, filters: dict[str, Any]) -> 
     if filters.get("reference_doctype"):
         params["reference_doctype"] = filters["reference_doctype"]
         conditions.append("`reference_doctype` = %(reference_doctype)s")
+    if filters.get("reference_names"):
+        params["reference_names"] = tuple(filters["reference_names"])
+        conditions.append("`reference_name` in %(reference_names)s")
+    if filters.get("crm_lead_reference_names"):
+        params["crm_lead_reference_names"] = tuple(filters["crm_lead_reference_names"])
+        conditions.append("(`reference_doctype` != 'CRM Lead' or `reference_name` in %(crm_lead_reference_names)s)")
+    if filters.get("exclude_crm_leads"):
+        conditions.append("`reference_doctype` != 'CRM Lead'")
+    if filters.get("force_empty"):
+        conditions.append("1 = 0")
     if filters.get("user"):
         params["user"] = filters["user"]
         conditions.append("`user` = %(user)s")
@@ -898,6 +911,39 @@ def _analytics_agent_options(is_admin: bool, team_scope: list[str] | None = None
     return cleaned
 
 
+def _apply_visible_crm_lead_scope(filters: dict[str, Any]) -> None:
+    if not frappe.db.exists("DocType", "CRM Lead"):
+        if filters.get("reference_doctype") == "CRM Lead":
+            filters["force_empty"] = True
+        return
+
+    lead_names = _visible_crm_lead_names()
+    if filters.get("reference_doctype") == "CRM Lead":
+        if lead_names:
+            filters["reference_names"] = lead_names
+        else:
+            filters["force_empty"] = True
+        return
+
+    if lead_names:
+        filters["crm_lead_reference_names"] = lead_names
+    else:
+        filters["exclude_crm_leads"] = True
+
+
+def _visible_crm_lead_names() -> list[str]:
+    try:
+        return frappe.get_list(
+            "CRM Lead",
+            pluck="name",
+            order_by="modified desc",
+            limit_page_length=50000,
+        )
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Vobiz analytics CRM Lead permission scope failed")
+        return []
+
+
 def _can_view_all_analytics_agents() -> bool:
     if frappe.session.user == "Administrator":
         return True
@@ -914,25 +960,40 @@ def _can_view_all_analytics_agents() -> bool:
 
 def _team_member_users_for_leader(team_leader: str | None) -> list[str]:
     team_leader = (team_leader or "").strip()
-    if not team_leader or not frappe.db.exists("DocType", "Team") or not frappe.db.exists("DocType", "Team User"):
+    if not team_leader:
         return []
-    teams = frappe.get_all("Team", filters={"team_lead": team_leader, "is_active": 1}, pluck="name")
-    if not teams:
-        return []
-    members = frappe.get_all(
-        "Team User",
-        filters={"parent": ["in", teams], "is_active": 1},
-        pluck="user",
-        order_by="user asc",
-    )
-    users = [team_leader]
+
+    users = []
     seen = {team_leader}
-    for user in members:
+    if frappe.db.exists("DocType", "Team") and frappe.db.exists("DocType", "Team User"):
+        teams = frappe.get_all("Team", filters={"team_lead": team_leader, "is_active": 1}, pluck="name")
+        if teams:
+            users.extend(
+                frappe.get_all(
+                    "Team User",
+                    filters={"parent": ["in", teams], "is_active": 1},
+                    pluck="user",
+                    order_by="user asc",
+                )
+            )
+
+    if frappe.db.exists("DocType", "Vobiz User Mapping"):
+        users.extend(
+            frappe.get_all(
+                "Vobiz User Mapping",
+                filters={"enabled": 1, "team_leader": team_leader},
+                pluck="user",
+                order_by="user asc",
+            )
+        )
+
+    cleaned = [team_leader]
+    for user in users:
         user = (user or "").strip()
         if user and user not in seen:
-            users.append(user)
+            cleaned.append(user)
             seen.add(user)
-    return users
+    return cleaned if len(cleaned) > 1 else []
 
 
 def _analytics_date_range(from_date: str | None, to_date: str | None) -> tuple[str, str]:
@@ -1242,7 +1303,8 @@ def _queue_for_doctype(
     filters.extend(_safe_user_filters(meta, user_filters))
     query = (search or "").strip()
     search_fields = _queue_search_fields(meta, fields) if query else []
-    rows = frappe.get_all(
+    fetch_rows = frappe.get_list if doctype == "CRM Lead" else frappe.get_all
+    rows = fetch_rows(
         doctype,
         filters=filters,
         or_filters=_queue_search_filters(search_fields, query) if query else None,
@@ -1255,6 +1317,11 @@ def _queue_for_doctype(
 
 def _queue_filters(meta, queue_source: str | None = None, agent: dict[str, Any] | None = None, followup_day: str | None = None) -> dict[str, Any]:
     filters: dict[str, Any] = {}
+    if meta.name == "CRM Lead":
+        if queue_source == "Discontinued" and meta.has_field("vobiz_last_call_status"):
+            filters["vobiz_last_call_status"] = ["in", sorted(MISSED_STATUSES | {"Cancelled", "Canceled"})]
+        return filters
+
     if meta.has_field("disabled"):
         filters["disabled"] = ["!=", 1]
     if meta.has_field("vobiz_do_not_call"):
@@ -1268,8 +1335,6 @@ def _queue_filters(meta, queue_source: str | None = None, agent: dict[str, Any] 
             filters["sr_followup_id"] = ["in", followup_ids] if followup_ids else "__no_patient_followup_mapping__"
         if followup_day and meta.has_field("sr_followup_day"):
             filters["sr_followup_day"] = followup_day
-    if meta.name == "CRM Lead" and queue_source == "Discontinued" and meta.has_field("vobiz_last_call_status"):
-        filters["vobiz_last_call_status"] = ["in", sorted(MISSED_STATUSES | {"Cancelled", "Canceled"})]
     return filters
 
 
