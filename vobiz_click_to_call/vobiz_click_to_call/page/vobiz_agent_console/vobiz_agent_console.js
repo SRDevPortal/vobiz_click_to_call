@@ -30,6 +30,7 @@ class VobizAgentConsole {
 			queue: [],
 			queue_meta: this.default_queue_meta(),
 			selected: null,
+			selected_queue_keys: new Set(),
 			active_call: null,
 			call_started_at: null,
 			dispositions: [],
@@ -411,15 +412,39 @@ class VobizAgentConsole {
 		$main.on('change', '[data-role="lead-status"]', () => this.refresh_lead_disposition_options());
 		$main.on('click', '[data-tab]', (e) => this.show_tab($(e.currentTarget).data('tab')));
 		$main.on('change', '[data-role="check-all"]', (e) => {
-			$main.find('[data-role="row-check"]').prop('checked', e.currentTarget.checked);
+			const checked = e.currentTarget.checked;
+			$main.find('[data-role="row-check"]').each((_, el) => {
+				const row = this.state.queue[$(el).closest('tr').data('index')];
+				const key = this.queue_row_key(row);
+				if (key) {
+					if (checked) {
+						this.state.selected_queue_keys.add(key);
+					} else {
+						this.state.selected_queue_keys.delete(key);
+					}
+				}
+				$(el).prop('checked', checked);
+			});
 			this.update_selected_count();
 		});
-		$main.on('change', '[data-role="row-check"]', () => this.update_selected_count());
+		$main.on('change', '[data-role="row-check"]', (e) => {
+			const row = this.state.queue[$(e.currentTarget).closest('tr').data('index')];
+			const key = this.queue_row_key(row);
+			if (key) {
+				if (e.currentTarget.checked) {
+					this.state.selected_queue_keys.add(key);
+				} else {
+					this.state.selected_queue_keys.delete(key);
+				}
+			}
+			this.update_selected_count();
+		});
 		$main.on('click', '[data-role="row-check"]', (e) => e.stopPropagation());
 		$main.on('input', '[data-role="search"]', () => this.queue_search_changed());
 		$main.on('change', '[data-role="queue-source-filter"]', () => {
 			this.state.queue_filters = [];
 			this.state.filter_group = null;
+			this.state.selected_queue_keys.clear();
 			this.load();
 		});
 		$(document).on('visibilitychange.vobiz-agent-console', () => {
@@ -460,6 +485,7 @@ class VobizAgentConsole {
 			const data = r.message || {};
 			this.state.queue = data.queue || [];
 			this.state.queue_meta = Object.assign(this.default_queue_meta(), data.queue_meta || {});
+			this.prune_selected_queue_keys();
 			this.reset_filter_group_if_doctype_changed();
 			this.state.active_call = data.active_call || null;
 			this.state.dispositions = data.dispositions || [];
@@ -648,14 +674,18 @@ class VobizAgentConsole {
 
 	render_queue() {
 		this.render_queue_meta();
-		const query = (this.page.main.find('[data-role="search"]').val() || '').toLowerCase();
-		const rows = this.state.queue
-			.map((row, index) => ({ ...row, index }))
-			.filter(row => !query || [row.name, row.title, row.company, row.phone, row.status, row.next_action, row.team, row.sr_medical_department, row.sr_followup_id, row.sr_followup_day].join(' ').toLowerCase().includes(query));
+		const rows = this.visible_queue_rows();
 		this.page.main.find('[data-role="queue"]').html(rows.map(row => this.row_html(row)).join('') || `
 			<tr><td colspan="${this.queue_colspan()}" class="text-muted text-center">${frappe.utils.escape_html(this.queue_meta_value('empty_message'))}</td></tr>
 		`);
 		this.update_selected_count();
+	}
+
+	visible_queue_rows() {
+		const query = (this.page.main.find('[data-role="search"]').val() || '').toLowerCase();
+		return this.state.queue
+			.map((row, index) => ({ ...row, index }))
+			.filter(row => !query || [row.name, row.title, row.company, row.phone, row.status, row.next_action, row.team, row.sr_medical_department, row.sr_followup_id, row.sr_followup_day].join(' ').toLowerCase().includes(query));
 	}
 
 	render_queue_meta() {
@@ -744,9 +774,10 @@ class VobizAgentConsole {
 		const initials = (row.title || row.name || '?').trim().slice(0, 1).toUpperCase();
 		const statusClass = String(row.status || '').split(' ')[0];
 		const loading = this.state.detail_loading_key === this.detail_key(row);
+		const checked = this.state.selected_queue_keys.has(this.queue_row_key(row)) ? 'checked' : '';
 		return `
 			<tr data-index="${row.index}" data-action="select-row">
-				<td><input type="checkbox" data-role="row-check"></td>
+				<td><input type="checkbox" data-role="row-check" ${checked}></td>
 				<td><code>${frappe.utils.escape_html(row.name || '')}</code></td>
 				<td><div class="vobiz-person"><span class="vobiz-avatar">${frappe.utils.escape_html(initials)}</span><span>${frappe.utils.escape_html(row.title || row.name || '')}</span></div></td>
 				<td>${frappe.utils.escape_html(row.phone || '')}</td>
@@ -770,8 +801,9 @@ class VobizAgentConsole {
 	}
 
 	update_selected_count() {
-		const count = this.page.main.find('[data-role="row-check"]:checked').length;
+		const count = this.selected_queue_rows().length;
 		const selectedLabel = this.queue_meta_value('selected_label');
+		this.sync_check_all_state();
 		const session = this.state.auto_dial || {};
 		if (session.running || (session.results || []).length) {
 			const total = (session.queue || []).length;
@@ -783,6 +815,34 @@ class VobizAgentConsole {
 			return;
 		}
 		this.page.main.find('[data-role="selected-count"]').text(__('{0} {1} selected', [count, selectedLabel]));
+	}
+
+	queue_row_key(row) {
+		if (!row || !row.name) return '';
+		return `${row.doctype || this.queue_meta_value('doctype') || ''}::${row.name}`;
+	}
+
+	prune_selected_queue_keys() {
+		const available = new Set((this.state.queue || []).map(row => this.queue_row_key(row)).filter(Boolean));
+		Array.from(this.state.selected_queue_keys || []).forEach(key => {
+			if (!available.has(key)) {
+				this.state.selected_queue_keys.delete(key);
+			}
+		});
+	}
+
+	selected_queue_rows() {
+		const selected = this.state.selected_queue_keys || new Set();
+		return (this.state.queue || []).filter(row => selected.has(this.queue_row_key(row)));
+	}
+
+	sync_check_all_state() {
+		const rows = this.visible_queue_rows();
+		const selected = this.state.selected_queue_keys || new Set();
+		const selectedVisible = rows.filter(row => selected.has(this.queue_row_key(row))).length;
+		const $checkAll = this.page.main.find('[data-role="check-all"]');
+		$checkAll.prop('checked', Boolean(rows.length && selectedVisible === rows.length));
+		$checkAll.prop('indeterminate', Boolean(selectedVisible && selectedVisible < rows.length));
 	}
 
 	render_auto_toggle() {
@@ -2532,10 +2592,7 @@ class VobizAgentConsole {
 	}
 
 	start_auto_dial() {
-		const rows = this.page.main.find('[data-role="row-check"]:checked').map((_, el) => {
-			const index = $(el).closest('tr').data('index');
-			return this.state.queue[index];
-		}).get().filter(Boolean);
+		const rows = this.selected_queue_rows();
 		if (!rows.length) {
 			frappe.msgprint(__('Select at least one lead to start auto dial.'));
 			return;

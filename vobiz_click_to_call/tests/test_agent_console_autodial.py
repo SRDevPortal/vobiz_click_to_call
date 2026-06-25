@@ -97,6 +97,20 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("request.always(() => this.set_detail_loading(row, false))", call_row_source)
         self.assertIn("this.render_queue()", loading_source)
 
+    def test_queue_selection_survives_refresh_for_autodial(self):
+        row_html_source = self.method_source("row_html", "is_patient_queue")
+        update_source = self.method_source("update_selected_count", "render_auto_toggle")
+        start_source = self.method_source("start_auto_dial", "stop_auto_dial")
+
+        self.assertIn("selected_queue_keys: new Set()", self.source)
+        self.assertIn("this.state.selected_queue_keys.add(key)", self.source)
+        self.assertIn("this.state.selected_queue_keys.delete(key)", self.source)
+        self.assertIn("this.prune_selected_queue_keys()", self.source)
+        self.assertIn("this.state.selected_queue_keys.has(this.queue_row_key(row))", row_html_source)
+        self.assertIn("selected_queue_rows()", update_source)
+        self.assertIn("sync_check_all_state()", update_source)
+        self.assertIn("const rows = this.selected_queue_rows()", start_source)
+
     def test_workdesk_primary_button_toggles_start_and_stop_call(self):
         open_dialog_source = self.method_source("open_detail_dialog", "handle_workdesk_primary_action")
         primary_source = self.method_source("handle_workdesk_primary_action", "update_workdesk_primary_action")
