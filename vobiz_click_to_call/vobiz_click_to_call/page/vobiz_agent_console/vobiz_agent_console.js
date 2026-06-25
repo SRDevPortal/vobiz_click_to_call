@@ -1,9 +1,11 @@
 frappe.pages['vobiz-agent-console'].on_page_load = function(wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
-		title: __('Vobiz Agent Console'),
+		title: '',
 		single_column: true
 	});
+	$(wrapper).find('.page-head').hide();
+	$(wrapper).find('.page-body').css('padding-top', '12px');
 	wrapper.vobiz_agent_console = new VobizAgentConsole(page);
 };
 
@@ -127,7 +129,7 @@ class VobizAgentConsole {
 						<div class="vobiz-section-title">
 							<h3 data-role="queue-title">${__('Lead Queue')}</h3>
 							<div class="vobiz-queue-tools">
-								<select class="form-control input-sm hidden" data-role="followup-day-filter"></select>
+								<select class="form-control input-sm hidden" data-role="queue-source-filter"></select>
 								<button class="btn btn-default btn-sm vobiz-filter-btn" data-action="open-filters">
 									<i class="fa fa-filter filter-icon"></i> <span class="button-label">${__('Filters')}</span>
 								</button>
@@ -202,7 +204,7 @@ class VobizAgentConsole {
 		if ($('#vobiz-agent-console-style').length) return;
 		$('head').append(`
 			<style id="vobiz-agent-console-style">
-				.vobiz-console { background: #f7f7fb; margin: -15px; min-height: calc(100vh - 60px); overflow-x: hidden; padding: 24px; }
+				.vobiz-console { background: #f7f7fb; margin: 0 -15px -15px; min-height: calc(100vh - 72px); overflow-x: hidden; padding: 24px; }
 				.vobiz-console-head { align-items: center; display: flex; justify-content: space-between; margin-bottom: 20px; }
 				.vobiz-console-head h2 { font-size: 22px; font-weight: 700; margin: 0; }
 				.vobiz-eyebrow { color: #6b7280; font-size: 11px; font-weight: 700; letter-spacing: .04em; margin-bottom: 4px; }
@@ -415,7 +417,11 @@ class VobizAgentConsole {
 		$main.on('change', '[data-role="row-check"]', () => this.update_selected_count());
 		$main.on('click', '[data-role="row-check"]', (e) => e.stopPropagation());
 		$main.on('input', '[data-role="search"]', () => this.queue_search_changed());
-		$main.on('change', '[data-role="followup-day-filter"]', () => this.load());
+		$main.on('change', '[data-role="queue-source-filter"]', () => {
+			this.state.queue_filters = [];
+			this.state.filter_group = null;
+			this.load();
+		});
 		$(document).on('visibilitychange.vobiz-agent-console', () => {
 			if (document.hidden) {
 				this.stop_console_heartbeat();
@@ -444,11 +450,11 @@ class VobizAgentConsole {
 			return;
 		}
 		const search = (this.page.main.find('[data-role="search"]').val() || '').trim();
-		const followup_day = (this.page.main.find('[data-role="followup-day-filter"]').val() || '').trim();
+		const queue_source_filter = (this.page.main.find('[data-role="queue-source-filter"]').val() || '').trim();
 		frappe.call('vobiz_click_to_call.api.console.get_agent_console_data', {
 			limit: 500,
 			search,
-			followup_day,
+			queue_source_filter,
 			filters: JSON.stringify(this.state.queue_filters || [])
 		}).then((r) => {
 			const data = r.message || {};
@@ -658,7 +664,7 @@ class VobizAgentConsole {
 		this.page.main.find('[data-role="queue-id-label"]').text(meta.id_label || __('CRM Lead ID'));
 		this.page.main.find('.vobiz-patient-col').toggleClass('hidden', (meta.doctype || '') !== 'Patient');
 		this.page.main.find('.vobiz-team-col').toggleClass('hidden', (meta.doctype || '') === 'Patient');
-		this.render_followup_day_filter(meta);
+		this.render_queue_source_filter(meta);
 	}
 
 	queue_colspan() {
@@ -712,20 +718,19 @@ class VobizAgentConsole {
 			.html(count ? __('Filters {0}', [`<span class="filter-label">${count}</span>`]) : __('Filters'));
 	}
 
-	render_followup_day_filter(meta) {
-		const $filter = this.page.main.find('[data-role="followup-day-filter"]');
-		if ((meta.doctype || '') !== 'Patient') {
+	render_queue_source_filter(meta) {
+		const $filter = this.page.main.find('[data-role="queue-source-filter"]');
+		const options = Array.isArray(meta.source_options) ? meta.source_options : [];
+		if (options.length <= 1) {
 			$filter.addClass('hidden').val('');
 			return;
 		}
 		const current = $filter.val() || '';
-		const options = String(meta.followup_day_options || '').split('\n').map(value => value.trim()).filter(Boolean);
-		$filter.html([
-			`<option value="">${__('All Follow-up Days')}</option>`,
-			...options.map(value => `<option value="${frappe.utils.escape_html(value)}">${frappe.utils.escape_html(value)}</option>`)
-		].join(''));
+		$filter.html(options.map(value => `<option value="${frappe.utils.escape_html(value)}">${frappe.utils.escape_html(value)}</option>`).join(''));
 		if (current && options.includes(current)) {
 			$filter.val(current);
+		} else {
+			$filter.val(meta.source || options[0]);
 		}
 		$filter.removeClass('hidden');
 	}

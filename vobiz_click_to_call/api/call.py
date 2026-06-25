@@ -552,7 +552,7 @@ def has_mapped_patient_access(reference_doctype: str, reference_name: str, user:
     if reference_doctype != "Patient" or not frappe.db.exists("DocType", "Patient"):
         return False
     mapping = get_user_mapping(user or frappe.session.user)
-    if not mapping or (mapping.get("queue_source") or "").strip() != "Patient":
+    if not mapping or (mapping.get("queue_source") or "").strip() not in {"Patient", "CRM Lead and Patient"}:
         return False
     meta = frappe.get_meta("Patient")
     filters: dict[str, Any] = {"name": reference_name}

@@ -20,9 +20,9 @@ class VobizUserMapping(Document):
 
         self.availability_status = self.availability_status or "Available"
         self.queue_source = self.queue_source or "CRM Lead"
-        if self.queue_source not in {"CRM Lead", "Patient", "Discontinued"}:
-            frappe.throw(_("Queue Source must be CRM Lead, Patient, or Discontinued."))
-        if self.queue_source == "Patient":
+        if self.queue_source not in {"CRM Lead", "Patient", "CRM Lead and Patient", "Discontinued"}:
+            frappe.throw(_("Queue Source must be CRM Lead, Patient, CRM Lead and Patient, or Discontinued."))
+        if self.queue_source in {"Patient", "CRM Lead and Patient"}:
             departments = _split_values(self.get("sr_medical_departments"))
             followup_ids = _split_values(self.get("sr_followup_ids"))
             if self.sr_medical_department and self.sr_medical_department not in departments:

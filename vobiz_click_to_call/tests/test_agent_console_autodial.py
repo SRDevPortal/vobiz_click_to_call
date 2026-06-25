@@ -220,7 +220,7 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("ai_disposition_enabled", visibility_source)
         self.assertIn("leadStatus", save_source)
         self.assertIn("lead_status: leadStatus", save_source)
-        self.assertIn("Select CRM status and SR lead disposition", save_source)
+        self.assertIn("Select CRM status.", save_source)
 
     def test_ai_mode_hides_manual_disposition_prompt(self):
         prompt_source = self.method_source("maybe_prompt_workdesk_disposition", "open_post_call_disposition_dialog")
@@ -235,13 +235,13 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         mapping_json = USER_MAPPING_JSON.read_text(encoding="utf-8")
 
         self.assertIn('"fieldname": "queue_source"', mapping_json)
-        self.assertIn('"options": "CRM Lead\\nPatient\\nDiscontinued"', mapping_json)
+        self.assertIn('"options": "CRM Lead\\nPatient\\nCRM Lead and Patient\\nDiscontinued"', mapping_json)
         self.assertIn('"fieldname": "sr_medical_department"', mapping_json)
         self.assertIn('"fieldname": "sr_followup_id"', mapping_json)
         self.assertIn("QUEUE_SOURCE_DOCTYPES", console)
         self.assertIn('"Patient": "Patient"', console)
         self.assertIn('"Discontinued": "CRM Lead"', console)
-        self.assertIn('"queue_meta": _queue_meta(queue_source, queue_doctype)', console)
+        self.assertIn('"queue_meta": _queue_meta(queue_source, queue_doctype, agent_queue_source=agent_queue_source)', console)
         self.assertIn('filters["sr_medical_department"]', console)
         self.assertIn('filters["sr_followup_id"]', console)
         self.assertIn('filters["sr_followup_day"]', console)
@@ -262,7 +262,7 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn('"has_more_calls": include_call_rows', console)
         self.assertIn('"recording_url"', console)
         self.assertIn('"recording_download_url": recording_proxy_url', console)
-        self.assertIn('"agent_options": _analytics_agent_options(is_admin)', console)
+        self.assertIn('"agent_options": _analytics_agent_options(is_admin, team_scope=team_scope)', console)
         self.assertIn("def _analytics_agent_options", console)
         self.assertIn("def _can_view_all_analytics_agents", console)
         self.assertIn('"Call Center Manager"', console)

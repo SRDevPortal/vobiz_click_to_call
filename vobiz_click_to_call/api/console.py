@@ -20,8 +20,10 @@ LEAD_DOCTYPE_CANDIDATES = ("CRM Lead", "Lead", "Patient", "Customer")
 QUEUE_SOURCE_DOCTYPES = {
     "CRM Lead": "CRM Lead",
     "Patient": "Patient",
+    "CRM Lead and Patient": "",
     "Discontinued": "CRM Lead",
 }
+COMBINED_QUEUE_SOURCE = "CRM Lead and Patient"
 HTML_TAG_RE = re.compile(r"<[^>]*>")
 CONSOLE_SESSION_TTL_SECONDS = 12
 ANALYTICS_STATUS_OPTIONS = ("total", "connected", "missed", "busy", "no_answer", "failed", "cancelled")
@@ -89,6 +91,7 @@ def get_agent_console_data(
     limit: int | str = 25,
     search: str | None = None,
     followup_day: str | None = None,
+    queue_source_filter: str | None = None,
     filters: str | list | None = None,
 ) -> dict[str, Any]:
     if frappe.session.user == "Guest":
@@ -97,7 +100,8 @@ def get_agent_console_data(
     limit = max(5, min(frappe.utils.cint(limit) or 25, 500))
     settings = get_settings()
     agent = _agent_context()
-    queue_source = _agent_queue_source(agent)
+    agent_queue_source = _agent_queue_source(agent)
+    queue_source = _selected_queue_source(agent_queue_source, queue_source_filter)
     queue_doctype = _queue_doctype_for_source(queue_source)
     return {
         "availability": get_call_capability(),
@@ -110,7 +114,7 @@ def get_agent_console_data(
             followup_day=followup_day,
             user_filters=filters,
         ),
-        "queue_meta": _queue_meta(queue_source, queue_doctype),
+        "queue_meta": _queue_meta(queue_source, queue_doctype, agent_queue_source=agent_queue_source),
         "dispositions": get_disposition_options_api(),
         "ai_disposition_enabled": bool(settings.enable_ai_disposition),
     }
@@ -206,7 +210,7 @@ def _has_mapped_patient_access(reference_doctype: str, reference_name: str) -> b
     if reference_doctype != "Patient":
         return False
     agent = _agent_context()
-    if (agent.get("queue_source") or "").strip() != "Patient":
+    if (agent.get("queue_source") or "").strip() not in {"Patient", COMBINED_QUEUE_SOURCE}:
         return False
     meta = frappe.get_meta("Patient")
     filters: dict[str, Any] = {"name": reference_name}
@@ -1092,14 +1096,31 @@ def _agent_queue_source(agent: dict[str, Any] | None = None) -> str:
     return source if source in QUEUE_SOURCE_DOCTYPES else "CRM Lead"
 
 
+def _selected_queue_source(agent_queue_source: str, requested_source: str | None = None) -> str:
+    requested_source = (requested_source or "").strip()
+    if agent_queue_source == COMBINED_QUEUE_SOURCE:
+        return requested_source if requested_source in {"CRM Lead", "Patient"} else "CRM Lead"
+    return agent_queue_source
+
+
+def _queue_source_options(agent_queue_source: str) -> list[str]:
+    if agent_queue_source == COMBINED_QUEUE_SOURCE:
+        return ["CRM Lead", "Patient"]
+    return [agent_queue_source]
+
+
 def _queue_doctype_for_source(queue_source: str) -> str:
     return QUEUE_SOURCE_DOCTYPES.get(queue_source, "CRM Lead")
 
 
-def _queue_meta(queue_source: str, doctype: str) -> dict[str, str]:
+def _queue_meta(queue_source: str, doctype: str, agent_queue_source: str | None = None) -> dict[str, Any]:
+    agent_queue_source = agent_queue_source or queue_source
+    source_options = _queue_source_options(agent_queue_source)
     if doctype == "Patient":
         return {
             "source": queue_source,
+            "agent_source": agent_queue_source,
+            "source_options": source_options,
             "doctype": doctype,
             "title": _("Patient Queue"),
             "id_label": _("Patient ID"),
@@ -1112,6 +1133,8 @@ def _queue_meta(queue_source: str, doctype: str) -> dict[str, str]:
     if queue_source == "Discontinued":
         return {
             "source": queue_source,
+            "agent_source": agent_queue_source,
+            "source_options": source_options,
             "doctype": doctype,
             "title": _("Discontinued / Missed Call Queue"),
             "id_label": _("CRM Lead ID"),
@@ -1122,6 +1145,8 @@ def _queue_meta(queue_source: str, doctype: str) -> dict[str, str]:
         }
     return {
         "source": queue_source,
+        "agent_source": agent_queue_source,
+        "source_options": source_options,
         "doctype": doctype,
         "title": _("Lead Queue"),
         "id_label": _("CRM Lead ID"),

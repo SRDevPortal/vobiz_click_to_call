@@ -8,7 +8,7 @@ frappe.ui.form.on('Vobiz User Mapping', {
 		load_team_leader(frm);
 	},
 	queue_source(frm) {
-		if (frm.doc.queue_source !== 'Patient') {
+		if (!queue_source_includes_patient(frm.doc.queue_source)) {
 			frm.set_value('sr_medical_department', '');
 			frm.set_value('sr_medical_departments', '');
 			frm.set_value('sr_followup_id', '');
@@ -65,7 +65,7 @@ function load_team_leader(frm) {
 }
 
 function setup_patient_routing_multi_ui(frm) {
-	const show = frm.doc.queue_source === 'Patient';
+	const show = queue_source_includes_patient(frm.doc.queue_source);
 	setup_multi_value_field(frm, {
 		fieldname: 'sr_medical_department',
 		store_fieldname: 'sr_medical_departments',
@@ -78,6 +78,10 @@ function setup_patient_routing_multi_ui(frm) {
 		button_title: __('Add Follow up ID'),
 		empty_text: __('No extra follow up IDs added')
 	}, show);
+}
+
+function queue_source_includes_patient(queue_source) {
+	return ['Patient', 'CRM Lead and Patient'].includes(queue_source || '');
 }
 
 function setup_fallback_user_multi_ui(frm) {

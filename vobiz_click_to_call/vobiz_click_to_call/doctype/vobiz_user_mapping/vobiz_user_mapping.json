@@ -61,7 +61,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Queue Source",
-   "options": "CRM Lead\nPatient\nDiscontinued"
+   "options": "CRM Lead\nPatient\nCRM Lead and Patient\nDiscontinued"
   },
   {
    "description": "The phone number Vobiz will dial after the customer answers.",
@@ -83,13 +83,13 @@
   },
   {
    "collapsible": 1,
-   "depends_on": "eval:doc.queue_source=='Patient'",
+   "depends_on": "eval:['Patient', 'CRM Lead and Patient'].includes(doc.queue_source)",
    "fieldname": "patient_routing_section",
    "fieldtype": "Section Break",
    "label": "Patient Routing"
   },
   {
-   "depends_on": "eval:doc.queue_source=='Patient'",
+   "depends_on": "eval:['Patient', 'CRM Lead and Patient'].includes(doc.queue_source)",
    "fieldname": "sr_medical_department",
    "fieldtype": "Link",
    "in_list_view": 1,
@@ -98,7 +98,7 @@
    "options": "Medical Department"
   },
   {
-   "depends_on": "eval:doc.queue_source=='Patient'",
+   "depends_on": "eval:['Patient', 'CRM Lead and Patient'].includes(doc.queue_source)",
    "description": "Optional. Add one department per line to route this user to multiple patient departments.",
    "fieldname": "sr_medical_departments",
    "fieldtype": "Small Text",
@@ -106,7 +106,7 @@
    "label": "Departments"
   },
   {
-   "depends_on": "eval:doc.queue_source=='Patient'",
+   "depends_on": "eval:['Patient', 'CRM Lead and Patient'].includes(doc.queue_source)",
    "fieldname": "sr_followup_id",
    "fieldtype": "Select",
    "in_list_view": 1,
@@ -115,7 +115,7 @@
    "options": "\n0\n1\n2\n3\n4\n5\n6\n7\n8\n9"
   },
   {
-   "depends_on": "eval:doc.queue_source=='Patient'",
+   "depends_on": "eval:['Patient', 'CRM Lead and Patient'].includes(doc.queue_source)",
    "description": "Optional. Add one follow up ID per line, or separate IDs with commas.",
    "fieldname": "sr_followup_ids",
    "fieldtype": "Small Text",

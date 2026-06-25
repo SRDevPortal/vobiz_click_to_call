@@ -1,9 +1,11 @@
 frappe.pages['vobiz-agent-analytics'].on_page_load = function(wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
-		title: __('Vobiz Agent Analytics'),
+		title: '',
 		single_column: true
 	});
+	$(wrapper).find('.page-head').hide();
+	$(wrapper).find('.page-body').css('padding-top', '12px');
 	wrapper.vobiz_agent_analytics = new VobizAgentAnalytics(page);
 };
 
@@ -157,7 +159,7 @@ class VobizAgentAnalytics {
 		if ($('#vobiz-agent-analytics-style').length) return;
 		$('head').append(`
 			<style id="vobiz-agent-analytics-style">
-				.vobiz-analytics-page { background: #f7f8f6; color: #243042; margin: -15px; min-height: calc(100vh - 60px); padding: 24px; }
+				.vobiz-analytics-page { background: #f7f8f6; color: #243042; margin: 0 -15px -15px; min-height: calc(100vh - 72px); padding: 24px; }
 				.vobiz-analytics-head { align-items: center; display: flex; justify-content: space-between; margin-bottom: 20px; }
 				.vobiz-analytics-head h2 { font-size: 22px; font-weight: 800; margin: 0; }
 				.vobiz-eyebrow { color: #667085; font-size: 11px; font-weight: 800; letter-spacing: .04em; margin-bottom: 4px; }
