@@ -149,6 +149,7 @@ class VobizAgentConsole {
 										<th class="vobiz-patient-col hidden">${__('Follow-up ID')}</th>
 										<th class="vobiz-patient-col hidden">${__('Day')}</th>
 										<th class="vobiz-team-col">${__('Team')}</th>
+										<th class="vobiz-lead-owner-col">${__('Lead Owner')}</th>
 										<th>${__('Status')}</th>
 										<th>${__('Next Action')}</th>
 										<th style="width: 88px">${__('Action')}</th>
@@ -685,7 +686,7 @@ class VobizAgentConsole {
 		const query = (this.page.main.find('[data-role="search"]').val() || '').toLowerCase();
 		return this.state.queue
 			.map((row, index) => ({ ...row, index }))
-			.filter(row => !query || [row.name, row.title, row.company, row.phone, row.status, row.next_action, row.team, row.sr_medical_department, row.sr_followup_id, row.sr_followup_day].join(' ').toLowerCase().includes(query));
+			.filter(row => !query || [row.name, row.title, row.company, row.phone, row.owner, row.status, row.next_action, row.team, row.sr_medical_department, row.sr_followup_id, row.sr_followup_day].join(' ').toLowerCase().includes(query));
 	}
 
 	render_queue_meta() {
@@ -694,12 +695,13 @@ class VobizAgentConsole {
 		this.page.main.find('[data-role="queue-id-label"]').text(meta.id_label || __('CRM Lead ID'));
 		this.page.main.find('.vobiz-patient-col').toggleClass('hidden', (meta.doctype || '') !== 'Patient');
 		this.page.main.find('.vobiz-team-col').toggleClass('hidden', (meta.doctype || '') === 'Patient');
+		this.page.main.find('.vobiz-lead-owner-col').toggleClass('hidden', (meta.doctype || '') === 'Patient');
 		this.render_queue_source_filter(meta);
 	}
 
 	queue_colspan() {
 		const meta = this.state.queue_meta || this.default_queue_meta();
-		return (meta.doctype || '') === 'Patient' ? 10 : 8;
+		return (meta.doctype || '') === 'Patient' ? 10 : 9;
 	}
 
 	reset_filter_group_if_doctype_changed() {
@@ -785,6 +787,7 @@ class VobizAgentConsole {
 				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_followup_id || '')}</td>
 				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_followup_day || '')}</td>
 				<td class="vobiz-team-col ${this.is_patient_queue() ? 'hidden' : ''}">${frappe.utils.escape_html(row.team || '')}</td>
+				<td class="vobiz-lead-owner-col ${this.is_patient_queue() ? 'hidden' : ''}">${frappe.utils.escape_html(row.owner || '')}</td>
 				<td><span class="vobiz-status ${frappe.utils.escape_html(statusClass)}">${frappe.utils.escape_html(row.status || '')}</span></td>
 				<td>${frappe.utils.escape_html(row.next_action || '')}</td>
 				<td>

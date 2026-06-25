@@ -407,6 +407,8 @@ def get_call_performance(
     to_date: str | None = None,
     queue_source: str | None = None,
     agent_user: str | None = None,
+    team: str | None = None,
+    department: str | None = None,
 ) -> dict[str, Any]:
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
@@ -418,6 +420,8 @@ def get_call_performance(
         status_filter=status_filter,
         queue_source=queue_source or _agent_queue_source(agent),
         agent_user=agent_user,
+        team=team,
+        department=department,
         agent=agent,
         include_calls=1,
         call_limit=50,
@@ -432,6 +436,8 @@ def get_call_performance(
         "from_date": data.get("from_date"),
         "to_date": data.get("to_date"),
         "queue_source": data.get("queue_source"),
+        "team": data.get("team"),
+        "department": data.get("department"),
     }
 
 
@@ -442,6 +448,8 @@ def get_analytics(
     status_filter: str | None = None,
     queue_source: str | None = None,
     agent_user: str | None = None,
+    team: str | None = None,
+    department: str | None = None,
     include_calls: int | str = 0,
     call_limit: int | str = 50,
     call_offset: int | str = 0,
@@ -456,6 +464,8 @@ def get_analytics(
         status_filter=status_filter,
         queue_source=queue_source or _agent_queue_source(agent),
         agent_user=agent_user,
+        team=team,
+        department=department,
         agent=agent,
         include_calls=include_calls,
         call_limit=call_limit,
@@ -473,6 +483,8 @@ def _analytics_data(
     status_filter: str | None = None,
     queue_source: str | None = None,
     agent_user: str | None = None,
+    team: str | None = None,
+    department: str | None = None,
     agent: dict[str, Any] | None = None,
     include_calls: int | str = 0,
     call_limit: int | str = 50,
@@ -490,12 +502,27 @@ def _analytics_data(
         filters["reference_doctype"] = "CRM Lead"
 
     is_admin = _can_view_all_analytics_agents()
+    is_crm_lead_queue = queue_source in {"CRM Lead", "Discontinued"}
+    is_patient_queue = queue_source == "Patient"
+    visible_crm_leads: list[str] | None = None
     if not is_admin and queue_source in {"CRM Lead", "Discontinued", COMBINED_QUEUE_SOURCE}:
         _apply_visible_crm_lead_scope(filters)
+        visible_crm_leads = list(filters.get("reference_names") or filters.get("crm_lead_reference_names") or [])
 
     team_scope = [] if is_admin else _team_member_users_for_leader(frappe.session.user)
     agent_user = (agent_user or "").strip()
-    if is_admin and agent_user:
+    team = (team or "").strip()
+    department = (department or "").strip()
+    if is_crm_lead_queue:
+        _apply_crm_lead_analytics_filters(
+            filters,
+            lead_owner=agent_user,
+            team=team,
+            visible_leads=visible_crm_leads,
+        )
+    elif is_patient_queue:
+        _apply_patient_department_analytics_filter(filters, department=department)
+    elif is_admin and agent_user:
         filters["user"] = agent_user
     elif team_scope:
         if agent_user and agent_user in team_scope:
@@ -536,7 +563,7 @@ def _analytics_data(
     call_limit = max(10, min(frappe.utils.cint(call_limit) or 50, ANALYTICS_CALL_LIMIT_MAX))
     call_offset = max(0, frappe.utils.cint(call_offset) or 0)
     call_slice = (
-        _analytics_call_rows_sql(conditions, params, fields, status_filter=status_filter, limit=call_limit, offset=call_offset)
+        _analytics_call_rows_sql(conditions, params, fields, status_filter=status_filter, limit=call_limit, offset=call_offset, queue_source=queue_source)
         if include_call_rows
         else []
     )
@@ -547,8 +574,18 @@ def _analytics_data(
         "status_filter": status_filter,
         "queue_source": queue_source,
         "queue_sources": list(QUEUE_SOURCE_DOCTYPES.keys()),
-        "agent_user": filters.get("user") or "",
-        "agent_options": _analytics_agent_options(is_admin, team_scope=team_scope),
+        "agent_user": filters.get("lead_owner") if is_crm_lead_queue else filters.get("user") or "",
+        "team": team if is_crm_lead_queue else "",
+        "department": department if is_patient_queue else "",
+        "team_options": _analytics_team_options(queue_source, visible_leads=visible_crm_leads),
+        "department_options": _analytics_department_options(queue_source),
+        "agent_options": _analytics_agent_options(
+            is_admin,
+            team_scope=team_scope,
+            queue_source=queue_source,
+            team=team,
+            visible_leads=visible_crm_leads,
+        ),
         "is_admin": is_admin,
         "is_team_leader": bool(team_scope),
         "summary": summary,
@@ -556,7 +593,7 @@ def _analytics_data(
         "status_breakdown": _analytics_status_breakdown_sql(conditions, params),
         "outcome_breakdown": _analytics_outcome_breakdown_sql(conditions, params),
         "daily": _analytics_daily_sql(conditions, params, from_date, to_date),
-        "agents": _analytics_agents_sql(conditions, params, status_filter=status_filter),
+        "agents": _analytics_agents_sql(conditions, params, status_filter=status_filter, queue_source=queue_source),
         "calls": [_performance_call_row(row) for row in call_slice],
         "calls_loaded": include_call_rows,
         "call_limit": call_limit,
@@ -591,6 +628,84 @@ def _analytics_sql_conditions(start: str, end: str, filters: dict[str, Any]) -> 
             params["users"] = tuple(users)
             conditions.append("`user` in %(users)s")
     return " and ".join(conditions), params
+
+
+def _apply_crm_lead_analytics_filters(
+    filters: dict[str, Any],
+    *,
+    lead_owner: str | None = None,
+    team: str | None = None,
+    visible_leads: list[str] | None = None,
+) -> None:
+    if not frappe.db.exists("DocType", "CRM Lead"):
+        filters["force_empty"] = True
+        return
+
+    lead_owner = (lead_owner or "").strip()
+    team = (team or "").strip()
+    filters["lead_owner"] = lead_owner
+    filters["team"] = team
+    if not lead_owner and not team:
+        return
+
+    lead_filters: dict[str, Any] = {}
+    meta = frappe.get_meta("CRM Lead")
+    if lead_owner and not meta.has_field("lead_owner"):
+        filters["force_empty"] = True
+        return
+    if team and not meta.has_field("team"):
+        filters["force_empty"] = True
+        return
+    if lead_owner:
+        lead_filters["lead_owner"] = lead_owner
+    if team:
+        lead_filters["team"] = team
+    if visible_leads is not None:
+        if visible_leads:
+            lead_filters["name"] = ["in", visible_leads]
+        else:
+            filters["force_empty"] = True
+            return
+
+    names = frappe.get_all(
+        "CRM Lead",
+        filters=lead_filters,
+        pluck="name",
+        limit_page_length=50000,
+    )
+    if names:
+        filters["reference_names"] = names
+    else:
+        filters["force_empty"] = True
+
+
+def _apply_patient_department_analytics_filter(
+    filters: dict[str, Any],
+    *,
+    department: str | None = None,
+) -> None:
+    department = (department or "").strip()
+    filters["department"] = department
+    if not department:
+        return
+    if not frappe.db.exists("DocType", "Patient"):
+        filters["force_empty"] = True
+        return
+    meta = frappe.get_meta("Patient")
+    if not meta.has_field("sr_medical_department"):
+        filters["force_empty"] = True
+        return
+
+    names = frappe.get_all(
+        "Patient",
+        filters={"sr_medical_department": department},
+        pluck="name",
+        limit_page_length=50000,
+    )
+    if names:
+        filters["reference_names"] = names
+    else:
+        filters["force_empty"] = True
 
 
 def _analytics_bucket_sql() -> str:
@@ -749,23 +864,46 @@ def _analytics_daily_sql(conditions: str, params: dict[str, Any], from_date: str
     return days
 
 
-def _analytics_agents_sql(conditions: str, params: dict[str, Any], status_filter: str | None = None) -> list[dict[str, Any]]:
+def _analytics_agents_sql(
+    conditions: str,
+    params: dict[str, Any],
+    status_filter: str | None = None,
+    queue_source: str | None = None,
+) -> list[dict[str, Any]]:
     bucket_expr = _analytics_bucket_sql()
     bucket_filter = _analytics_bucket_filter_sql(status_filter)
-    rows = frappe.db.sql(
-        f"""
-        select agent, bucket, count(*) as call_count, sum(talk_seconds) as talk_seconds, sum(cost) as cost
-        from (
-            select coalesce(nullif(`user`, ''), 'Unassigned') as agent, {bucket_expr} as bucket, {_analytics_talk_sql()} as talk_seconds, coalesce(`cost`, 0) as cost
-            from `tabVobiz Call Log`
-            where {conditions}
-        ) analytics
-        {bucket_filter}
-        group by agent, bucket
-        """,
-        params,
-        as_dict=True,
-    )
+    if queue_source in {"CRM Lead", "Discontinued"} and frappe.db.exists("DocType", "CRM Lead"):
+        joined_bucket_filter = bucket_filter.replace("bucket", "analytics.bucket")
+        rows = frappe.db.sql(
+            f"""
+            select coalesce(nullif(lead.`lead_owner`, ''), 'Unassigned') as agent, analytics.bucket, count(*) as call_count, sum(analytics.talk_seconds) as talk_seconds, sum(analytics.cost) as cost
+            from (
+                select `reference_name`, {bucket_expr} as bucket, {_analytics_talk_sql()} as talk_seconds, coalesce(`cost`, 0) as cost
+                from `tabVobiz Call Log`
+                where {conditions}
+            ) analytics
+            left join `tabCRM Lead` lead on lead.`name` = analytics.`reference_name`
+            {joined_bucket_filter}
+            group by agent, analytics.bucket
+            """,
+            params,
+            as_dict=True,
+        )
+    else:
+        rows = frappe.db.sql(
+            f"""
+            select agent, bucket, count(*) as call_count, sum(talk_seconds) as talk_seconds, sum(cost) as cost
+            from (
+                select coalesce(nullif(`user`, ''), 'Unassigned') as agent, {bucket_expr} as bucket, {_analytics_talk_sql()} as talk_seconds, coalesce(`cost`, 0) as cost
+                from `tabVobiz Call Log`
+                where {conditions}
+            ) analytics
+            {bucket_filter}
+            group by agent, bucket
+            """,
+            params,
+            as_dict=True,
+        )
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         grouped.setdefault(row.agent or _("Unassigned"), []).append(row)
@@ -781,11 +919,29 @@ def _analytics_call_rows_sql(
     status_filter: str | None,
     limit: int,
     offset: int,
+    queue_source: str | None = None,
 ) -> list[dict[str, Any]]:
     bucket_expr = _analytics_bucket_sql()
     bucket_filter = _analytics_bucket_filter_sql(status_filter)
     select_fields = ", ".join(f"`{field}`" for field in fields)
     query_params = {**params, "limit": int(limit), "offset": int(offset)}
+    if queue_source in {"CRM Lead", "Discontinued"} and frappe.db.exists("DocType", "CRM Lead"):
+        return frappe.db.sql(
+            f"""
+            select analytics.*, lead.`lead_owner` as analytics_agent, lead.`team` as analytics_team
+            from (
+                select {select_fields}, {bucket_expr} as bucket, {_analytics_talk_sql()} as talk_seconds
+                from `tabVobiz Call Log`
+                where {conditions}
+            ) analytics
+            left join `tabCRM Lead` lead on lead.`name` = analytics.`reference_name`
+            {bucket_filter}
+            order by analytics.`creation` desc
+            limit %(limit)s offset %(offset)s
+            """,
+            query_params,
+            as_dict=True,
+        )
     return frappe.db.sql(
         f"""
         select *
@@ -853,7 +1009,9 @@ def _performance_by_user(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _performance_call_row(row) -> dict[str, Any]:
     return {
         "name": row.get("name"),
-        "user": row.get("user"),
+        "user": row.get("analytics_agent") if "analytics_agent" in row else row.get("user"),
+        "call_user": row.get("user"),
+        "team": row.get("analytics_team") if "analytics_team" in row else "",
         "status": row.get("status"),
         "bucket": row.get("bucket"),
         "bucket_label": row.get("bucket_label"),
@@ -870,7 +1028,15 @@ def _performance_call_row(row) -> dict[str, Any]:
     }
 
 
-def _analytics_agent_options(is_admin: bool, team_scope: list[str] | None = None) -> list[str]:
+def _analytics_agent_options(
+    is_admin: bool,
+    team_scope: list[str] | None = None,
+    queue_source: str | None = None,
+    team: str | None = None,
+    visible_leads: list[str] | None = None,
+) -> list[str]:
+    if queue_source in {"CRM Lead", "Discontinued"}:
+        return _crm_lead_distinct_options("lead_owner", team=team, visible_leads=visible_leads)
     if team_scope:
         return team_scope
     if not is_admin:
@@ -904,6 +1070,74 @@ def _analytics_agent_options(is_admin: bool, team_scope: list[str] | None = None
     cleaned = []
     seen = set()
     for value in values:
+        value = (value or "").strip()
+        if value and value not in seen:
+            cleaned.append(value)
+            seen.add(value)
+    return cleaned
+
+
+def _analytics_team_options(queue_source: str | None = None, visible_leads: list[str] | None = None) -> list[str]:
+    if queue_source not in {"CRM Lead", "Discontinued"}:
+        return []
+    return _crm_lead_distinct_options("team", visible_leads=visible_leads)
+
+
+def _analytics_department_options(queue_source: str | None = None) -> list[str]:
+    if queue_source != "Patient":
+        return []
+    if not frappe.db.exists("DocType", "Patient"):
+        return []
+    meta = frappe.get_meta("Patient")
+    if not meta.has_field("sr_medical_department"):
+        return []
+    rows = frappe.get_all(
+        "Patient",
+        filters={"sr_medical_department": ["is", "set"]},
+        pluck="sr_medical_department",
+        distinct=True,
+        order_by="sr_medical_department asc",
+        limit_page_length=500,
+    )
+    cleaned = []
+    seen = set()
+    for value in rows:
+        value = (value or "").strip()
+        if value and value not in seen:
+            cleaned.append(value)
+            seen.add(value)
+    return cleaned
+
+
+def _crm_lead_distinct_options(
+    fieldname: str,
+    *,
+    team: str | None = None,
+    visible_leads: list[str] | None = None,
+) -> list[str]:
+    if not frappe.db.exists("DocType", "CRM Lead"):
+        return []
+    meta = frappe.get_meta("CRM Lead")
+    if not meta.has_field(fieldname):
+        return []
+    filters: dict[str, Any] = {fieldname: ["is", "set"]}
+    if team and fieldname != "team" and meta.has_field("team"):
+        filters["team"] = team
+    if visible_leads is not None:
+        if not visible_leads:
+            return []
+        filters["name"] = ["in", visible_leads]
+    rows = frappe.get_all(
+        "CRM Lead",
+        filters=filters,
+        pluck=fieldname,
+        distinct=True,
+        order_by=f"{fieldname} asc",
+        limit_page_length=500,
+    )
+    cleaned = []
+    seen = set()
+    for value in rows:
         value = (value or "").strip()
         if value and value not in seen:
             cleaned.append(value)
@@ -1479,7 +1713,7 @@ def _reference_row(doctype: str, doc) -> dict[str, Any]:
         "sr_followup_id": data.get("sr_followup_id"),
         "sr_followup_day": data.get("sr_followup_day"),
         "team": data.get("team"),
-        "owner": data.get("lead_owner") or data.get("created_by_agent") or data.get("owner"),
+        "owner": data.get("lead_owner"),
     }
 
 
