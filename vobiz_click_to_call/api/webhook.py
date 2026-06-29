@@ -7,7 +7,7 @@ from xml.sax.saxutils import escape, quoteattr
 import frappe
 from werkzeug.wrappers import Response
 
-from vobiz_ai.api.call_log import append_callback, sync_linked_summaries
+from vobiz_ai.api.call_log import sync_linked_summaries
 from vobiz_click_to_call.api.call import restore_mapping_after_call
 from vobiz_click_to_call.services.ai import enqueue_ai_disposition
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
@@ -473,8 +473,17 @@ def _raw_response(content: str, content_type: str, filename: str):
 
 def _append_callback_if_enabled(call_log: str, event: str, payload: dict) -> None:
     try:
-        if get_settings().store_raw_payloads:
-            append_callback(call_log, event, payload)
+        if not get_settings().store_raw_payloads:
+            return
+        frappe.enqueue(
+            "vobiz_ai.api.call_log.append_callback",
+            queue="short",
+            timeout=120,
+            enqueue_after_commit=True,
+            call_log=call_log,
+            event=event,
+            payload=payload,
+        )
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Vobiz callback payload append failed")
 

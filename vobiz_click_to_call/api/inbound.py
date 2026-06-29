@@ -186,23 +186,34 @@ def dial_action(call_log: str | None = None, token: str | None = None):
 def find_last_customer_agent(customer_number: str):
     normalized = normalize_phone_number(customer_number, default_country_code=get_default_country_code())
     last10 = phone_key(customer_number)
-    filters = {
+    base_filters = {
         "source_app": "vobiz_click_to_call",
         "direction": "Outgoing",
         "user": ["is", "set"],
         "user_mobile": ["is", "set"],
     }
-    or_filters = []
-    if normalized:
-        or_filters.append(["normalized_customer_number", "=", normalized])
-        or_filters.append(["customer_number", "=", normalized])
-    if last10:
-        or_filters.append(["customer_number", "like", f"%{last10}%"])
 
-    rows = frappe.get_all(
+    for fieldname, value in (("normalized_customer_number", normalized), ("customer_number", normalized)):
+        if not value:
+            continue
+        rows = _last_customer_agent_rows({**base_filters, fieldname: value})
+        if rows:
+            return rows[0]
+
+    if not last10:
+        return None
+
+    recent_cutoff = frappe.utils.add_to_date(frappe.utils.now_datetime(), days=-90)
+    rows = _last_customer_agent_rows(
+        {**base_filters, "customer_number": ["like", f"%{last10}%"], "creation": [">=", recent_cutoff]}
+    )
+    return rows[0] if rows else None
+
+
+def _last_customer_agent_rows(filters: dict[str, Any]):
+    return frappe.get_all(
         "Vobiz Call Log",
         filters=filters,
-        or_filters=or_filters or None,
         fields=[
             "name",
             "user",
@@ -217,8 +228,6 @@ def find_last_customer_agent(customer_number: str):
         order_by="creation desc",
         limit=1,
     )
-    return rows[0] if rows else None
-
 
 def create_inbound_call_log(
     previous,
