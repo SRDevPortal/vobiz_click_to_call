@@ -17,7 +17,10 @@ def call_signal(row: dict[str, Any] | None, *extra_fields: str) -> str:
 
 def talk_seconds(row: dict[str, Any] | None) -> int:
     row = row or {}
-    return frappe.utils.cint(row.get("billsec")) or frappe.utils.cint(row.get("duration")) or frappe.utils.cint(row.get("recording_duration"))
+    recording_duration = frappe.utils.cint(row.get("recording_duration"))
+    if recording_duration > 3600:
+        recording_duration = round(recording_duration / 1000)
+    return recording_duration or frappe.utils.cint(row.get("billsec")) or frappe.utils.cint(row.get("duration"))
 
 
 def has_talk_time(row: dict[str, Any] | None) -> bool:

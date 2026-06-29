@@ -103,7 +103,7 @@ class VobizAgentConsole {
 						<div class="vobiz-agent-state">
 							<span class="vobiz-state-dot"></span>
 							<span data-role="availability">${__('Checking')}</span>
-						</div>
+					</div>
 					</div>
 				</div>
 
@@ -160,45 +160,9 @@ class VobizAgentConsole {
 						</div>
 					</section>
 
-					<aside class="vobiz-side">
-						<section class="vobiz-band vobiz-active">
-							<div class="vobiz-section-title">
-								<h3>${__('Real-Time Agent Console')}</h3>
-								<span class="vobiz-pill" data-role="call-status">${__('Idle')}</span>
-							</div>
-							<div class="vobiz-call-focus">
-								<div class="vobiz-call-title" data-role="focus-name">${__('No active call')}</div>
-								<div class="text-muted" data-role="focus-meta">${__('Select a lead to view context')}</div>
-								<div class="vobiz-call-timer" data-role="timer">00:00</div>
-								<div class="vobiz-call-controls">
-									<button class="btn btn-default btn-sm" data-action="open-reference"><i class="fa fa-external-link"></i></button>
-									<button class="btn btn-danger btn-sm" data-action="cancel-call"><i class="fa fa-phone"></i> ${__('End')}</button>
-								</div>
-								<div class="vobiz-call-assets" data-role="call-assets"></div>
-							</div>
-						</section>
-
-						<section class="vobiz-band">
-							<div class="vobiz-section-title">
-								<h3>${__('Auto Dial Live')}</h3>
-								<span class="vobiz-pill" data-role="auto-live-state">${__('Stopped')}</span>
-							</div>
-							<div class="vobiz-auto-live" data-role="auto-live"></div>
-						</section>
-
-						<section class="vobiz-band" data-role="manual-disposition-section">
-							<div class="vobiz-section-title">
-								<h3>${__('Call Disposition')}</h3>
-							</div>
-							<select class="form-control" data-role="lead-status"></select>
-							<select class="form-control" data-role="disposition"></select>
-							<textarea class="form-control" rows="3" data-role="notes" placeholder="${__('Call notes')}"></textarea>
-							<button class="btn btn-primary btn-sm" data-action="save-disposition">${__('Save')}</button>
-						</section>
-					</aside>
+					</div>
 				</div>
-			</div>
-		`);
+			`);
 		this.inject_styles();
 	}
 
@@ -241,7 +205,7 @@ class VobizAgentConsole {
 				.vobiz-band { background: #fff; border: 1px solid #ebeef2; border-radius: 8px; margin-bottom: 16px; padding: 16px; }
 				.vobiz-dialer-control { align-items: center; display: flex; justify-content: space-between; }
 				.vobiz-actions { display: flex; gap: 10px; }
-				.vobiz-layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) 320px; }
+					.vobiz-layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
 				.vobiz-section-title { align-items: center; display: flex; gap: 12px; justify-content: space-between; margin-bottom: 12px; }
 				.vobiz-section-title h3 { font-size: 15px; font-weight: 700; margin: 0; }
 				.vobiz-queue-tools { display: flex; gap: 8px; justify-content: flex-end; min-width: 280px; }

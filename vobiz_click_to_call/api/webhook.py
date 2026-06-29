@@ -216,9 +216,7 @@ def recording_callback(call_log: str | None = None, token: str | None = None):
     _apply_common_payload(doc, data)
     doc.recording_id = doc.recording_id or _first_value(data, "recording_id", "RecordingID", "id")
     doc.recording_url = _first_value(data, "record_url", "RecordUrl", "RecordingUrl", "RecordFile", "url") or doc.recording_url
-    doc.recording_duration = _safe_int(
-        _first_value(data, "recording_duration", "RecordingDuration", "recording_duration_ms", "RecordingDurationMs", "duration")
-    )
+    doc.recording_duration = _recording_duration_seconds(data)
     doc.recording_started_at = doc.recording_started_at or _timestamp_or_now(
         _first_value(data, "recording_start_ms", "RecordingStartMs")
     )
@@ -531,6 +529,17 @@ def _json_dumps(payload: dict) -> str:
     safe_payload.pop("token", None)
     safe_payload.pop("cmd", None)
     return json.dumps(safe_payload, indent=2, default=str)
+
+
+def _recording_duration_seconds(payload: dict) -> int:
+    milliseconds = _first_value(payload, "recording_duration_ms", "RecordingDurationMs")
+    if milliseconds not in (None, ""):
+        return round(_safe_float(milliseconds) / 1000)
+
+    seconds = _safe_int(_first_value(payload, "recording_duration", "RecordingDuration", "duration"))
+    if seconds > 3600:
+        return round(seconds / 1000)
+    return seconds
 
 
 def _timestamp_or_now(value):

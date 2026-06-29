@@ -710,10 +710,10 @@ def _apply_patient_department_analytics_filter(
 
 def _analytics_bucket_sql() -> str:
     signal = "lower(concat_ws(' ', coalesce(`status`, ''), coalesce(`call_status`, ''), coalesce(`dial_status`, ''), coalesce(`hangup_cause`, '')))"
-    talk = _analytics_talk_sql()
+    recording = _analytics_recording_duration_sql()
     return f"""
         case
-            when coalesce(`billsec`, 0) > 0 or coalesce(`duration`, 0) >= 30 then 'connected'
+            when {recording} > 0 or coalesce(`billsec`, 0) > 0 or coalesce(`duration`, 0) >= 30 then 'connected'
             when `status` in ('Connected', 'Completed') then 'connected'
             when {signal} like '%%busy%%' then 'busy'
             when {signal} like '%%no-answer%%' or {signal} like '%%no answer%%' or {signal} like '%%timeout%%' or {signal} like '%%unanswered%%' then 'no_answer'
@@ -725,8 +725,17 @@ def _analytics_bucket_sql() -> str:
     """
 
 
+def _analytics_recording_duration_sql() -> str:
+    return """
+        case
+            when coalesce(`recording_duration`, 0) > 3600 then round(coalesce(`recording_duration`, 0) / 1000)
+            else coalesce(`recording_duration`, 0)
+        end
+    """
+
+
 def _analytics_talk_sql() -> str:
-    return "greatest(coalesce(`billsec`, 0), coalesce(`duration`, 0))"
+    return f"coalesce(nullif({_analytics_recording_duration_sql()}, 0), nullif(`billsec`, 0), nullif(`duration`, 0), 0)"
 
 
 def _analytics_bucket_filter_sql(status_filter: str | None) -> str:
@@ -1253,11 +1262,9 @@ def _analytics_status_filter(status_filter: str | None) -> str:
 def _analytics_row(row) -> dict[str, Any]:
     data = row.as_dict() if callable(getattr(row, "as_dict", None)) else dict(row)
     bucket = _analytics_bucket(data)
-    billsec = frappe.utils.cint(data.get("billsec"))
-    duration = frappe.utils.cint(data.get("duration"))
     data["bucket"] = bucket
     data["bucket_label"] = _analytics_bucket_label(bucket)
-    data["talk_seconds"] = billsec or duration
+    data["talk_seconds"] = _talk_seconds(data)
     data["cost"] = frappe.utils.flt(data.get("cost"))
     return data
 
@@ -1746,7 +1753,7 @@ def _call_history(reference_doctype: str, reference_name: str, limit: int) -> li
         limit_page_length=limit,
     )
     for row in rows:
-        row["duration_label"] = _duration_label(frappe.utils.cint(row.billsec or row.duration))
+        row["duration_label"] = _duration_label(_talk_seconds(row))
         row["recording_download_url"] = recording_proxy_url(row.name) if row.recording_url else ""
     return rows
 
@@ -2338,6 +2345,14 @@ def _duration_label(seconds: int) -> str:
     if minutes:
         return f"{minutes}m {remainder:02d}s"
     return f"{remainder}s"
+
+
+def _talk_seconds(row) -> int:
+    data = row.as_dict() if callable(getattr(row, "as_dict", None)) else dict(row or {})
+    recording_duration = frappe.utils.cint(data.get("recording_duration"))
+    if recording_duration > 3600:
+        recording_duration = round(recording_duration / 1000)
+    return recording_duration or frappe.utils.cint(data.get("billsec")) or frappe.utils.cint(data.get("duration"))
 
 
 def _list_from_template_values(value) -> list[str]:
