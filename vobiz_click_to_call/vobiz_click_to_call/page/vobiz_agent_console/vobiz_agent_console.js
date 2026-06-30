@@ -50,6 +50,7 @@ class VobizAgentConsole {
 			navigating_from_workdesk: false,
 			last_callback_call_log: null,
 			queue_filters: [],
+			queue_sort_by: 'modified_desc',
 			filter_group: null,
 			auto_dial: {
 				running: false,
@@ -131,6 +132,16 @@ class VobizAgentConsole {
 							<h3 data-role="queue-title">${__('Lead Queue')}</h3>
 							<div class="vobiz-queue-tools">
 								<select class="form-control input-sm hidden" data-role="queue-source-filter"></select>
+								<select class="form-control input-sm" data-role="queue-sort">
+									<option value="modified_desc">${__('Recently Updated')}</option>
+									<option value="modified_asc">${__('Oldest Updated')}</option>
+									<option value="creation_desc">${__('Newest Created')}</option>
+									<option value="creation_asc">${__('Oldest Created')}</option>
+									<option value="name_asc">${__('Name A-Z')}</option>
+									<option value="name_desc">${__('Name Z-A')}</option>
+									<option value="whatsapp_unread_desc">${__('New WhatsApp Msgs')}</option>
+									<option value="next_follow_up_asc">${__('Next Follow-up')}</option>
+								</select>
 								<button class="btn btn-default btn-sm vobiz-filter-btn" data-action="open-filters">
 									<i class="fa fa-filter filter-icon"></i> <span class="button-label">${__('Filters')}</span>
 								</button>
@@ -145,6 +156,7 @@ class VobizAgentConsole {
 										<th style="width: 170px" data-role="queue-id-label">${__('CRM Lead ID')}</th>
 										<th>${__('Name')}</th>
 										<th>${__('Phone')}</th>
+										<th style="width: 92px">${__('WhatsApp')}</th>
 										<th class="vobiz-patient-col hidden">${__('Department')}</th>
 										<th class="vobiz-patient-col hidden">${__('Follow-up ID')}</th>
 										<th class="vobiz-patient-col hidden">${__('Day')}</th>
@@ -152,6 +164,7 @@ class VobizAgentConsole {
 										<th class="vobiz-lead-owner-col">${__('Lead Owner')}</th>
 										<th>${__('Status')}</th>
 										<th>${__('Next Action')}</th>
+										<th style="width: 86px">${__('Created On')}</th>
 										<th style="width: 88px">${__('Action')}</th>
 									</tr>
 								</thead>
@@ -223,6 +236,11 @@ class VobizAgentConsole {
 				.vobiz-status { font-size: 12px; font-weight: 700; }
 				.vobiz-status.New { color: #0284c7; } .vobiz-status.Qualified, .vobiz-status.Converted { color: #16a34a; }
 				.vobiz-status.Not { color: #dc2626; } .vobiz-status.Contacted { color: #ca8a04; }
+				.vobiz-wa-queue { align-items: center; border-radius: 999px; display: inline-flex; font-size: 12px; font-weight: 800; gap: 5px; justify-content: center; min-height: 26px; min-width: 52px; padding: 3px 9px; }
+				.vobiz-wa-queue.has-new { background: #dcfce7; border-color: #86efac; color: #15803d; }
+				.vobiz-wa-queue.is-quiet { color: #16a34a; }
+				.vobiz-wa-count { background: #16a34a; border-radius: 999px; color: #fff; font-size: 10px; line-height: 1; min-width: 17px; padding: 3px 5px; text-align: center; }
+				.vobiz-wa-empty { color: #9ca3af; font-weight: 700; }
 				.vobiz-side { min-width: 0; }
 				.vobiz-pill { background: #eff6ff; border-radius: 999px; color: #2563eb; font-size: 12px; padding: 3px 8px; }
 				.vobiz-call-focus { border-top: 1px solid #eef0f3; padding-top: 12px; }
@@ -369,6 +387,10 @@ class VobizAgentConsole {
 			e.stopPropagation();
 			this.call_row($(e.currentTarget).closest('tr').data('index'));
 		});
+		$main.on('click', '[data-action="open-whatsapp-row"]', (e) => {
+			e.stopPropagation();
+			this.open_queue_whatsapp($(e.currentTarget).closest('tr').data('index'));
+		});
 		$main.on('click', '[data-action="select-row"]', (e) => this.select_row($(e.currentTarget).data('index')));
 		$main.on('click', '[data-action="call-selected"]', () => this.call_selected());
 		$main.on('click', '[data-action="open-reference"]', () => this.open_reference());
@@ -412,6 +434,11 @@ class VobizAgentConsole {
 			this.state.selected_queue_keys.clear();
 			this.load();
 		});
+		$main.on('change', '[data-role="queue-sort"]', () => {
+			this.state.queue_sort_by = (this.page.main.find('[data-role="queue-sort"]').val() || 'modified_desc').trim();
+			this.state.selected_queue_keys.clear();
+			this.load();
+		});
 		$(document).on('visibilitychange.vobiz-agent-console', () => {
 			if (document.hidden) {
 				this.stop_console_heartbeat();
@@ -441,10 +468,13 @@ class VobizAgentConsole {
 		}
 		const search = (this.page.main.find('[data-role="search"]').val() || '').trim();
 		const queue_source_filter = (this.page.main.find('[data-role="queue-source-filter"]').val() || '').trim();
+		const sort_by = (this.page.main.find('[data-role="queue-sort"]').val() || this.state.queue_sort_by || 'modified_desc').trim();
+		this.state.queue_sort_by = sort_by;
 		frappe.call('vobiz_click_to_call.api.console.get_agent_console_data', {
 			limit: 500,
 			search,
 			queue_source_filter,
+			sort_by,
 			filters: JSON.stringify(this.state.queue_filters || [])
 		}).then((r) => {
 			const data = r.message || {};
@@ -650,7 +680,7 @@ class VobizAgentConsole {
 		const query = (this.page.main.find('[data-role="search"]').val() || '').toLowerCase();
 		return this.state.queue
 			.map((row, index) => ({ ...row, index }))
-			.filter(row => !query || [row.name, row.title, row.company, row.phone, row.owner, row.status, row.next_action, row.team, row.sr_medical_department, row.sr_followup_id, row.sr_followup_day].join(' ').toLowerCase().includes(query));
+			.filter(row => !query || [row.name, row.title, row.company, row.phone, row.owner, row.status, row.next_action, row.team, row.sr_medical_department, row.sr_followup_id, row.sr_followup_day, row.whatsapp_last_message_preview].join(' ').toLowerCase().includes(query));
 	}
 
 	render_queue_meta() {
@@ -660,12 +690,13 @@ class VobizAgentConsole {
 		this.page.main.find('.vobiz-patient-col').toggleClass('hidden', (meta.doctype || '') !== 'Patient');
 		this.page.main.find('.vobiz-team-col').toggleClass('hidden', (meta.doctype || '') === 'Patient');
 		this.page.main.find('.vobiz-lead-owner-col').toggleClass('hidden', (meta.doctype || '') === 'Patient');
+		this.render_queue_sort(meta);
 		this.render_queue_source_filter(meta);
 	}
 
 	queue_colspan() {
 		const meta = this.state.queue_meta || this.default_queue_meta();
-		return (meta.doctype || '') === 'Patient' ? 10 : 9;
+		return (meta.doctype || '') === 'Patient' ? 12 : 11;
 	}
 
 	reset_filter_group_if_doctype_changed() {
@@ -731,6 +762,18 @@ class VobizAgentConsole {
 		$filter.removeClass('hidden');
 	}
 
+	render_queue_sort(meta) {
+		const $sort = this.page.main.find('[data-role="queue-sort"]');
+		const current = this.state.queue_sort_by || $sort.val() || 'modified_desc';
+		$sort.val(current);
+		const isPatient = (meta.doctype || '') === 'Patient';
+		$sort.find('option[value="next_follow_up_asc"]').toggleClass('hidden', isPatient);
+		if (isPatient && $sort.val() === 'next_follow_up_asc') {
+			this.state.queue_sort_by = 'modified_desc';
+			$sort.val('modified_desc');
+		}
+	}
+
 	queue_meta_value(key) {
 		const meta = this.state.queue_meta || this.default_queue_meta();
 		return meta[key] || this.default_queue_meta()[key] || '';
@@ -747,6 +790,7 @@ class VobizAgentConsole {
 				<td><code>${frappe.utils.escape_html(row.name || '')}</code></td>
 				<td><div class="vobiz-person"><span class="vobiz-avatar">${frappe.utils.escape_html(initials)}</span><span>${frappe.utils.escape_html(row.title || row.name || '')}</span></div></td>
 				<td>${frappe.utils.escape_html(row.phone || '')}</td>
+				<td>${this.whatsapp_queue_cell_html(row)}</td>
 				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_medical_department || '')}</td>
 				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_followup_id || '')}</td>
 				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_followup_day || '')}</td>
@@ -754,6 +798,7 @@ class VobizAgentConsole {
 				<td class="vobiz-lead-owner-col ${this.is_patient_queue() ? 'hidden' : ''}">${frappe.utils.escape_html(row.owner || '')}</td>
 				<td><span class="vobiz-status ${frappe.utils.escape_html(statusClass)}">${frappe.utils.escape_html(row.status || '')}</span></td>
 				<td>${frappe.utils.escape_html(row.next_action || '')}</td>
+				<td title="${frappe.utils.escape_html(row.creation || '')}">${frappe.utils.escape_html(this.compact_relative_time(row.creation))}</td>
 				<td>
 					<button class="btn btn-xs btn-primary" data-action="call-row" ${loading ? 'disabled' : ''}>
 						<i class="fa ${loading ? 'fa-spinner fa-spin' : 'fa-phone'}"></i> ${loading ? __('Loading') : __('Details')}
@@ -761,6 +806,43 @@ class VobizAgentConsole {
 				</td>
 			</tr>
 		`;
+	}
+
+	whatsapp_queue_cell_html(row) {
+		if (!row.whatsapp_conversation) {
+			return `<span class="vobiz-wa-empty">-</span>`;
+		}
+		const unread = parseInt(row.whatsapp_unread_count || 0, 10) || 0;
+		const preview = row.whatsapp_last_message_preview || '';
+		const title = preview
+			? __('WhatsApp: {0}', [preview])
+			: (unread ? __('Unread WhatsApp messages') : __('Open WhatsApp chat'));
+		const className = unread ? 'has-new' : 'is-quiet';
+		return `
+			<button class="btn btn-xs btn-default vobiz-wa-queue ${className}" data-action="open-whatsapp-row" title="${frappe.utils.escape_html(title)}">
+				<i class="fa fa-whatsapp"></i>
+				${unread ? `<span class="vobiz-wa-count">${frappe.utils.escape_html(String(unread))}</span>` : `<span>${__('Chat')}</span>`}
+			</button>
+		`;
+	}
+
+	compact_relative_time(value) {
+		if (!value) return '-';
+		const raw = String(value).replace(' ', 'T');
+		const date = new Date(raw);
+		if (Number.isNaN(date.getTime())) return '-';
+
+		const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
+		if (seconds < 60) return `${Math.max(seconds, 1)}s`;
+		const minutes = Math.floor(seconds / 60);
+		if (minutes < 60) return `${minutes}m`;
+		const hours = Math.floor(minutes / 60);
+		if (hours < 24) return `${hours}h`;
+		const days = Math.floor(hours / 24);
+		if (days < 30) return `${days}d`;
+		const months = Math.floor(days / 30);
+		if (months < 12) return `${months}mo`;
+		return `${Math.floor(months / 12)}y`;
 	}
 
 	is_patient_queue() {
@@ -1122,6 +1204,27 @@ class VobizAgentConsole {
 		request.always(() => this.set_detail_loading(row, false));
 	}
 
+	open_queue_whatsapp(index) {
+		const row = this.state.queue[index];
+		if (!row || !row.whatsapp_conversation) return;
+		if (this.state.detail_loading_key) return;
+		this.set_detail_loading(row, true);
+		const request = frappe.call({
+			method: 'vobiz_click_to_call.api.console.get_reference_context',
+			args: {
+				reference_doctype: row.doctype,
+				reference_name: row.name,
+				lite: 1
+			}
+		});
+		request.then((r) => {
+			this.state.context = r.message || {};
+			this.apply_context_dispositions(this.state.context);
+			this.open_detail_dialog(row, r.message || {}, 'whatsapp');
+		});
+		request.always(() => this.set_detail_loading(row, false));
+	}
+
 	detail_key(row) {
 		return row && row.doctype && row.name ? `${row.doctype}::${row.name}` : '';
 	}
@@ -1137,7 +1240,7 @@ class VobizAgentConsole {
 		this.render_queue();
 	}
 
-	open_detail_dialog(row, context) {
+	open_detail_dialog(row, context, initial_tab) {
 		context.workdesk = context.workdesk || {};
 		context.loaded_workdesk_tabs = context.loaded_workdesk_tabs || { summary: true };
 		this.state.navigating_from_workdesk = false;
@@ -1247,7 +1350,7 @@ class VobizAgentConsole {
 			this.remember_workdesk_return(row);
 			frappe.set_route('Form', $btn.data('doctype'), $btn.data('name'));
 		});
-		render('summary');
+		this.load_workdesk_tab(row, context, initial_tab || 'summary', $body, render);
 		this.update_workdesk_primary_action(row);
 	}
 

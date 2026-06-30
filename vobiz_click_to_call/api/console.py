@@ -92,6 +92,7 @@ def get_agent_console_data(
     search: str | None = None,
     followup_day: str | None = None,
     queue_source_filter: str | None = None,
+    sort_by: str | None = None,
     filters: str | list | None = None,
 ) -> dict[str, Any]:
     if frappe.session.user == "Guest":
@@ -112,6 +113,7 @@ def get_agent_console_data(
             agent=agent,
             queue_source=queue_source,
             followup_day=followup_day,
+            sort_by=sort_by,
             user_filters=filters,
         ),
         "queue_meta": _queue_meta(queue_source, queue_doctype, agent_queue_source=agent_queue_source),
@@ -124,20 +126,28 @@ def _mark_console_user_available() -> None:
     mapping_name = frappe.db.get_value("Vobiz User Mapping", {"user": frappe.session.user, "enabled": 1}, "name")
     if not mapping_name:
         return
-    current_call_log = frappe.db.get_value("Vobiz User Mapping", mapping_name, "current_call_log")
+    mapping = frappe.db.get_value(
+        "Vobiz User Mapping",
+        mapping_name,
+        ["availability_status", "accept_calls", "current_call_log"],
+        as_dict=True,
+    )
+    current_call_log = mapping.get("current_call_log")
     if current_call_log and frappe.db.exists("Vobiz Call Log", current_call_log):
         status = frappe.db.get_value("Vobiz Call Log", current_call_log, "status")
         if status not in TERMINAL_STATUSES:
             return
+    updates = {
+        "availability_status": "Available",
+        "accept_calls": 1,
+        "current_call_log": "",
+    }
+    if mapping.get("availability_status") != "Available" or not frappe.utils.cint(mapping.get("accept_calls")):
+        updates["last_status_at"] = frappe.utils.now()
     frappe.db.set_value(
         "Vobiz User Mapping",
         mapping_name,
-        {
-            "availability_status": "Available",
-            "accept_calls": 1,
-            "current_call_log": "",
-            "last_status_at": frappe.utils.now(),
-        },
+        updates,
         update_modified=True,
     )
     frappe.db.commit()
@@ -788,6 +798,7 @@ def _summary_from_bucket_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "no_answer": counts.get("no_answer", 0),
         "failed": counts.get("failed", 0),
         "cancelled": counts.get("cancelled", 0),
+        "rejected": counts.get("cancelled", 0),
         "talk_seconds": talk_seconds,
         "talk_time_label": _duration_label(talk_seconds),
         "average_duration": average_duration,
@@ -917,7 +928,63 @@ def _analytics_agents_sql(
     for row in rows:
         grouped.setdefault(row.agent or _("Unassigned"), []).append(row)
     data = [{"user": user, **_summary_from_bucket_rows(user_rows)} for user, user_rows in grouped.items()]
+    _attach_agent_availability(data)
     return sorted(data, key=lambda row: row["total"], reverse=True)
+
+
+def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
+    users = [row.get("user") for row in rows if row.get("user") and row.get("user") != _("Unassigned")]
+    if not users or not frappe.db.exists("DocType", "Vobiz User Mapping"):
+        return
+
+    mappings = frappe.get_all(
+        "Vobiz User Mapping",
+        filters={"user": ["in", users], "enabled": 1},
+        fields=["user", "availability_status", "accept_calls", "last_status_at"],
+    )
+    by_user = {row.user: row for row in mappings}
+    now = frappe.utils.now_datetime()
+    online_statuses = {"Available", "Busy"}
+
+    for row in rows:
+        mapping = by_user.get(row.get("user"))
+        if not mapping:
+            row.update(
+                {
+                    "availability_status": "Offline",
+                    "is_online": False,
+                    "availability_label": _("Offline"),
+                    "availability_duration_label": "",
+                }
+            )
+            continue
+
+        status = mapping.availability_status or "Offline"
+        is_online = status in online_statuses or is_agent_console_online(row.get("user"))
+        since = frappe.utils.get_datetime(mapping.last_status_at) if mapping.last_status_at else None
+        duration_label = _human_duration(now - since) if since else ""
+        row.update(
+            {
+                "availability_status": status,
+                "is_online": is_online,
+                "availability_label": _("Online") if is_online else _("Offline"),
+                "availability_duration_label": duration_label,
+            }
+        )
+
+
+def _human_duration(delta) -> str:
+    seconds = max(0, int(delta.total_seconds()))
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes = seconds // 60
+    if days:
+        return _("{0}d {1}h").format(days, hours)
+    if hours:
+        return _("{0}h {1}m").format(hours, minutes)
+    if minutes:
+        return _("{0}m").format(minutes)
+    return _("just now")
 
 
 def _analytics_call_rows_sql(
@@ -1465,6 +1532,7 @@ def _lead_queue(
     agent: dict[str, Any] | None = None,
     queue_source: str | None = None,
     followup_day: str | None = None,
+    sort_by: str | None = None,
     user_filters: str | list | None = None,
 ) -> list[dict[str, Any]]:
     queue_source = queue_source or _agent_queue_source(agent)
@@ -1477,6 +1545,7 @@ def _lead_queue(
             queue_source=queue_source,
             agent=agent,
             followup_day=followup_day,
+            sort_by=sort_by,
             user_filters=user_filters,
         )
 
@@ -1489,6 +1558,7 @@ def _lead_queue(
                 queue_source=queue_source,
                 agent=agent,
                 followup_day=followup_day,
+                sort_by=sort_by,
                 user_filters=user_filters,
             )
             if doctype == "CRM Lead":
@@ -1505,10 +1575,11 @@ def _queue_for_doctype(
     queue_source: str | None = None,
     agent: dict[str, Any] | None = None,
     followup_day: str | None = None,
+    sort_by: str | None = None,
     user_filters: str | list | None = None,
 ) -> list[dict[str, Any]]:
     meta = frappe.get_meta(doctype)
-    fields = ["name", "modified"]
+    fields = ["name", "creation", "modified"]
     for fieldname in _existing_fields(
         meta,
         (
@@ -1550,10 +1621,29 @@ def _queue_for_doctype(
         filters=filters,
         or_filters=_queue_search_filters(search_fields, query) if query else None,
         fields=fields,
-        order_by="modified desc",
+        order_by=_queue_order_by(meta, sort_by),
         limit_page_length=limit,
     )
-    return [_reference_row(doctype, row) for row in rows]
+    return _attach_queue_whatsapp([_reference_row(doctype, row) for row in rows], sort_by=sort_by)
+
+
+def _queue_order_by(meta, sort_by: str | None = None) -> str:
+    sort_key = (sort_by or "").strip()
+    standard_fields = {"name", "creation", "modified", "owner"}
+    options = {
+        "modified_desc": ("modified", "desc"),
+        "modified_asc": ("modified", "asc"),
+        "creation_desc": ("creation", "desc"),
+        "creation_asc": ("creation", "asc"),
+        "name_asc": ("name", "asc"),
+        "name_desc": ("name", "desc"),
+        "next_follow_up_asc": ("vobiz_next_follow_up", "asc"),
+        "whatsapp_unread_desc": ("modified", "desc"),
+    }
+    fieldname, direction = options.get(sort_key, options["modified_desc"])
+    if fieldname not in standard_fields and not meta.has_field(fieldname):
+        fieldname, direction = options["modified_desc"]
+    return f"{fieldname} {direction}"
 
 
 def _queue_filters(meta, queue_source: str | None = None, agent: dict[str, Any] | None = None, followup_day: str | None = None) -> dict[str, Any]:
@@ -1710,6 +1800,7 @@ def _reference_row(doctype: str, doc) -> dict[str, Any]:
     return {
         "doctype": doctype,
         "name": data.get("name"),
+        "creation": data.get("creation"),
         "title": title,
         "company": company,
         "phone": phone_field.get("value"),
@@ -1722,6 +1813,135 @@ def _reference_row(doctype: str, doc) -> dict[str, Any]:
         "team": data.get("team"),
         "owner": data.get("lead_owner"),
     }
+
+
+def _attach_queue_whatsapp(rows: list[dict[str, Any]], sort_by: str | None = None) -> list[dict[str, Any]]:
+    if not rows:
+        return _sort_queue_by_whatsapp(rows, sort_by)
+
+    for row in rows:
+        row.update({
+            "whatsapp_conversation": None,
+            "whatsapp_unread_count": 0,
+            "whatsapp_last_message_preview": "",
+            "whatsapp_last_message_at": None,
+        })
+
+    if not frappe.db.exists("DocType", "Chat Conversation"):
+        return _sort_queue_by_whatsapp(rows, sort_by)
+
+    conversation_meta = frappe.get_meta("Chat Conversation")
+    fields = _existing_fields(
+        conversation_meta,
+        ("name", "unread_count", "last_message_preview", "modified"),
+    )
+    if "name" not in fields:
+        fields.insert(0, "name")
+    if "contact" not in fields and conversation_meta.has_field("contact"):
+        fields.append("contact")
+
+    pending = {(row.get("doctype"), row.get("name")) for row in rows if row.get("doctype") and row.get("name")}
+    by_key = {(row.get("doctype"), row.get("name")): row for row in rows if row.get("doctype") and row.get("name")}
+
+    def apply(row: dict[str, Any], data: dict[str, Any]) -> None:
+        row.update({
+            "whatsapp_conversation": data.get("name"),
+            "whatsapp_unread_count": frappe.utils.cint(data.get("unread_count")),
+            "whatsapp_last_message_preview": data.get("last_message_preview") or "",
+            "whatsapp_last_message_at": data.get("modified"),
+        })
+
+    if conversation_meta.has_field("linked_reference_doctype") and conversation_meta.has_field("linked_reference_name"):
+        doctypes = sorted({doctype for doctype, _name in pending})
+        names = sorted({name for _doctype, name in pending})
+        if doctypes and names:
+            ref_fields = fields + ["linked_reference_doctype", "linked_reference_name"]
+            for data in frappe.get_all(
+                "Chat Conversation",
+                filters=[
+                    ["linked_reference_doctype", "in", doctypes],
+                    ["linked_reference_name", "in", names],
+                ],
+                fields=ref_fields,
+                order_by="modified desc",
+                limit_page_length=max(len(rows) * 2, 20),
+            ):
+                key = (data.get("linked_reference_doctype"), data.get("linked_reference_name"))
+                if key not in pending:
+                    continue
+                apply(by_key[key], data)
+                pending.discard(key)
+
+    crm_keys = [key for key in pending if key[0] == "CRM Lead"]
+    if crm_keys and conversation_meta.has_field("linked_crm_lead"):
+        for data in frappe.get_all(
+            "Chat Conversation",
+            filters={"linked_crm_lead": ["in", [key[1] for key in crm_keys]]},
+            fields=fields + ["linked_crm_lead"],
+            order_by="modified desc",
+            limit_page_length=max(len(crm_keys) * 2, 20),
+        ):
+            key = ("CRM Lead", data.get("linked_crm_lead"))
+            if key not in pending:
+                continue
+            apply(by_key[key], data)
+            pending.discard(key)
+
+    if pending and frappe.db.exists("DocType", "Chat Contact") and conversation_meta.has_field("contact"):
+        phone_to_keys: dict[str, list[tuple[str, str]]] = {}
+        for key in pending:
+            row = by_key[key]
+            for phone in _whatsapp_phone_candidates(row.get("phone")):
+                phone_to_keys.setdefault(phone, []).append(key)
+        if phone_to_keys:
+            contacts = frappe.get_all(
+                "Chat Contact",
+                filters={"phone_number": ["in", list(phone_to_keys)]},
+                fields=["name", "phone_number"],
+                limit_page_length=max(len(phone_to_keys), 20),
+            )
+            contact_to_keys = {}
+            for contact in contacts:
+                keys = phone_to_keys.get(contact.get("phone_number")) or []
+                if keys:
+                    contact_to_keys[contact.get("name")] = keys
+            if contact_to_keys:
+                for data in frappe.get_all(
+                    "Chat Conversation",
+                    filters={"contact": ["in", list(contact_to_keys)]},
+                    fields=fields,
+                    order_by="modified desc",
+                    limit_page_length=max(len(contact_to_keys) * 2, 20),
+                ):
+                    for key in contact_to_keys.get(data.get("contact"), []):
+                        if key not in pending:
+                            continue
+                        apply(by_key[key], data)
+                        pending.discard(key)
+    return _sort_queue_by_whatsapp(rows, sort_by)
+
+
+def _sort_queue_by_whatsapp(rows: list[dict[str, Any]], sort_by: str | None = None) -> list[dict[str, Any]]:
+    if sort_by != "whatsapp_unread_desc":
+        return rows
+
+    def key(row: dict[str, Any]) -> tuple[int, str]:
+        return (
+            frappe.utils.cint(row.get("whatsapp_unread_count")),
+            str(row.get("whatsapp_last_message_at") or ""),
+        )
+
+    return sorted(rows, key=key, reverse=True)
+
+
+def _whatsapp_phone_candidates(phone: str | None) -> list[str]:
+    raw = str(phone or "").strip()
+    digits = _last_10_digits(raw)
+    candidates = []
+    for value in (raw, digits, f"+91{digits}" if digits else "", f"91{digits}" if digits else ""):
+        if value and value not in candidates:
+            candidates.append(value)
+    return candidates
 
 
 def _call_history(reference_doctype: str, reference_name: str, limit: int) -> list[dict[str, Any]]:

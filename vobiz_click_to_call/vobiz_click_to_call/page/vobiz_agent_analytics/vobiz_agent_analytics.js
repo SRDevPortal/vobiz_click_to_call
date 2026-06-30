@@ -109,6 +109,32 @@ class VobizAgentAnalytics {
 					<div class="vobiz-kpi-grid" data-role="kpis"></div>
 				</section>
 
+				<section class="vobiz-band hide" data-role="selected-call-section">
+					<div class="vobiz-section-title">
+						<h3 data-role="selected-call-title">${__('Call List')}</h3>
+						<span class="text-muted" data-role="selected-calls-note"></span>
+					</div>
+					<div class="vobiz-table-wrap">
+						<table class="table table-sm vobiz-table">
+							<thead>
+								<tr>
+									<th>${__('Call Log')}</th>
+									<th>${__('Agent')}</th>
+									<th>${__('Queue')}</th>
+									<th>${__('Reference')}</th>
+									<th>${__('Customer')}</th>
+									<th>${__('Status')}</th>
+									<th>${__('Talk Time')}</th>
+									<th>${__('Disposition')}</th>
+									<th>${__('Time')}</th>
+									<th>${__('Recording')}</th>
+								</tr>
+							</thead>
+							<tbody data-role="selected-calls"></tbody>
+						</table>
+					</div>
+				</section>
+
 				<div class="vobiz-chart-grid single">
 					<section class="vobiz-band">
 						<div class="vobiz-section-title">
@@ -182,6 +208,9 @@ class VobizAgentAnalytics {
 				.vobiz-kpi-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); }
 				.vobiz-kpi { background: #fff; border-right: 1px solid #edf0ea; min-height: 106px; padding: 18px 16px; position: relative; }
 				.vobiz-kpi:last-child { border-right: 0; }
+				.vobiz-kpi[role="button"] { cursor: pointer; }
+				.vobiz-kpi[role="button"]:hover { background: #fbfcfa; }
+				.vobiz-kpi[role="button"]:focus { box-shadow: inset 0 0 0 2px #2f80ed; outline: 0; }
 				.vobiz-kpi:before { border-radius: 50%; content: ""; height: 8px; position: absolute; right: 16px; top: 18px; width: 8px; }
 				.vobiz-kpi.missed:before { background: #e2554f; }
 				.vobiz-kpi.connected:before { background: #1f9d72; }
@@ -217,10 +246,15 @@ class VobizAgentAnalytics {
 				.vobiz-stack { background: #eef1ed; border-radius: 4px; display: flex; height: 18px; overflow: hidden; }
 				.vobiz-stack span { display: block; height: 100%; }
 				.vobiz-agent-grid { display: grid; gap: 10px; }
-				.vobiz-agent-card { align-items: center; border: 1px solid #edf0ea; border-radius: 8px; display: grid; gap: 14px; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) repeat(3, minmax(88px, 112px)); padding: 12px; }
+				.vobiz-agent-card { align-items: center; border: 1px solid #edf0ea; border-radius: 8px; display: grid; gap: 14px; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) repeat(5, minmax(88px, 112px)); padding: 12px; }
 				.vobiz-agent-card:hover { background: #fbfcfa; }
 				.vobiz-agent-title { color: #344054; font-size: 13px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 				.vobiz-agent-sub { color: #667085; font-size: 11px; margin-top: 4px; }
+				.vobiz-agent-status { align-items: center; display: inline-flex; gap: 6px; margin-top: 4px; }
+				.vobiz-agent-status-dot { border-radius: 50%; height: 8px; width: 8px; }
+				.vobiz-agent-status-dot.online { background: #1f9d72; }
+				.vobiz-agent-status-dot.offline { background: #98a2b3; }
+				.vobiz-agent-status-text { color: #344054; font-size: 18px; font-weight: 800; line-height: 1.1; }
 				.vobiz-agent-meter { align-self: center; display: grid; gap: 6px; }
 				.vobiz-agent-meter .vobiz-stack { height: 16px; }
 				.vobiz-agent-mini { align-self: center; }
@@ -272,6 +306,13 @@ class VobizAgentAnalytics {
 		$main.on('click', '[data-action="open-console"]', () => frappe.set_route('vobiz-agent-console'));
 		$main.on('click', '[data-action="refresh"]', () => this.load());
 		$main.on('click', '[data-action="clear-filters"]', () => this.clear_filters());
+		$main.on('click', '[data-action="show-call-list"]', (e) => this.show_call_list($(e.currentTarget).data('status-filter')));
+		$main.on('keydown', '[data-action="show-call-list"]', (e) => {
+			if (e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault();
+				this.show_call_list($(e.currentTarget).data('status-filter'));
+			}
+		});
 		$main.on('click', '[data-action="load-calls"]', () => this.load_calls(true));
 		$main.on('click', '[data-action="load-more-calls"]', () => this.load_calls(false));
 		$main.on('click', '[data-action="play-recording"]', (e) => this.play_recording($(e.currentTarget)));
@@ -310,6 +351,69 @@ class VobizAgentAnalytics {
 		this.page.main.find('[data-role="team"]').val('');
 		this.page.main.find('[data-role="department"]').val('');
 		this.load();
+	}
+
+	show_call_list(status_filter) {
+		clearTimeout(this.load_timer);
+		const selected_status = (status_filter || 'total').trim();
+		this.state.status_filter = selected_status;
+		this.page.main.find('[data-role="status-filter"]').val(selected_status);
+		const request_id = ++this.request_id;
+		const filters = this.filters();
+		this.loading = true;
+		this.calls_loaded = false;
+		this.calls_offset = 0;
+		this.has_more_calls = false;
+		this.render_calls_placeholder();
+		frappe.call({
+			method: 'vobiz_click_to_call.api.console.get_analytics',
+			args: Object.assign({}, filters, { include_calls: 0 }),
+			freeze: false
+		}).then((r) => {
+			if (request_id !== this.request_id) return;
+			const data = r.message || {};
+			this.state = Object.assign({}, this.state, filters, {
+				queue_source: data.queue_source || filters.queue_source,
+				agent_user: data.agent_user || filters.agent_user || '',
+				team: data.team || filters.team || '',
+				department: data.department || filters.department || ''
+			});
+			this.render_filters(data);
+			this.render_kpis(data.summary || {}, data);
+			this.render_charts(data);
+			this.initialized = true;
+			this.load_selected_calls(selected_status);
+		}).always(() => {
+			if (request_id === this.request_id) {
+				this.loading = false;
+			}
+		});
+	}
+
+	load_selected_calls(status_filter) {
+		const selected_status = (status_filter || this.state.status_filter || 'total').trim();
+		const filters = Object.assign({}, this.filters(), { status_filter: selected_status });
+		const label = this.call_list_label(selected_status);
+		this.page.main.find('[data-role="selected-call-section"]').removeClass('hide');
+		this.page.main.find('[data-role="selected-call-title"]').text(__('{0} List', [label]));
+		this.page.main.find('[data-role="selected-calls"]').html(`
+			<tr>
+				<td colspan="10" class="text-muted text-center">${__('Loading {0}...', [label.toLowerCase()])}</td>
+			</tr>
+		`);
+		this.page.main.find('[data-role="selected-calls-note"]').text(__('Loading...'));
+		frappe.call({
+			method: 'vobiz_click_to_call.api.console.get_analytics',
+			args: Object.assign({}, filters, {
+				include_calls: 1,
+				call_limit: 100,
+				call_offset: 0
+			}),
+			freeze: false
+		}).then((r) => {
+			const data = r.message || {};
+			this.render_selected_calls(data.calls || [], data, selected_status);
+		});
 	}
 
 	filters() {
@@ -436,6 +540,7 @@ class VobizAgentAnalytics {
 	}
 
 	render_calls_placeholder() {
+		this.page.main.find('[data-role="selected-call-section"]').addClass('hide');
 		this.page.main.find('[data-role="calls"]').html(`
 			<tr>
 				<td colspan="10" class="text-muted text-center">${__('Click Load Call Logs to fetch matching rows.')}</td>
@@ -448,15 +553,15 @@ class VobizAgentAnalytics {
 
 	render_kpis(summary, data) {
 		const kpis = [
-			{ label: __('Missed'), value: summary.missed || 0, note: `${summary.missed_rate || 0}% ${__('missed')}`, className: 'missed' },
-			{ label: __('Connected'), value: summary.connected || 0, note: `${summary.answer_rate || 0}% ${__('answer rate')}`, className: 'connected' },
-			{ label: __('Total Calls'), value: summary.total || 0, note: data.queue_source || '', className: 'total' },
+			{ label: __('Missed'), value: summary.missed || 0, note: `${summary.missed_rate || 0}% ${__('missed')}`, className: 'missed', status_filter: 'missed' },
+			{ label: __('Connected'), value: summary.connected || 0, note: `${summary.answer_rate || 0}% ${__('answer rate')}`, className: 'connected', status_filter: 'connected' },
+			{ label: __('Total Calls'), value: summary.total || 0, note: data.queue_source || '', className: 'total', status_filter: 'total' },
 			{ label: __('Avg Talk Time'), value: summary.average_duration_label || '0s', note: __('connected calls only'), className: 'average' },
-			{ label: __('Busy'), value: summary.busy || 0, note: __('busy outcomes'), className: 'busy' },
-			{ label: __('No Answer'), value: summary.no_answer || 0, note: __('ring timeout'), className: 'no-answer' }
+			{ label: __('Busy'), value: summary.busy || 0, note: __('busy outcomes'), className: 'busy', status_filter: 'busy' },
+			{ label: __('No Answer'), value: summary.no_answer || 0, note: __('ring timeout'), className: 'no-answer', status_filter: 'no_answer' }
 		];
 		this.page.main.find('[data-role="kpis"]').html(kpis.map(row => `
-			<div class="vobiz-kpi ${this.escape(row.className)}">
+			<div class="vobiz-kpi ${this.escape(row.className)}" ${row.status_filter ? `data-action="show-call-list" data-status-filter="${this.escape(row.status_filter)}" role="button" tabindex="0"` : ''}>
 				<span>${this.escape(row.label)}</span>
 				<strong>${this.escape(String(row.value))}</strong>
 				<small>${this.escape(row.note || '')}</small>
@@ -465,23 +570,7 @@ class VobizAgentAnalytics {
 	}
 
 	render_calls(calls, append, data) {
-		const html = calls.map(row => {
-			const route = row.reference_name ? `/app/${frappe.router.slug(row.reference_doctype || 'CRM Lead')}/${encodeURIComponent(row.reference_name)}` : '';
-			return `
-				<tr>
-					<td><a href="/app/vobiz-call-log/${this.escape(row.name || '')}"><code>${this.escape(row.name || '')}</code></a></td>
-					<td>${this.escape(row.user || '')}</td>
-					<td>${this.escape(row.reference_doctype || '')}</td>
-					<td>${route ? `<a href="${route}"><code>${this.escape(row.reference_name || '')}</code></a>` : ''}</td>
-					<td>${this.escape(row.customer_number || '')}</td>
-					<td><span class="vobiz-status-pill" style="background:${this.bucket_fill(row.bucket)}; color:${this.bucket_color(row.bucket)}">${this.escape(row.bucket_label || row.status || '')}</span></td>
-					<td>${this.escape(row.duration_label || '0s')}</td>
-					<td>${this.escape(row.disposition || '')}</td>
-					<td>${row.creation ? frappe.datetime.str_to_user(row.creation) : ''}</td>
-					<td>${this.recording_button_html(row)}</td>
-				</tr>
-			`;
-		}).join('');
+		const html = calls.map(row => this.call_row_html(row)).join('');
 		const $body = this.page.main.find('[data-role="calls"]');
 		if (append && html) {
 			$body.append(html);
@@ -493,6 +582,44 @@ class VobizAgentAnalytics {
 		this.page.main.find('[data-role="calls-note"]').text(`${__('Showing')} ${shown} ${__('of')} ${total} ${__('matching call logs')}`);
 		this.page.main.find('[data-action="load-calls"]').toggleClass('hide', !!calls.length || append);
 		this.page.main.find('[data-action="load-more-calls"]').toggleClass('hide', !this.has_more_calls);
+	}
+
+	render_selected_calls(calls, data, status_filter) {
+		const label = this.call_list_label(status_filter);
+		const html = calls.map(row => this.call_row_html(row)).join('');
+		this.page.main.find('[data-role="selected-calls"]').html(
+			html || `<tr><td colspan="10" class="text-muted text-center">${__('No {0} found for this filter.', [label.toLowerCase()])}</td></tr>`
+		);
+		const total = data && data.matching_call_count != null ? data.matching_call_count : calls.length;
+		this.page.main.find('[data-role="selected-calls-note"]').text(`${__('Showing')} ${calls.length} ${__('of')} ${total} ${label.toLowerCase()}`);
+	}
+
+	call_list_label(status_filter) {
+		return {
+			total: __('Total Calls'),
+			connected: __('Connected Calls'),
+			missed: __('Missed Calls'),
+			busy: __('Busy Calls'),
+			no_answer: __('No Answer Calls')
+		}[status_filter || 'total'] || __('Calls');
+	}
+
+	call_row_html(row) {
+		const route = row.reference_name ? `/app/${frappe.router.slug(row.reference_doctype || 'CRM Lead')}/${encodeURIComponent(row.reference_name)}` : '';
+		return `
+			<tr>
+				<td><a href="/app/vobiz-call-log/${this.escape(row.name || '')}"><code>${this.escape(row.name || '')}</code></a></td>
+				<td>${this.escape(row.user || '')}</td>
+				<td>${this.escape(row.reference_doctype || '')}</td>
+				<td>${route ? `<a href="${route}"><code>${this.escape(row.reference_name || '')}</code></a>` : ''}</td>
+				<td>${this.escape(row.customer_number || '')}</td>
+				<td><span class="vobiz-status-pill" style="background:${this.bucket_fill(row.bucket)}; color:${this.bucket_color(row.bucket)}">${this.escape(row.bucket_label || row.status || '')}</span></td>
+				<td>${this.escape(row.duration_label || '0s')}</td>
+				<td>${this.escape(row.disposition || '')}</td>
+				<td>${row.creation ? frappe.datetime.str_to_user(row.creation) : ''}</td>
+				<td>${this.recording_button_html(row)}</td>
+			</tr>
+		`;
 	}
 
 	recording_button_html(row) {
@@ -657,7 +784,11 @@ class VobizAgentAnalytics {
 		const connected = row.connected || 0;
 		const missed = row.missed || 0;
 		const total = row.total || 0;
+		const rejected = row.rejected || row.cancelled || 0;
 		const other = Math.max(0, total - connected - missed);
+		const is_online = Boolean(row.is_online);
+		const availability_label = row.availability_label || (is_online ? __('Online') : __('Offline'));
+		const duration_label = row.availability_duration_label || '';
 		const segment = (value, bucket) => {
 			if (!value || !total) return '';
 			return `<span title="${this.escape(this.bucket_label(bucket))}: ${value}" style="background:${this.bucket_color(bucket)}; width:${Math.round((value / total) * 100)}%"></span>`;
@@ -677,8 +808,17 @@ class VobizAgentAnalytics {
 					<div class="vobiz-agent-sub">${missed} ${__('missed')} / ${connected} ${__('connected')}</div>
 				</div>
 				<div class="vobiz-agent-mini"><span>${__('Answer')}</span><strong>${row.answer_rate || 0}%</strong></div>
-				<div class="vobiz-agent-mini"><span>${__('Avg Talk')}</span><strong>${this.escape(row.average_duration_label || '0s')}</strong></div>
+				<div class="vobiz-agent-mini"><span>${__('Total Talk')}</span><strong>${this.escape(row.talk_time_label || '0s')}</strong></div>
 				<div class="vobiz-agent-mini"><span>${__('Total')}</span><strong>${total}</strong></div>
+				<div class="vobiz-agent-mini" title="${this.escape(row.availability_status || availability_label)}">
+					<span>${__('Status')}</span>
+					<div class="vobiz-agent-status">
+						<span class="vobiz-agent-status-dot ${is_online ? 'online' : 'offline'}"></span>
+						<strong class="vobiz-agent-status-text">${this.escape(availability_label)}</strong>
+					</div>
+					<div class="vobiz-agent-sub">${this.escape(duration_label)}</div>
+				</div>
+				<div class="vobiz-agent-mini"><span>${__('Rejected')}</span><strong>${rejected}</strong></div>
 			</div>
 		`;
 	}
