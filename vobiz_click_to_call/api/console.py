@@ -26,12 +26,29 @@ QUEUE_SOURCE_DOCTYPES = {
 COMBINED_QUEUE_SOURCE = "CRM Lead and Patient"
 HTML_TAG_RE = re.compile(r"<[^>]*>")
 CONSOLE_SESSION_TTL_SECONDS = 12
+CONSOLE_STATIC_CONTEXT_TTL_SECONDS = 60
+CONSOLE_QUEUE_LIMIT_MAX = 100
 ANALYTICS_STATUS_OPTIONS = ("total", "connected", "missed", "busy", "no_answer", "failed", "cancelled")
 ANALYTICS_CALL_LIMIT_MAX = 100
 
 
 def _console_session_key(user: str) -> str:
     return f"vobiz_agent_console:online:{user}"
+
+
+def _console_static_context_key(user: str, queue_source: str, queue_doctype: str, agent_queue_source: str) -> str:
+    lang = getattr(frappe.local, "lang", None) or "en"
+    return ":".join(
+        (
+            "vobiz_agent_console",
+            "static_context",
+            user or "Guest",
+            lang,
+            queue_source or "",
+            queue_doctype or "",
+            agent_queue_source or "",
+        )
+    )
 
 
 def is_agent_console_online(user: str | None) -> bool:
@@ -98,12 +115,12 @@ def get_agent_console_data(
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
 
-    limit = max(5, min(frappe.utils.cint(limit) or 25, 500))
-    settings = get_settings()
+    limit = max(5, min(frappe.utils.cint(limit) or 25, CONSOLE_QUEUE_LIMIT_MAX))
     agent = _agent_context()
     agent_queue_source = _agent_queue_source(agent)
     queue_source = _selected_queue_source(agent_queue_source, queue_source_filter)
     queue_doctype = _queue_doctype_for_source(queue_source)
+    static_context = _get_console_static_context(queue_source, queue_doctype, agent_queue_source)
     return {
         "availability": get_call_capability(),
         "active_call": _active_call(),
@@ -116,10 +133,37 @@ def get_agent_console_data(
             sort_by=sort_by,
             user_filters=filters,
         ),
+        "queue_meta": static_context["queue_meta"],
+        "dispositions": static_context["dispositions"],
+        "ai_disposition_enabled": static_context["ai_disposition_enabled"],
+    }
+
+
+def _get_console_static_context(queue_source: str, queue_doctype: str, agent_queue_source: str) -> dict[str, Any]:
+    cache_key = _console_static_context_key(
+        frappe.session.user,
+        queue_source,
+        queue_doctype,
+        agent_queue_source,
+    )
+    try:
+        cached = frappe.cache().get_value(cache_key)
+        if cached is not None:
+            return cached
+    except Exception:
+        cached = None
+
+    settings = get_settings()
+    context = {
         "queue_meta": _queue_meta(queue_source, queue_doctype, agent_queue_source=agent_queue_source),
         "dispositions": get_disposition_options_api(),
         "ai_disposition_enabled": bool(settings.enable_ai_disposition),
     }
+    try:
+        frappe.cache().set_value(cache_key, context, expires_in_sec=CONSOLE_STATIC_CONTEXT_TTL_SECONDS)
+    except Exception:
+        pass
+    return context
 
 
 def _mark_console_user_available() -> None:

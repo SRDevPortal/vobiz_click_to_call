@@ -123,7 +123,7 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("row.owner", visible_rows_source)
         self.assertIn(".vobiz-lead-owner-col", meta_source)
         self.assertIn("=== 'Patient'", meta_source)
-        self.assertIn("? 10 : 9", colspan_source)
+        self.assertIn("? 12 : 11", colspan_source)
         self.assertIn("row.owner || ''", row_html_source)
 
     def test_queue_owner_uses_only_lead_owner_field(self):
@@ -287,6 +287,17 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn('filters["vobiz_last_call_status"]', console)
         self.assertIn("this.state.queue_meta = Object.assign", self.source)
         self.assertIn("queue_meta_value('summary_tab_label')", self.source)
+
+    def test_console_static_context_is_cached_and_queue_limit_is_capped(self):
+        console = CONSOLE_API.read_text(encoding="utf-8")
+
+        self.assertIn("CONSOLE_STATIC_CONTEXT_TTL_SECONDS = 60", console)
+        self.assertIn("CONSOLE_QUEUE_LIMIT_MAX = 100", console)
+        self.assertIn("min(frappe.utils.cint(limit) or 25, CONSOLE_QUEUE_LIMIT_MAX)", console)
+        self.assertIn("static_context = _get_console_static_context", console)
+        self.assertIn('frappe.cache().get_value(cache_key)', console)
+        self.assertIn("expires_in_sec=CONSOLE_STATIC_CONTEXT_TTL_SECONDS", console)
+        self.assertNotIn("min(frappe.utils.cint(limit) or 25, 500)", console)
 
     def test_agent_console_dashboard_uses_filtered_analytics(self):
         console = CONSOLE_API.read_text(encoding="utf-8")
