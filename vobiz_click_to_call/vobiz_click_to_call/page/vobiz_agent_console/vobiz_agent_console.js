@@ -47,10 +47,13 @@ class VobizAgentConsole {
 			workdesk_live_call_log: null,
 			workdesk_live_polling: false,
 			disposition_prompted_call_log: null,
+			active_disposition_call_log: null,
 			navigating_from_workdesk: false,
 			last_callback_call_log: null,
 			queue_filters: [],
 			queue_sort_by: 'modified_desc',
+			queue_page: 1,
+			queue_page_size: 25,
 			filter_group: null,
 			auto_dial: {
 				running: false,
@@ -60,6 +63,7 @@ class VobizAgentConsole {
 				results: [],
 				events: [],
 				current: null,
+				awaiting_disposition: false,
 				started_at: null,
 				stopped_at: null
 			}
@@ -162,14 +166,29 @@ class VobizAgentConsole {
 										<th class="vobiz-patient-col hidden">${__('Day')}</th>
 										<th class="vobiz-team-col">${__('Team')}</th>
 										<th class="vobiz-lead-owner-col">${__('Lead Owner')}</th>
-										<th>${__('Status')}</th>
-										<th>${__('Next Action')}</th>
-										<th style="width: 86px">${__('Created On')}</th>
+										<th style="width: 150px">${__('Status')}</th>
+										<th style="width: 150px">${__('Next Action')}</th>
+										<th style="width: 86px">${__('Updated On')}</th>
+										<th style="width: 180px">${__('Created On')}</th>
 										<th style="width: 88px">${__('Action')}</th>
 									</tr>
 								</thead>
 								<tbody data-role="queue"></tbody>
 							</table>
+						</div>
+						<div class="vobiz-pagination" data-role="queue-pagination">
+							<div class="vobiz-page-summary" data-role="queue-page-summary"></div>
+							<div class="vobiz-page-controls">
+								<select class="form-control input-sm" data-role="queue-page-size">
+									<option value="10">10</option>
+									<option value="25" selected>25</option>
+									<option value="50">50</option>
+									<option value="100">100</option>
+								</select>
+								<button class="btn btn-default btn-sm" data-action="queue-page-prev"><i class="fa fa-chevron-left"></i></button>
+								<span class="vobiz-page-number" data-role="queue-page-number"></span>
+								<button class="btn btn-default btn-sm" data-action="queue-page-next"><i class="fa fa-chevron-right"></i></button>
+							</div>
 						</div>
 					</section>
 
@@ -231,6 +250,11 @@ class VobizAgentConsole {
 				.vobiz-table th { color: #6b7280; font-size: 11px; font-weight: 700; }
 				.vobiz-table td { overflow: hidden; text-overflow: ellipsis; vertical-align: middle; white-space: nowrap; }
 				.vobiz-table .hidden { display: none; }
+				.vobiz-pagination { align-items: center; border-top: 1px solid #eef0f3; display: flex; gap: 12px; justify-content: space-between; margin-top: 12px; padding-top: 12px; }
+				.vobiz-page-summary { color: #6b7280; font-size: 12px; }
+				.vobiz-page-controls { align-items: center; display: flex; gap: 8px; }
+				.vobiz-page-controls select { width: 78px; }
+				.vobiz-page-number { color: #374151; font-size: 12px; font-weight: 700; min-width: 86px; text-align: center; }
 				.vobiz-person { align-items: center; display: flex; gap: 9px; min-width: 0; }
 				.vobiz-avatar { align-items: center; background: #eaf3ff; border-radius: 50%; color: #2563eb; display: inline-flex; flex: 0 0 auto; font-weight: 700; height: 28px; justify-content: center; width: 28px; }
 				.vobiz-status { font-size: 12px; font-weight: 700; }
@@ -249,6 +273,9 @@ class VobizAgentConsole {
 				.vobiz-call-controls { display: flex; gap: 8px; }
 				.vobiz-call-assets { border-top: 1px solid #eef0f3; font-size: 12px; margin-top: 12px; padding-top: 10px; }
 				.vobiz-call-assets a { font-weight: 700; }
+				.vobiz-auto-call-dialog .modal-dialog { max-width: min(520px, calc(100vw - 32px)); }
+				.vobiz-auto-call-dialog .modal-body { padding: 16px; }
+				.vobiz-auto-call-dialog .vobiz-band { margin-bottom: 0; }
 				.vobiz-auto-live { border-top: 1px solid #eef0f3; display: grid; gap: 8px; max-height: 220px; overflow: auto; padding-top: 10px; }
 				.vobiz-auto-event { border-left: 3px solid #d1d5db; padding-left: 8px; }
 				.vobiz-auto-event.active { border-color: #0ea5e9; }
@@ -383,6 +410,8 @@ class VobizAgentConsole {
 		$main.on('click', '[data-action="toggle-auto"]', () => this.toggle_auto_dial());
 		$main.on('click', '[data-action="auto-report"]', () => this.open_auto_dial_report());
 		$main.on('click', '[data-action="open-filters"]', () => this.open_filter_popover());
+		$main.on('click', '[data-action="queue-page-prev"]', () => this.change_queue_page(-1));
+		$main.on('click', '[data-action="queue-page-next"]', () => this.change_queue_page(1));
 		$main.on('click', '[data-action="call-row"]', (e) => {
 			e.stopPropagation();
 			this.call_row($(e.currentTarget).closest('tr').data('index'));
@@ -431,13 +460,20 @@ class VobizAgentConsole {
 		$main.on('change', '[data-role="queue-source-filter"]', () => {
 			this.state.queue_filters = [];
 			this.state.filter_group = null;
+			this.state.queue_page = 1;
 			this.state.selected_queue_keys.clear();
 			this.load();
 		});
 		$main.on('change', '[data-role="queue-sort"]', () => {
 			this.state.queue_sort_by = (this.page.main.find('[data-role="queue-sort"]').val() || 'modified_desc').trim();
+			this.state.queue_page = 1;
 			this.state.selected_queue_keys.clear();
 			this.load();
+		});
+		$main.on('change', '[data-role="queue-page-size"]', () => {
+			this.state.queue_page_size = parseInt(this.page.main.find('[data-role="queue-page-size"]').val(), 10) || 25;
+			this.state.queue_page = 1;
+			this.render_queue();
 		});
 		$(document).on('visibilitychange.vobiz-agent-console', () => {
 			if (document.hidden) {
@@ -508,6 +544,7 @@ class VobizAgentConsole {
 
 	queue_search_changed() {
 		clearTimeout(this.search_timer);
+		this.state.queue_page = 1;
 		this.search_timer = setTimeout(() => this.load(), 300);
 	}
 
@@ -669,18 +706,63 @@ class VobizAgentConsole {
 
 	render_queue() {
 		this.render_queue_meta();
-		const rows = this.visible_queue_rows();
+		const filteredRows = this.filtered_queue_rows();
+		this.clamp_queue_page(filteredRows.length);
+		this.page.main.find('[data-role="queue-page-size"]').val(String(this.state.queue_page_size || 25));
+		const rows = this.paginated_queue_rows(filteredRows);
 		this.page.main.find('[data-role="queue"]').html(rows.map(row => this.row_html(row)).join('') || `
 			<tr><td colspan="${this.queue_colspan()}" class="text-muted text-center">${frappe.utils.escape_html(this.queue_meta_value('empty_message'))}</td></tr>
 		`);
+		this.render_queue_pagination(filteredRows.length);
 		this.update_selected_count();
 	}
 
 	visible_queue_rows() {
+		return this.paginated_queue_rows(this.filtered_queue_rows());
+	}
+
+	filtered_queue_rows() {
 		const query = (this.page.main.find('[data-role="search"]').val() || '').toLowerCase();
 		return this.state.queue
 			.map((row, index) => ({ ...row, index }))
 			.filter(row => !query || [row.name, row.title, row.company, row.phone, row.owner, row.status, row.next_action, row.team, row.sr_medical_department, row.sr_followup_id, row.sr_followup_day, row.whatsapp_last_message_preview].join(' ').toLowerCase().includes(query));
+	}
+
+	paginated_queue_rows(rows) {
+		const pageSize = this.state.queue_page_size || 25;
+		const page = Math.max(1, this.state.queue_page || 1);
+		const start = (page - 1) * pageSize;
+		return (rows || []).slice(start, start + pageSize);
+	}
+
+	clamp_queue_page(totalRows) {
+		const pageSize = this.state.queue_page_size || 25;
+		const totalPages = Math.max(1, Math.ceil((totalRows || 0) / pageSize));
+		this.state.queue_page = Math.min(Math.max(1, this.state.queue_page || 1), totalPages);
+	}
+
+	change_queue_page(delta) {
+		const totalRows = this.filtered_queue_rows().length;
+		const pageSize = this.state.queue_page_size || 25;
+		const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+		this.state.queue_page = Math.min(Math.max(1, (this.state.queue_page || 1) + delta), totalPages);
+		this.render_queue();
+	}
+
+	render_queue_pagination(totalRows) {
+		const pageSize = this.state.queue_page_size || 25;
+		const page = this.state.queue_page || 1;
+		const totalPages = Math.max(1, Math.ceil((totalRows || 0) / pageSize));
+		const start = totalRows ? ((page - 1) * pageSize) + 1 : 0;
+		const end = Math.min(totalRows || 0, page * pageSize);
+		this.page.main.find('[data-role="queue-page-summary"]').text(
+			totalRows
+				? __('Showing {0}-{1} of {2}', [start, end, totalRows])
+				: __('No records')
+		);
+		this.page.main.find('[data-role="queue-page-number"]').text(__('Page {0} of {1}', [page, totalPages]));
+		this.page.main.find('[data-action="queue-page-prev"]').prop('disabled', page <= 1);
+		this.page.main.find('[data-action="queue-page-next"]').prop('disabled', page >= totalPages);
 	}
 
 	render_queue_meta() {
@@ -696,7 +778,7 @@ class VobizAgentConsole {
 
 	queue_colspan() {
 		const meta = this.state.queue_meta || this.default_queue_meta();
-		return (meta.doctype || '') === 'Patient' ? 12 : 11;
+		return (meta.doctype || '') === 'Patient' ? 13 : 12;
 	}
 
 	reset_filter_group_if_doctype_changed() {
@@ -727,6 +809,7 @@ class VobizAgentConsole {
 				filters: this.state.queue_filters || [],
 				on_change: () => {
 					this.state.queue_filters = this.state.filter_group.get_filters();
+					this.state.queue_page = 1;
 					this.render_filter_button();
 					this.load();
 				}
@@ -798,7 +881,8 @@ class VobizAgentConsole {
 				<td class="vobiz-lead-owner-col ${this.is_patient_queue() ? 'hidden' : ''}">${frappe.utils.escape_html(row.owner || '')}</td>
 				<td><span class="vobiz-status ${frappe.utils.escape_html(statusClass)}">${frappe.utils.escape_html(row.status || '')}</span></td>
 				<td>${frappe.utils.escape_html(row.next_action || '')}</td>
-				<td title="${frappe.utils.escape_html(row.creation || '')}">${frappe.utils.escape_html(this.compact_relative_time(row.creation))}</td>
+				<td title="${frappe.utils.escape_html(row.modified || '')}">${frappe.utils.escape_html(this.compact_relative_time(row.modified))}</td>
+				<td title="${frappe.utils.escape_html(row.creation || '')}">${frappe.utils.escape_html(this.format_datetime(row.creation))}</td>
 				<td>
 					<button class="btn btn-xs btn-primary" data-action="call-row" ${loading ? 'disabled' : ''}>
 						<i class="fa ${loading ? 'fa-spinner fa-spin' : 'fa-phone'}"></i> ${loading ? __('Loading') : __('Details')}
@@ -843,6 +927,21 @@ class VobizAgentConsole {
 		const months = Math.floor(days / 30);
 		if (months < 12) return `${months}mo`;
 		return `${Math.floor(months / 12)}y`;
+	}
+
+	format_datetime(value) {
+		if (!value) return '-';
+		const raw = String(value).replace(' ', 'T');
+		const date = new Date(raw);
+		if (Number.isNaN(date.getTime())) return '-';
+
+		return date.toLocaleString(undefined, {
+			year: 'numeric',
+			month: 'short',
+			day: '2-digit',
+			hour: '2-digit',
+			minute: '2-digit'
+		});
 	}
 
 	is_patient_queue() {
@@ -941,6 +1040,86 @@ class VobizAgentConsole {
 		this.render_auto_live();
 	}
 
+	agent_console_targets(selector) {
+		let $targets = this.page.main.find(selector);
+		if (this.auto_call_dialog && this.auto_call_dialog.$wrapper) {
+			$targets = $targets.add(this.auto_call_dialog.$wrapper.find(selector));
+		}
+		return $targets;
+	}
+
+	show_auto_call_dialog() {
+		if (this.auto_call_dialog && this.auto_call_dialog.$wrapper && this.auto_call_dialog.$wrapper.is(':visible')) {
+			this.render_auto_call_dialog();
+			return;
+		}
+		const dialog = new frappe.ui.Dialog({
+			title: __('Real-Time Agent Console'),
+			fields: [{
+				fieldname: 'details',
+				fieldtype: 'HTML',
+				options: this.auto_call_dialog_html()
+			}]
+		});
+		this.auto_call_dialog = dialog;
+		dialog.$wrapper.addClass('vobiz-auto-call-dialog');
+		dialog.get_close_btn().show();
+		dialog.$wrapper.on('click', '[data-action="open-reference"]', () => this.open_reference());
+		dialog.$wrapper.on('click', '[data-action="cancel-call"]', () => {
+			const callLog = ((this.state.auto_dial || {}).current || {}).call_log || ((this.state.active_call || {}).name);
+			if (callLog) {
+				this.cancel_call_log(callLog);
+			}
+		});
+		dialog.$wrapper.on('hidden.bs.modal', () => {
+			if (this.auto_call_dialog === dialog) {
+				this.auto_call_dialog = null;
+			}
+		});
+		dialog.show();
+		this.render_auto_call_dialog();
+	}
+
+	hide_auto_call_dialog() {
+		if (!this.auto_call_dialog) return;
+		const dialog = this.auto_call_dialog;
+		this.auto_call_dialog = null;
+		dialog.hide();
+	}
+
+	auto_call_dialog_html() {
+		return `
+			<section class="vobiz-band vobiz-active">
+				<div class="vobiz-section-title">
+					<h3>${__('Current Call')}</h3>
+					<span class="vobiz-pill" data-role="call-status">${__('Idle')}</span>
+				</div>
+				<div class="vobiz-call-focus">
+					<div class="vobiz-call-title" data-role="focus-name">${__('No active call')}</div>
+					<div class="text-muted" data-role="focus-meta">${__('Waiting for auto dial call')}</div>
+					<div class="vobiz-call-timer" data-role="timer">00:00</div>
+					<div class="vobiz-call-controls">
+						<button class="btn btn-default btn-sm" data-action="open-reference"><i class="fa fa-external-link"></i></button>
+						<button class="btn btn-danger btn-sm" data-action="cancel-call"><i class="fa fa-phone"></i> ${__('End')}</button>
+					</div>
+					<div class="vobiz-call-assets" data-role="call-assets"></div>
+				</div>
+			</section>
+		`;
+	}
+
+	render_auto_call_dialog() {
+		if (!this.auto_call_dialog) return;
+		this.render_active_call(true);
+		const session = this.state.auto_dial || {};
+		const current = session.current || {};
+		if (current.title || current.lead) {
+			this.agent_console_targets('[data-role="focus-name"]').text(current.title || current.lead);
+			this.agent_console_targets('[data-role="focus-meta"]').text(`${current.lead || ''} • ${current.phone || __('No phone')}`);
+			this.agent_console_targets('[data-role="call-status"]').text(current.status || __('Starting'));
+		}
+	}
+
 	select_row(index) {
 		const row = this.state.queue[index];
 		if (!row) return;
@@ -958,19 +1137,19 @@ class VobizAgentConsole {
 	}
 
 	render_focus(row) {
-		this.page.main.find('[data-role="focus-name"]').text(row.title || row.name || __('Selected record'));
-		this.page.main.find('[data-role="focus-meta"]').text(`${row.doctype} • ${row.phone || __('No phone')}`);
+		this.agent_console_targets('[data-role="focus-name"]').text(row.title || row.name || __('Selected record'));
+		this.agent_console_targets('[data-role="focus-meta"]').text(`${row.doctype} • ${row.phone || __('No phone')}`);
 	}
 
-	render_active_call() {
+	render_active_call(skipDispositionPrompt) {
 		const active = this.state.active_call || {};
 		const last = active.last_call || {};
-		this.page.main.find('[data-role="call-status"]').text(active.status || last.status || __('Idle'));
+		this.agent_console_targets('[data-role="call-status"]').text(active.status || last.status || __('Idle'));
 		if (active.reference_name) {
-			this.page.main.find('[data-role="focus-name"]').text(active.reference_title || active.reference_name);
-			this.page.main.find('[data-role="focus-meta"]').text(`${active.reference_doctype || ''} • ${active.customer_number_display || ''}`);
+			this.agent_console_targets('[data-role="focus-name"]').text(active.reference_title || active.reference_name);
+			this.agent_console_targets('[data-role="focus-meta"]').text(`${active.reference_doctype || ''} • ${active.customer_number_display || ''}`);
 		} else if (last.status) {
-			this.page.main.find('[data-role="focus-meta"]').text(__('Last call {0}', [last.status]));
+			this.agent_console_targets('[data-role="focus-meta"]').text(__('Last call {0}', [last.status]));
 		}
 		if (active.name && !this.is_terminal_status(active.status)) {
 			this.state.call_started_at = active.started_at ? new Date(active.started_at) : null;
@@ -978,7 +1157,7 @@ class VobizAgentConsole {
 		} else {
 			this.state.call_started_at = null;
 			this.stop_timer();
-			if (last.name && this.is_terminal_status(last.status)) {
+			if (!skipDispositionPrompt && last.name && this.is_terminal_status(last.status)) {
 				this.clear_tracked_live_call(last.name);
 				this.maybe_prompt_workdesk_disposition(last);
 			}
@@ -1005,19 +1184,19 @@ class VobizAgentConsole {
 		if (call.recording_error || call.transcript_error) {
 			rows.push(`<div class="text-muted">${frappe.utils.escape_html(call.recording_error || call.transcript_error)}</div>`);
 		}
-		this.page.main.find('[data-role="call-assets"]').html(rows.join(''));
+		this.agent_console_targets('[data-role="call-assets"]').html(rows.join(''));
 	}
 
 	start_timer() {
 		clearInterval(this.timer);
 		const tick = () => {
 			if (!this.state.call_started_at) {
-				this.page.main.find('[data-role="timer"]').text('00:00');
+				this.agent_console_targets('[data-role="timer"]').text('00:00');
 				return;
 			}
 			const seconds = Math.max(0, Math.floor((Date.now() - this.state.call_started_at.getTime()) / 1000));
 			const minutes = Math.floor(seconds / 60);
-			this.page.main.find('[data-role="timer"]').text(`${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`);
+			this.agent_console_targets('[data-role="timer"]').text(`${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`);
 		};
 		tick();
 		this.timer = setInterval(tick, 1000);
@@ -1026,11 +1205,24 @@ class VobizAgentConsole {
 	stop_timer() {
 		clearInterval(this.timer);
 		this.timer = null;
-		this.page.main.find('[data-role="timer"]').text('00:00');
+		this.agent_console_targets('[data-role="timer"]').text('00:00');
 	}
 
 	render_dispositions() {
 		const context = this.state.lead_disposition_context || {};
+		const active = this.state.active_call || {};
+		const row = this.state.active_workdesk_row || this.state.selected || {};
+		const isPatient = this.is_patient_disposition_reference(active, row);
+		this.page.main.find('[data-role="lead-status"]').closest('.form-group, .vobiz-field, .control-input-wrapper').toggle(!isPatient);
+		this.page.main.find('[data-role="disposition"]').closest('.form-group, .vobiz-field, .control-input-wrapper').toggle(!isPatient);
+		this.page.main.find('[data-role="sr-followup-status"]').closest('.form-group, .vobiz-field, .control-input-wrapper').toggle(isPatient);
+		if (isPatient) {
+			const currentFollowupStatus = row.sr_followup_status || '';
+			this.page.main.find('[data-role="sr-followup-status"]').html([''].concat(this.patient_followup_status_options()).map(value =>
+				`<option value="${frappe.utils.escape_html(value)}">${frappe.utils.escape_html(value || __('Select Follow-up Status'))}</option>`
+			).join('')).val(currentFollowupStatus);
+			return;
+		}
 		const statusOptions = context.status_options || [];
 		const currentStatus = context.status || '';
 		const currentDisposition = context.disposition || '';
@@ -1041,6 +1233,14 @@ class VobizAgentConsole {
 		this.page.main.find('[data-role="disposition"]').html(options.map(value =>
 			`<option value="${frappe.utils.escape_html(value)}">${frappe.utils.escape_html(value || __('Select SR Lead Disposition'))}</option>`
 		).join('')).val(currentDisposition);
+	}
+
+	is_patient_disposition_reference(call = {}, row = {}) {
+		return ((call.reference_doctype || row.doctype || '') === 'Patient');
+	}
+
+	patient_followup_status_options() {
+		return ['Pending', 'Done'];
 	}
 
 	render_manual_disposition_visibility() {
@@ -2680,30 +2880,50 @@ class VobizAgentConsole {
 			results: [],
 			events: [],
 			current: null,
+			awaiting_disposition: false,
 			started_at: frappe.datetime.now_datetime(),
 			stopped_at: null
 		};
 		this.add_auto_event(__('Auto dial started'), __('{0} leads queued.', [rows.length]), 'active');
 		this.update_selected_count();
 		this.render_auto_toggle();
+		this.show_auto_call_dialog();
 		this.run_next_auto_dial();
 	}
 
 	stop_auto_dial() {
 		const session = this.state.auto_dial || {};
+		const callLog = ((session.current || {}).call_log) || ((this.state.active_call || {}).name);
 		session.running = false;
 		session.in_flight = false;
+		session.awaiting_disposition = false;
 		session.stopped_at = frappe.datetime.now_datetime();
 		this.state.auto_dial = session;
-		this.add_auto_event(__('Auto dial stopped'), __('Active call was not ended.'), 'failed');
+		this.add_auto_event(
+			__('Auto dial stopped'),
+			callLog ? __('Active auto dial call is being stopped.') : __('No active call was running.'),
+			callLog ? 'active' : 'done'
+		);
 		this.update_selected_count();
 		this.render_auto_toggle();
-		frappe.show_alert({ message: __('Auto dial stopped. Active call was not ended.'), indicator: 'orange' });
+		this.hide_auto_call_dialog();
+		if (callLog) {
+			this.cancel_call_log(callLog).then(() => {
+				frappe.show_alert({ message: __('Auto dial stopped and active call cleared.'), indicator: 'orange' });
+			}).catch(() => {
+				this.load();
+				frappe.show_alert({ message: __('Auto dial stopped. Active call could not be cleared.'), indicator: 'red' });
+			});
+			return;
+		}
+		this.load();
+		frappe.show_alert({ message: __('Auto dial stopped.'), indicator: 'orange' });
 	}
 
 	maybe_continue_auto_dial() {
 		const session = this.state.auto_dial || {};
 		if (!session.running || session.in_flight) return;
+		if (session.awaiting_disposition) return;
 		if (session.current && session.current.call_log) return;
 		if ((this.state.active_call || {}).name) return;
 		if (session.cursor >= session.queue.length) {
@@ -2713,6 +2933,7 @@ class VobizAgentConsole {
 			this.add_auto_event(__('Auto dial completed'), __('All selected leads have been processed.'), 'done');
 			this.update_selected_count();
 			this.render_auto_toggle();
+			this.hide_auto_call_dialog();
 			return;
 		}
 		this.run_next_auto_dial();
@@ -2737,8 +2958,10 @@ class VobizAgentConsole {
 			started_at: frappe.datetime.now_datetime()
 		};
 		this.state.auto_dial = session;
+		this.state.selected = row;
 		this.add_auto_event(__('Starting call'), `${row.name} • ${row.phone || __('No phone')}`, 'active');
 		this.update_selected_count();
+		this.show_auto_call_dialog();
 
 		this.start_call_for_row(row).then((message) => {
 			session.current = {
@@ -2751,6 +2974,7 @@ class VobizAgentConsole {
 			};
 			this.add_auto_event(__('Call request sent'), `${row.name} • ${message.call_log || __('No call log')}`, 'active');
 			this.state.auto_dial = session;
+			this.show_auto_call_dialog();
 			this.refresh_auto_dial_current(true);
 		}).catch((error) => {
 			session.results.push({
@@ -2765,6 +2989,7 @@ class VobizAgentConsole {
 			session.in_flight = false;
 			session.current = null;
 			this.state.auto_dial = session;
+			this.render_auto_call_dialog();
 			this.add_auto_event(__('Call failed to start'), `${row.name} • ${(error && error.message) || ''}`, 'failed');
 			this.maybe_continue_auto_dial();
 		});
@@ -2782,6 +3007,7 @@ class VobizAgentConsole {
 			session.current = current;
 			this.state.auto_dial = session;
 			this.render_auto_live();
+			this.render_auto_call_dialog();
 			return;
 		}
 
@@ -2801,6 +3027,7 @@ class VobizAgentConsole {
 			latest.current = latestCurrent;
 			latest.polling_current = false;
 			this.state.auto_dial = latest;
+			this.render_auto_call_dialog();
 
 			if (terminal.includes(call.status)) {
 				this.finish_auto_dial_call(call);
@@ -2835,15 +3062,66 @@ class VobizAgentConsole {
 		});
 		session.current = null;
 		session.in_flight = false;
+		session.awaiting_disposition = true;
 		this.state.auto_dial = session;
 		this.state.active_call = { last_call: call };
 		this.state.call_started_at = null;
+		this.state.disposition_prompted_call_log = call.name;
 		this.clear_tracked_live_call(call.name);
 		this.stop_timer();
-		this.add_auto_event(__('Next action'), `${current.lead} • ${outcome.label}. ${__('Moving to next lead.')}`, outcome.state);
+		this.add_auto_event(__('Waiting for disposition'), `${current.lead} • ${outcome.label}. ${__('Update status to continue.')}`, outcome.state);
 		this.update_selected_count();
 		this.render_auto_live();
-		setTimeout(() => this.maybe_continue_auto_dial(), 900);
+		this.render_auto_call_dialog();
+		this.prompt_auto_dial_disposition(call, current);
+	}
+
+	prompt_auto_dial_disposition(call, current) {
+		this.state.disposition_prompted_call_log = call.name;
+		const row = (this.state.queue || []).find(item =>
+			item.name === (call.reference_name || current.lead) &&
+			(!call.reference_doctype || item.doctype === call.reference_doctype)
+		) || this.state.selected || {
+			doctype: call.reference_doctype,
+			name: call.reference_name || current.lead,
+			title: current.title || call.reference_name || current.lead,
+			phone: current.phone || call.customer_number_display || ''
+		};
+		this.state.selected = row;
+
+		const continue_after_disposition = () => this.complete_auto_dial_disposition(call.name);
+		const dispositionOptions = {
+			auto_dial: true,
+			timeout_seconds: 60,
+			timeout_status: 'Agent Not Available'
+		};
+		if (!row.doctype || !row.name) {
+			this.open_post_call_disposition_dialog(call, row, continue_after_disposition, dispositionOptions);
+			return;
+		}
+
+		frappe.call('vobiz_click_to_call.api.console.get_reference_context', {
+			reference_doctype: row.doctype || call.reference_doctype,
+			reference_name: row.name || call.reference_name,
+			lite: 1
+		}).then((r) => {
+			this.state.context = r.message || {};
+			this.apply_context_dispositions(this.state.context);
+			this.open_post_call_disposition_dialog(call, row, continue_after_disposition, dispositionOptions);
+		}).catch(() => {
+			this.open_post_call_disposition_dialog(call, row, continue_after_disposition, dispositionOptions);
+		});
+	}
+
+	complete_auto_dial_disposition(call_log) {
+		const session = this.state.auto_dial || {};
+		if (!session.awaiting_disposition) return;
+		session.awaiting_disposition = false;
+		this.state.auto_dial = session;
+		this.add_auto_event(__('Disposition completed'), `${call_log || __('Call')} • ${__('Moving to next lead.')}`, 'done');
+		this.update_selected_count();
+		this.render_auto_live();
+		setTimeout(() => this.maybe_continue_auto_dial(), 500);
 	}
 
 	auto_call_outcome(call) {
@@ -2966,7 +3244,10 @@ class VobizAgentConsole {
 			this.state.workdesk_live_call = null;
 			this.render_workdesk_live_call();
 			this.update_workdesk_primary_action(row || this.state.active_workdesk_row);
-			this.maybe_prompt_workdesk_disposition(call);
+			const autoCallLog = (((this.state.auto_dial || {}).current || {}).call_log) || '';
+			if (autoCallLog !== call_log) {
+				this.maybe_prompt_workdesk_disposition(call);
+			}
 			frappe.show_alert({ message: __('Call stopped.'), indicator: 'orange' });
 			this.load();
 		});
@@ -2976,6 +3257,10 @@ class VobizAgentConsole {
 		if (!call || !call.name || !this.is_terminal_status(call.status)) return;
 		if (this.state.ai_disposition_enabled) return;
 		if (this.state.disposition_prompted_call_log === call.name) return;
+		if (this.state.active_disposition_call_log === call.name) return;
+		const session = this.state.auto_dial || {};
+		const autoCallLog = ((session.current || {}).call_log) || '';
+		if (session.running && (session.awaiting_disposition || autoCallLog === call.name)) return;
 
 		const row = this.state.active_workdesk_row || this.state.selected || {};
 		const matchesWorkdesk = row.doctype && row.name &&
@@ -2987,9 +3272,17 @@ class VobizAgentConsole {
 		setTimeout(() => this.open_post_call_disposition_dialog(call, row), 150);
 	}
 
-	open_post_call_disposition_dialog(call, row) {
-		if (this.state.ai_disposition_enabled) return;
+	open_post_call_disposition_dialog(call, row, on_done, options = {}) {
+		if (this.state.active_disposition_call_log === call.name) return;
+		this.state.active_disposition_call_log = call.name;
+		this.state.disposition_prompted_call_log = call.name;
+		if (this.state.ai_disposition_enabled) {
+			this.state.active_disposition_call_log = null;
+			if (on_done) on_done();
+			return;
+		}
 		if (call.disposition) {
+			this.state.active_disposition_call_log = null;
 			frappe.msgprint({
 				title: __('Call Disposed'),
 				indicator: 'green',
@@ -3000,17 +3293,72 @@ class VobizAgentConsole {
 					${call.disposition_notes ? `<hr><div>${frappe.utils.escape_html(call.disposition_notes)}</div>` : ''}
 				`
 			});
+			if (on_done) on_done();
 			return;
 		}
 
 		const leadContext = this.state.lead_disposition_context || {};
-		const statusOptions = leadContext.status_options || [];
+		const isPatientDisposition = this.is_patient_disposition_reference(call, row);
+		const autoDialDisposition = Boolean(options.auto_dial) && !isPatientDisposition;
+		const timeoutStatus = options.timeout_status || 'Agent Not Available';
+		const timeoutSeconds = parseInt(options.timeout_seconds, 10) || 60;
+		const statusOptions = (leadContext.status_options || []).slice();
+		if (autoDialDisposition && !statusOptions.includes(timeoutStatus)) {
+			statusOptions.push(timeoutStatus);
+		}
 		const currentStatus = leadContext.status || '';
-		const options = this.state.dispositions || [];
-		const suggested = call.ai_disposition && options.includes(call.ai_disposition) ? call.ai_disposition : '';
+		const dispositionOptions = this.state.dispositions || [];
+		const suggested = call.ai_disposition && dispositionOptions.includes(call.ai_disposition) ? call.ai_disposition : '';
 		const notes = [call.ai_summary, call.ai_next_action].filter(Boolean).join('\n\n');
+		let done = false;
+		let autoSubmitting = false;
+		let countdownSeconds = timeoutSeconds;
+		let countdownTimer = null;
+		const finish = () => {
+			if (done) return;
+			done = true;
+			clearInterval(countdownTimer);
+			if (this.state.active_disposition_call_log === call.name) {
+				this.state.active_disposition_call_log = null;
+			}
+			if (on_done) on_done();
+		};
+		const saveDisposition = (values, isAutoSave = false) => {
+			if (done || autoSubmitting) return;
+			if (isPatientDisposition && !values.sr_followup_status) {
+				frappe.msgprint(__('Select follow-up status.'));
+				return;
+			}
+			if (!isPatientDisposition && statusOptions.length && !values.lead_status) {
+				frappe.msgprint(__('Select CRM status.'));
+				return;
+			}
+			autoSubmitting = true;
+			clearInterval(countdownTimer);
+			dialog.get_primary_btn().prop('disabled', true).text(isAutoSave ? __('Auto Saving...') : __('Saving...'));
+			frappe.call('vobiz_click_to_call.api.disposition.save_disposition', {
+				call_log: call.name,
+				lead_status: isPatientDisposition ? '' : values.lead_status,
+				disposition: isPatientDisposition ? values.sr_followup_status : values.disposition,
+				sr_followup_status: isPatientDisposition ? values.sr_followup_status : '',
+				notes: values.notes
+			}).then(() => {
+				frappe.show_alert({
+					message: isAutoSave
+						? __('Disposition auto-saved as {0}', [values.lead_status])
+						: __('Disposition saved'),
+					indicator: isAutoSave ? 'orange' : 'green'
+				});
+				dialog.hide();
+				this.load();
+			}).always(() => {
+				autoSubmitting = false;
+				dialog.get_primary_btn().prop('disabled', false).text(__('Save Disposition'));
+			});
+		};
 		const dialog = new frappe.ui.Dialog({
 			title: __('Complete Call Disposition'),
+			static: autoDialDisposition,
 			fields: [
 				{
 					fieldname: 'call_info',
@@ -3025,6 +3373,26 @@ class VobizAgentConsole {
 					`
 				},
 				{
+					fieldname: 'auto_dial_timer',
+					fieldtype: 'HTML',
+					hidden: !autoDialDisposition,
+					options: `
+						<div class="alert alert-warning" style="margin-bottom: 12px;">
+							<strong>${__('Auto Dial')}</strong>:
+							${__('Submit disposition within')}
+							<span data-role="auto-disposition-countdown">${timeoutSeconds}</span>
+							${__('seconds, otherwise CRM Status will be set to Agent Not Available automatically.')}
+						</div>
+					`
+				},
+				...(isPatientDisposition ? [{
+					fieldname: 'sr_followup_status',
+					fieldtype: 'Select',
+					label: __('Follow-up Status'),
+					options: [''].concat(this.patient_followup_status_options()).join('\n'),
+					reqd: 1,
+					default: row.sr_followup_status || ''
+				}] : [{
 					fieldname: 'lead_status',
 					fieldtype: 'Select',
 					label: __('CRM Status'),
@@ -3036,9 +3404,9 @@ class VobizAgentConsole {
 					fieldname: 'disposition',
 						fieldtype: 'Select',
 						label: __('SR Lead Disposition'),
-						options: [''].concat(options).join('\n'),
+						options: [''].concat(dispositionOptions).join('\n'),
 						default: suggested
-					},
+					}]),
 				{
 					fieldname: 'notes',
 					fieldtype: 'Small Text',
@@ -3048,27 +3416,27 @@ class VobizAgentConsole {
 				],
 				primary_action_label: __('Save Disposition'),
 				primary_action: (values) => {
-					if (statusOptions.length && !values.lead_status) {
-						frappe.msgprint(__('Select CRM status.'));
-						return;
-					}
-				dialog.get_primary_btn().prop('disabled', true).text(__('Saving...'));
-				frappe.call('vobiz_click_to_call.api.disposition.save_disposition', {
-					call_log: call.name,
-					lead_status: values.lead_status,
-					disposition: values.disposition,
-					notes: values.notes
-				}).then(() => {
-					frappe.show_alert({ message: __('Disposition saved'), indicator: 'green' });
-					dialog.hide();
-					this.load();
-				}).always(() => {
-					dialog.get_primary_btn().prop('disabled', false).text(__('Save Disposition'));
-				});
+					saveDisposition(values);
 			}
 		});
+		dialog.$wrapper.on('hidden.bs.modal', finish);
 		dialog.show();
-		if (statusOptions.length) {
+		if (autoDialDisposition) {
+			dialog.get_close_btn().hide();
+			const $countdown = dialog.$wrapper.find('[data-role="auto-disposition-countdown"]');
+			countdownTimer = setInterval(() => {
+				countdownSeconds -= 1;
+				$countdown.text(String(Math.max(0, countdownSeconds)));
+				if (countdownSeconds <= 0) {
+					saveDisposition({
+						lead_status: timeoutStatus,
+						disposition: dialog.get_value('disposition'),
+						notes: dialog.get_value('notes')
+					}, true);
+				}
+			}, 1000);
+		}
+		if (!isPatientDisposition && statusOptions.length) {
 			dialog.fields_dict.lead_status.$input.on('change', () => {
 				const leadStatus = dialog.get_value('lead_status');
 				frappe.call({

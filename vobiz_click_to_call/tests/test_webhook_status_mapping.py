@@ -4,6 +4,7 @@ import unittest
 
 from vobiz_click_to_call.api.webhook import _status_from_dial_status, _status_from_hangup
 from vobiz_click_to_call.api.console import _analytics_bucket
+from vobiz_click_to_call.services.disposition import call_next_action_label
 
 
 class TestWebhookStatusMapping(unittest.TestCase):
@@ -44,6 +45,37 @@ class TestWebhookStatusMapping(unittest.TestCase):
         self.assertEqual(_status_from_dial_status("hangup", previous="Customer Answered"), "Cancelled")
         self.assertEqual(_status_from_dial_status("hangup", previous="Agent Answered"), "Cancelled")
         self.assertEqual(_status_from_dial_status("hangup", previous="Connected"), "Completed")
+
+    def test_cancelled_call_next_action_labels_party(self):
+        self.assertEqual(
+            call_next_action_label(
+                {
+                    "status": "Cancelled",
+                    "call_flow": "Customer First",
+                    "error_message": "Call cancelled by user.",
+                }
+            ),
+            "Cancelled by Agent",
+        )
+        self.assertEqual(
+            call_next_action_label(
+                {
+                    "status": "Cancelled",
+                    "call_flow": "Customer First",
+                }
+            ),
+            "Cancelled by Customer",
+        )
+        self.assertEqual(
+            call_next_action_label(
+                {
+                    "status": "Cancelled",
+                    "call_flow": "Customer First",
+                    "answer_time": "2026-07-01 12:00:00",
+                }
+            ),
+            "Cancelled by Agent",
+        )
 
     def test_static_transcription_event_endpoint_matches_provider_payload(self):
         from pathlib import Path

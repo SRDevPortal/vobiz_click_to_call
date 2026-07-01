@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import timedelta
 from typing import Any
 
 import frappe
 from frappe import _
 
-from vobiz_click_to_call.api.call import get_call_capability, get_call_status, restore_mapping_after_call
+from vobiz_click_to_call.api.call import get_call_capability, get_call_status, is_active_call_log, restore_mapping_after_call
 from vobiz_click_to_call.api.recording import recording_proxy_url
 from vobiz_click_to_call.api.disposition import get_disposition_options_api
 from vobiz_click_to_call.services.call_status import MISSED_STATUSES, status_bucket
@@ -30,6 +31,9 @@ CONSOLE_STATIC_CONTEXT_TTL_SECONDS = 60
 CONSOLE_QUEUE_LIMIT_MAX = 100
 ANALYTICS_STATUS_OPTIONS = ("total", "connected", "missed", "busy", "no_answer", "failed", "cancelled")
 ANALYTICS_CALL_LIMIT_MAX = 100
+AGENT_SHIFT_START_HOUR = 10
+AGENT_SHIFT_END_HOUR = 20
+AGENT_SHIFT_MIN_SECONDS = 9 * 60 * 60
 
 
 def _console_session_key(user: str) -> str:
@@ -85,8 +89,7 @@ def mark_agent_console_offline() -> dict[str, Any]:
         current_call_log = frappe.db.get_value("Vobiz User Mapping", mapping_name, "current_call_log")
         active = False
         if current_call_log and frappe.db.exists("Vobiz Call Log", current_call_log):
-            status = frappe.db.get_value("Vobiz Call Log", current_call_log, "status")
-            active = status not in TERMINAL_STATUSES
+            active = is_active_call_log(current_call_log)
         if not active:
             frappe.db.set_value(
                 "Vobiz User Mapping",
@@ -177,10 +180,8 @@ def _mark_console_user_available() -> None:
         as_dict=True,
     )
     current_call_log = mapping.get("current_call_log")
-    if current_call_log and frappe.db.exists("Vobiz Call Log", current_call_log):
-        status = frappe.db.get_value("Vobiz Call Log", current_call_log, "status")
-        if status not in TERMINAL_STATUSES:
-            return
+    if current_call_log and frappe.db.exists("Vobiz Call Log", current_call_log) and is_active_call_log(current_call_log):
+        return
     updates = {
         "availability_status": "Available",
         "accept_calls": 1,
@@ -507,6 +508,7 @@ def get_analytics(
     include_calls: int | str = 0,
     call_limit: int | str = 50,
     call_offset: int | str = 0,
+    unique_only: int | str = 0,
 ) -> dict[str, Any]:
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
@@ -524,6 +526,7 @@ def get_analytics(
         include_calls=include_calls,
         call_limit=call_limit,
         call_offset=call_offset,
+        unique_only=unique_only,
     )
 
 
@@ -543,6 +546,7 @@ def _analytics_data(
     include_calls: int | str = 0,
     call_limit: int | str = 50,
     call_offset: int | str = 0,
+    unique_only: int | str = 0,
 ) -> dict[str, Any]:
     from_date, to_date = _analytics_date_range(from_date, to_date)
     status_filter = _analytics_status_filter(status_filter)
@@ -614,13 +618,24 @@ def _analytics_data(
     summary = _analytics_summary_sql(conditions, params)
     filtered_summary = _analytics_summary_sql(conditions, params, status_filter=status_filter)
     include_call_rows = bool(frappe.utils.cint(include_calls))
+    unique_call_rows = bool(frappe.utils.cint(unique_only))
     call_limit = max(10, min(frappe.utils.cint(call_limit) or 50, ANALYTICS_CALL_LIMIT_MAX))
     call_offset = max(0, frappe.utils.cint(call_offset) or 0)
     call_slice = (
-        _analytics_call_rows_sql(conditions, params, fields, status_filter=status_filter, limit=call_limit, offset=call_offset, queue_source=queue_source)
+        _analytics_call_rows_sql(
+            conditions,
+            params,
+            fields,
+            status_filter=status_filter,
+            limit=call_limit,
+            offset=call_offset,
+            queue_source=queue_source,
+            unique_only=unique_call_rows,
+        )
         if include_call_rows
         else []
     )
+    matching_call_count = filtered_summary.get("unique_calls" if unique_call_rows else "total", 0)
 
     return {
         "from_date": from_date,
@@ -652,8 +667,8 @@ def _analytics_data(
         "calls_loaded": include_call_rows,
         "call_limit": call_limit,
         "call_offset": call_offset,
-        "has_more_calls": include_call_rows and (call_offset + call_limit) < filtered_summary.get("total", 0),
-        "matching_call_count": filtered_summary.get("total", 0),
+        "has_more_calls": include_call_rows and (call_offset + call_limit) < matching_call_count,
+        "matching_call_count": matching_call_count,
     }
 
 
@@ -792,6 +807,16 @@ def _analytics_talk_sql() -> str:
     return f"coalesce(nullif({_analytics_recording_duration_sql()}, 0), nullif(`billsec`, 0), nullif(`duration`, 0), 0)"
 
 
+def _analytics_unique_key_sql() -> str:
+    return """
+        case
+            when coalesce(nullif(`reference_name`, ''), '') != '' then concat(coalesce(nullif(`reference_doctype`, ''), 'Reference'), ':', `reference_name`)
+            when coalesce(nullif(`customer_number`, ''), '') != '' then concat('Phone:', `customer_number`)
+            else `name`
+        end
+    """
+
+
 def _analytics_bucket_filter_sql(status_filter: str | None) -> str:
     status_filter = _analytics_status_filter(status_filter)
     if status_filter == "connected":
@@ -806,6 +831,7 @@ def _analytics_bucket_filter_sql(status_filter: str | None) -> str:
 def _analytics_summary_sql(conditions: str, params: dict[str, Any], status_filter: str | None = None) -> dict[str, Any]:
     bucket_expr = _analytics_bucket_sql()
     bucket_filter = _analytics_bucket_filter_sql(status_filter)
+    unique_key_expr = _analytics_unique_key_sql()
     rows = frappe.db.sql(
         f"""
         select bucket, count(*) as call_count, sum(talk_seconds) as talk_seconds, sum(cost) as cost
@@ -820,10 +846,24 @@ def _analytics_summary_sql(conditions: str, params: dict[str, Any], status_filte
         params,
         as_dict=True,
     )
-    return _summary_from_bucket_rows(rows)
+    unique_rows = frappe.db.sql(
+        f"""
+        select count(distinct unique_key) as unique_calls
+        from (
+            select {bucket_expr} as bucket, {unique_key_expr} as unique_key
+            from `tabVobiz Call Log`
+            where {conditions}
+        ) analytics
+        {bucket_filter}
+        """,
+        params,
+        as_dict=True,
+    )
+    unique_calls = frappe.utils.cint(unique_rows[0].unique_calls) if unique_rows else 0
+    return _summary_from_bucket_rows(rows, unique_calls=unique_calls)
 
 
-def _summary_from_bucket_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _summary_from_bucket_rows(rows: list[dict[str, Any]], unique_calls: int = 0) -> dict[str, Any]:
     counts = {row.bucket: frappe.utils.cint(row.call_count) for row in rows}
     total = sum(counts.values())
     connected = counts.get("connected", 0)
@@ -836,6 +876,7 @@ def _summary_from_bucket_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     average_duration = round(talk_seconds / connected) if connected else 0
     return {
         "total": total,
+        "unique_calls": frappe.utils.cint(unique_calls),
         "connected": connected,
         "missed": missed,
         "busy": counts.get("busy", 0),
@@ -936,6 +977,7 @@ def _analytics_agents_sql(
 ) -> list[dict[str, Any]]:
     bucket_expr = _analytics_bucket_sql()
     bucket_filter = _analytics_bucket_filter_sql(status_filter)
+    unique_key_expr = _analytics_unique_key_sql()
     if queue_source in {"CRM Lead", "Discontinued"} and frappe.db.exists("DocType", "CRM Lead"):
         joined_bucket_filter = bucket_filter.replace("bucket", "analytics.bucket")
         rows = frappe.db.sql(
@@ -949,6 +991,21 @@ def _analytics_agents_sql(
             left join `tabCRM Lead` lead on lead.`name` = analytics.`reference_name`
             {joined_bucket_filter}
             group by agent, analytics.bucket
+            """,
+            params,
+            as_dict=True,
+        )
+        unique_rows = frappe.db.sql(
+            f"""
+            select coalesce(nullif(lead.`lead_owner`, ''), 'Unassigned') as agent, count(distinct analytics.unique_key) as unique_calls
+            from (
+                select `reference_name`, {bucket_expr} as bucket, {unique_key_expr} as unique_key
+                from `tabVobiz Call Log`
+                where {conditions}
+            ) analytics
+            left join `tabCRM Lead` lead on lead.`name` = analytics.`reference_name`
+            {joined_bucket_filter}
+            group by agent
             """,
             params,
             as_dict=True,
@@ -968,10 +1025,28 @@ def _analytics_agents_sql(
             params,
             as_dict=True,
         )
+        unique_rows = frappe.db.sql(
+            f"""
+            select agent, count(distinct unique_key) as unique_calls
+            from (
+                select coalesce(nullif(`user`, ''), 'Unassigned') as agent, {bucket_expr} as bucket, {unique_key_expr} as unique_key
+                from `tabVobiz Call Log`
+                where {conditions}
+            ) analytics
+            {bucket_filter}
+            group by agent
+            """,
+            params,
+            as_dict=True,
+        )
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         grouped.setdefault(row.agent or _("Unassigned"), []).append(row)
-    data = [{"user": user, **_summary_from_bucket_rows(user_rows)} for user, user_rows in grouped.items()]
+    unique_by_agent = {row.agent or _("Unassigned"): frappe.utils.cint(row.unique_calls) for row in unique_rows}
+    data = [
+        {"user": user, **_summary_from_bucket_rows(user_rows, unique_calls=unique_by_agent.get(user, 0))}
+        for user, user_rows in grouped.items()
+    ]
     _attach_agent_availability(data)
     return sorted(data, key=lambda row: row["total"], reverse=True)
 
@@ -988,6 +1063,8 @@ def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
     )
     by_user = {row.user: row for row in mappings}
     now = frappe.utils.now_datetime()
+    shift_start, shift_end, shift_elapsed_until, shift_elapsed_seconds = _today_shift_window(now)
+    shift_min_label = _human_duration_seconds(AGENT_SHIFT_MIN_SECONDS)
     online_statuses = {"Available", "Busy"}
 
     for row in rows:
@@ -999,6 +1076,14 @@ def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
                     "is_online": False,
                     "availability_label": _("Offline"),
                     "availability_duration_label": "",
+                    "online_today_seconds": 0,
+                    "offline_today_seconds": shift_elapsed_seconds,
+                    "online_today_label": _human_duration_seconds(0),
+                    "offline_today_label": _human_duration_seconds(shift_elapsed_seconds),
+                    "shift_start": shift_start,
+                    "shift_end": shift_end,
+                    "shift_min_seconds": AGENT_SHIFT_MIN_SECONDS,
+                    "shift_min_label": shift_min_label,
                 }
             )
             continue
@@ -1007,14 +1092,62 @@ def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
         is_online = status in online_statuses or is_agent_console_online(row.get("user"))
         since = frappe.utils.get_datetime(mapping.last_status_at) if mapping.last_status_at else None
         duration_label = _human_duration(now - since) if since else ""
+        online_seconds, offline_seconds = _today_availability_seconds(
+            shift_start,
+            shift_end,
+            shift_elapsed_until,
+            shift_elapsed_seconds,
+            since,
+            is_online,
+        )
         row.update(
             {
                 "availability_status": status,
                 "is_online": is_online,
                 "availability_label": _("Online") if is_online else _("Offline"),
                 "availability_duration_label": duration_label,
+                "online_today_seconds": online_seconds,
+                "offline_today_seconds": offline_seconds,
+                "online_today_label": _human_duration_seconds(online_seconds),
+                "offline_today_label": _human_duration_seconds(offline_seconds),
+                "shift_start": shift_start,
+                "shift_end": shift_end,
+                "shift_min_seconds": AGENT_SHIFT_MIN_SECONDS,
+                "shift_min_label": shift_min_label,
             }
         )
+
+
+def _today_shift_window(now) -> tuple[Any, Any, Any, int]:
+    today_start = frappe.utils.get_datetime(frappe.utils.today())
+    shift_start = today_start + timedelta(hours=AGENT_SHIFT_START_HOUR)
+    shift_end = today_start + timedelta(hours=AGENT_SHIFT_END_HOUR)
+    elapsed_until = min(max(now, shift_start), shift_end)
+    elapsed_seconds = max(0, int((elapsed_until - shift_start).total_seconds()))
+    return shift_start, shift_end, elapsed_until, elapsed_seconds
+
+
+def _today_availability_seconds(shift_start, shift_end, shift_elapsed_until, shift_elapsed_seconds: int, since, is_online: bool) -> tuple[int, int]:
+    if not since:
+        return (shift_elapsed_seconds, 0) if is_online else (0, shift_elapsed_seconds)
+
+    if since <= shift_start:
+        return (shift_elapsed_seconds, 0) if is_online else (0, shift_elapsed_seconds)
+
+    if since >= shift_end or since >= shift_elapsed_until:
+        return (0, shift_elapsed_seconds) if is_online else (shift_elapsed_seconds, 0)
+
+    current_seconds = max(0, int((shift_elapsed_until - since).total_seconds()))
+    previous_seconds = max(0, shift_elapsed_seconds - current_seconds)
+    if is_online:
+        return current_seconds, previous_seconds
+    return previous_seconds, current_seconds
+
+
+def _human_duration_seconds(seconds: int) -> str:
+    if seconds <= 0:
+        return _("0m")
+    return _human_duration(timedelta(seconds=seconds))
 
 
 def _human_duration(delta) -> str:
@@ -1040,12 +1173,42 @@ def _analytics_call_rows_sql(
     limit: int,
     offset: int,
     queue_source: str | None = None,
+    unique_only: bool = False,
 ) -> list[dict[str, Any]]:
     bucket_expr = _analytics_bucket_sql()
     bucket_filter = _analytics_bucket_filter_sql(status_filter)
+    unique_key_expr = _analytics_unique_key_sql()
     select_fields = ", ".join(f"`{field}`" for field in fields)
     query_params = {**params, "limit": int(limit), "offset": int(offset)}
     if queue_source in {"CRM Lead", "Discontinued"} and frappe.db.exists("DocType", "CRM Lead"):
+        if unique_only:
+            joined_bucket_filter = bucket_filter.replace("bucket", "filtered.bucket")
+            return frappe.db.sql(
+                f"""
+                select filtered.*, attempts.attempt_count, lead.`lead_owner` as analytics_agent, lead.`team` as analytics_team
+                from (
+                    select {select_fields}, {bucket_expr} as bucket, {_analytics_talk_sql()} as talk_seconds, {unique_key_expr} as unique_key
+                    from `tabVobiz Call Log`
+                    where {conditions}
+                ) filtered
+                inner join (
+                    select unique_key, max(`creation`) as latest_creation, count(*) as attempt_count
+                    from (
+                        select `creation`, {bucket_expr} as bucket, {unique_key_expr} as unique_key
+                        from `tabVobiz Call Log`
+                        where {conditions}
+                    ) analytics
+                    {bucket_filter}
+                    group by unique_key
+                ) attempts on attempts.unique_key = filtered.unique_key and attempts.latest_creation = filtered.`creation`
+                left join `tabCRM Lead` lead on lead.`name` = filtered.`reference_name`
+                {joined_bucket_filter}
+                order by filtered.`creation` desc
+                limit %(limit)s offset %(offset)s
+                """,
+                query_params,
+                as_dict=True,
+            )
         return frappe.db.sql(
             f"""
             select analytics.*, lead.`lead_owner` as analytics_agent, lead.`team` as analytics_team
@@ -1057,6 +1220,32 @@ def _analytics_call_rows_sql(
             left join `tabCRM Lead` lead on lead.`name` = analytics.`reference_name`
             {bucket_filter}
             order by analytics.`creation` desc
+            limit %(limit)s offset %(offset)s
+            """,
+            query_params,
+            as_dict=True,
+        )
+    if unique_only:
+        return frappe.db.sql(
+            f"""
+            select filtered.*, attempts.attempt_count
+            from (
+                select {select_fields}, {bucket_expr} as bucket, {_analytics_talk_sql()} as talk_seconds, {unique_key_expr} as unique_key
+                from `tabVobiz Call Log`
+                where {conditions}
+            ) filtered
+            inner join (
+                select unique_key, max(`creation`) as latest_creation, count(*) as attempt_count
+                from (
+                    select `creation`, {bucket_expr} as bucket, {unique_key_expr} as unique_key
+                    from `tabVobiz Call Log`
+                    where {conditions}
+                ) analytics
+                {bucket_filter}
+                group by unique_key
+            ) attempts on attempts.unique_key = filtered.unique_key and attempts.latest_creation = filtered.`creation`
+            {bucket_filter.replace("bucket", "filtered.bucket")}
+            order by filtered.`creation` desc
             limit %(limit)s offset %(offset)s
             """,
             query_params,
@@ -1140,6 +1329,7 @@ def _performance_call_row(row) -> dict[str, Any]:
         "reference_doctype": row.get("reference_doctype"),
         "reference_name": row.get("reference_name"),
         "customer_number": row.get("customer_number"),
+        "attempt_count": frappe.utils.cint(row.get("attempt_count")) if row.get("attempt_count") is not None else None,
         "user_mobile": row.get("user_mobile"),
         "caller_id": row.get("caller_id"),
         "disposition": row.get("disposition"),
@@ -1457,7 +1647,7 @@ def _active_call() -> dict[str, Any] | None:
 
     status = get_call_status(call_log)
     doc = frappe.get_doc("Vobiz Call Log", call_log)
-    if doc.status in TERMINAL_STATUSES:
+    if not is_active_call_log(doc.name):
         restore_mapping_after_call(doc.name)
         frappe.db.commit()
         return {
@@ -1648,6 +1838,7 @@ def _queue_for_doctype(
             "sr_medical_department",
             "sr_followup_id",
             "sr_followup_day",
+            "sr_followup_status",
             "team",
             "owner",
         ),
@@ -1839,12 +2030,13 @@ def _reference_row(doctype: str, doc) -> dict[str, Any]:
     company = data.get("company_name") or data.get("organization") or doctype
     phone_field = _first_value(data, ("mobile_no", "mobile", "phone", "phone_no"))
     status = _first_value(data, ("status", "lead_status", "sr_lead_status", "qualification_status")).get("value") or "New"
-    next_action = data.get("vobiz_next_follow_up") or data.get("vobiz_last_call_status") or "Initial contact"
+    next_action = data.get("vobiz_last_call_status") or data.get("vobiz_next_follow_up") or "Initial contact"
 
     return {
         "doctype": doctype,
         "name": data.get("name"),
         "creation": data.get("creation"),
+        "modified": data.get("modified"),
         "title": title,
         "company": company,
         "phone": phone_field.get("value"),
@@ -1852,6 +2044,7 @@ def _reference_row(doctype: str, doc) -> dict[str, Any]:
         "status": status,
         "next_action": str(next_action),
         "sr_medical_department": data.get("sr_medical_department"),
+        "sr_followup_status": data.get("sr_followup_status"),
         "sr_followup_id": data.get("sr_followup_id"),
         "sr_followup_day": data.get("sr_followup_day"),
         "team": data.get("team"),

@@ -115,8 +115,8 @@ def sync_call_disposition_to_lead(call_log_doc, disposition: str, lead_status: s
             return {"synced": False, "reason": "Disposition and lead status are empty."}
         lead = frappe.get_doc(CRM_LEAD, call_log_doc.reference_name)
         if lead.meta.has_field("status"):
+            frappe.db.set_value(CRM_LEAD, lead.name, "status", lead_status, update_modified=True)
             lead.set("status", lead_status)
-            lead.save(ignore_permissions=True)
             return {
                 "synced": True,
                 "lead": lead.name,
@@ -137,11 +137,11 @@ def sync_call_disposition_to_lead(call_log_doc, disposition: str, lead_status: s
     disposition_field = get_lead_disposition_field(frappe.get_meta(CRM_LEAD))
     status = lead_status or sr_disposition.get("sr_lead_status")
     if status and lead.meta.has_field("status"):
+        frappe.db.set_value(CRM_LEAD, lead.name, "status", status, update_modified=True)
         lead.set("status", status)
     if disposition_field:
+        frappe.db.set_value(CRM_LEAD, lead.name, disposition_field, sr_disposition.get("sr_disposition_name"), update_modified=True)
         lead.set(disposition_field, sr_disposition.get("sr_disposition_name"))
-
-    lead.save(ignore_permissions=True)
     return {
         "synced": True,
         "lead": lead.name,

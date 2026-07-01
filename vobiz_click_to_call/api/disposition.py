@@ -41,6 +41,7 @@ def save_disposition(
     disposition: str | None = None,
     notes: str = "",
     lead_status: str | None = None,
+    sr_followup_status: str | None = None,
     follow_up_datetime: str | None = None,
     mark_dnd: int | str | bool = 0,
 ) -> dict:
@@ -52,6 +53,7 @@ def save_disposition(
         disposition=disposition,
         notes=notes,
         lead_status=lead_status,
+        sr_followup_status=sr_followup_status,
         follow_up_datetime=follow_up_datetime,
         mark_dnd=bool(frappe.utils.cint(mark_dnd)),
     )

@@ -44,6 +44,8 @@ PREFERRED_PHONE_FIELDS = (
 
 TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
 USER_SET_AVAILABILITY_STATUSES = {"Available", "Away", "Offline"}
+STALE_STARTUP_STATUSES = {"Queued", "Initiated", "Dialing", "Ringing", "Connecting"}
+STALE_STARTUP_CALL_SECONDS = 10 * 60
 
 
 @frappe.whitelist()
@@ -584,7 +586,21 @@ def _split_mapping_values(value: str | None, first: str | None = None) -> list[s
 def get_mapping_unavailable_reason(mapping: dict[str, Any]) -> str:
     current_call_log = mapping.get("current_call_log")
     if current_call_log and not is_active_call_log(current_call_log):
-        restore_mapping_after_call(current_call_log)
+        if frappe.db.exists("Vobiz Call Log", current_call_log):
+            restore_mapping_after_call(current_call_log)
+        else:
+            auto_available = frappe.utils.cint(mapping.get("auto_available_after_call"))
+            frappe.db.set_value(
+                "Vobiz User Mapping",
+                mapping["name"],
+                {
+                    "availability_status": "Available" if auto_available else "Away",
+                    "accept_calls": 1 if auto_available else 0,
+                    "current_call_log": "",
+                    "last_status_at": frappe.utils.now(),
+                },
+                update_modified=True,
+            )
         frappe.db.commit()
         if frappe.utils.cint(mapping.get("auto_available_after_call")):
             mapping["availability_status"] = "Available"
@@ -616,8 +632,14 @@ def is_active_call_log(call_log: str | None) -> bool:
     if not call_log or not frappe.db.exists("Vobiz Call Log", call_log):
         return False
 
-    status = frappe.db.get_value("Vobiz Call Log", call_log, "status")
-    return status not in TERMINAL_STATUSES
+    row = frappe.db.get_value("Vobiz Call Log", call_log, ["status", "modified"], as_dict=True)
+    if not row or row.status in TERMINAL_STATUSES:
+        return False
+    if row.status in STALE_STARTUP_STATUSES and row.modified:
+        age_seconds = (frappe.utils.now_datetime() - frappe.utils.get_datetime(row.modified)).total_seconds()
+        if age_seconds > STALE_STARTUP_CALL_SECONDS:
+            return False
+    return True
 
 
 def mark_mapping_busy(mapping_name: str, call_log: str) -> None:

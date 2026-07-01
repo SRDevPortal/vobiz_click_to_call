@@ -23,6 +23,7 @@ def save_call_disposition(
     disposition: str | None = None,
     notes: str = "",
     lead_status: str | None = None,
+    sr_followup_status: str | None = None,
     follow_up_datetime: str | None = None,
     mark_dnd: bool = False,
 ) -> dict:
@@ -31,13 +32,20 @@ def save_call_disposition(
 
     lead_status = (lead_status or "").strip()
     disposition = (disposition or "").strip()
+    sr_followup_status = (sr_followup_status or "").strip()
     notes = (notes or "").strip()
+    patient_sync = {"synced": False, "reason": "Reference is not Patient."}
+    if doc.reference_doctype == "Patient":
+        patient_sync = sync_patient_followup_status(doc.reference_name, sr_followup_status)
+        if sr_followup_status and not disposition:
+            disposition = sr_followup_status
+
     allowed_dispositions = get_manual_disposition_options(
         reference_doctype=doc.reference_doctype,
         reference_name=doc.reference_name,
         lead_status=lead_status,
     )
-    if disposition and allowed_dispositions and disposition not in allowed_dispositions:
+    if doc.reference_doctype != "Patient" and disposition and allowed_dispositions and disposition not in allowed_dispositions:
         frappe.throw(_("Invalid disposition."))
 
     if disposition:
@@ -63,7 +71,10 @@ def save_call_disposition(
         doc.follow_up_todo = upsert_follow_up_todo(doc, follow_up_datetime)
 
     doc.save(ignore_permissions=True)
-    lead_sync = sync_call_disposition_safely(doc, disposition, lead_status) if (disposition or lead_status) else {"synced": False, "reason": "No CRM status or disposition provided."}
+    if doc.reference_doctype == "Patient":
+        lead_sync = patient_sync
+    else:
+        lead_sync = sync_call_disposition_safely(doc, disposition, lead_status) if (disposition or lead_status) else {"synced": False, "reason": "No CRM status or disposition provided."}
     update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
     sync_linked_summaries(doc)
     add_disposition_comment(doc)
@@ -72,10 +83,32 @@ def save_call_disposition(
     return {
         "call_log": doc.name,
         "disposition": doc.disposition,
+        "sr_followup_status": sr_followup_status,
         "follow_up_todo": doc.follow_up_todo,
         "dnd_marked": bool(doc.dnd_marked),
         "lead_sync": lead_sync,
     }
+
+
+def sync_patient_followup_status(patient: str | None, sr_followup_status: str | None) -> dict:
+    sr_followup_status = (sr_followup_status or "").strip()
+    if not patient:
+        return {"synced": False, "reason": "Patient reference missing."}
+    if not frappe.db.exists("DocType", "Patient") or not frappe.db.exists("Patient", patient):
+        return {"synced": False, "reason": "Patient not found."}
+    meta = frappe.get_meta("Patient")
+    field = meta.get_field("sr_followup_status")
+    if not field:
+        return {"synced": False, "reason": "Patient sr_followup_status field not found."}
+    if not sr_followup_status:
+        return {"synced": False, "reason": "No follow-up status provided."}
+
+    options = [row.strip() for row in str(field.options or "").splitlines() if row.strip()]
+    if options and sr_followup_status not in options:
+        frappe.throw(_("Invalid follow-up status."))
+
+    frappe.db.set_value("Patient", patient, "sr_followup_status", sr_followup_status, update_modified=True)
+    return {"synced": True, "patient": patient, "sr_followup_status": sr_followup_status}
 
 
 def sync_call_log_disposition_options(disposition: str | None = None) -> None:
@@ -184,6 +217,9 @@ def update_reference_call_metrics(reference_doctype: str | None, reference_name:
             "call_status",
             "dial_status",
             "hangup_cause",
+            "error_message",
+            "call_flow",
+            "answer_time",
             "duration",
             "billsec",
             "recording_duration",
@@ -200,7 +236,7 @@ def update_reference_call_metrics(reference_doctype: str | None, reference_name:
     last = rows[0]
     values = {}
     if "vobiz_last_call_status" in fields:
-        values["vobiz_last_call_status"] = last.status
+        values["vobiz_last_call_status"] = call_next_action_label(last)
     if "vobiz_last_call_time" in fields:
         values["vobiz_last_call_time"] = last.creation
     if "vobiz_last_called_by" in fields:
@@ -224,6 +260,44 @@ def update_reference_call_metrics(reference_doctype: str | None, reference_name:
 
     if values:
         frappe.db.set_value(reference_doctype, reference_name, values, update_modified=False)
+
+
+def call_next_action_label(call_log_doc) -> str:
+    status = str(call_log_doc.get("status") or "")
+    if status not in {"Cancelled", "Canceled"}:
+        return status
+
+    party = cancelled_call_party(call_log_doc)
+    if party == "Agent":
+        return "Cancelled by Agent"
+    if party == "Customer":
+        return "Cancelled by Customer"
+    return status
+
+
+def cancelled_call_party(call_log_doc) -> str:
+    signal = " ".join(
+        str(call_log_doc.get(fieldname) or "")
+        for fieldname in ("status", "call_status", "dial_status", "hangup_cause", "error_message")
+    ).strip().lower().replace("_", "-")
+    if "cancelled by user" in signal or "canceled by user" in signal:
+        return "Agent"
+    if "agent" in signal and any(token in signal for token in ("cancel", "reject", "decline", "hangup")):
+        return "Agent"
+    if "customer" in signal and any(token in signal for token in ("cancel", "reject", "decline", "hangup")):
+        return "Customer"
+
+    flow = call_log_doc.get("call_flow") or "Customer First"
+    first = "Agent" if flow == "Agent First" else "Customer"
+    second = "Customer" if flow == "Agent First" else "Agent"
+    answered_first = bool(call_log_doc.get("answer_time")) or call_log_doc.get("status") in {
+        "Agent Answered",
+        "Customer Answered",
+        "Agent Ringing",
+        "Connected",
+        "Completed",
+    }
+    return second if answered_first else first
 
 
 def mark_reference_dnd(call_log_doc, disposition: str, notes: str) -> None:

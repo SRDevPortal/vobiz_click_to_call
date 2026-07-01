@@ -36,7 +36,11 @@ class VobizAgentAnalytics {
 			queue_source: 'CRM Lead',
 			agent_user: '',
 			team: '',
-			department: ''
+			department: '',
+			agents: [],
+			agent_status_filter: 'all',
+			agent_search: '',
+			agent_sort: 'total'
 		};
 		this.render();
 		this.bind();
@@ -123,6 +127,7 @@ class VobizAgentAnalytics {
 									<th>${__('Queue')}</th>
 									<th>${__('Reference')}</th>
 									<th>${__('Customer')}</th>
+									<th>${__('Call Attempts')}</th>
 									<th>${__('Status')}</th>
 									<th>${__('Talk Time')}</th>
 									<th>${__('Disposition')}</th>
@@ -150,6 +155,31 @@ class VobizAgentAnalytics {
 						<div class="vobiz-section-title">
 							<h3>${__('Agent Performance')}</h3>
 							<span class="text-muted">${__('Sorted by total calls')}</span>
+						</div>
+						<div class="vobiz-agent-overview" data-role="agent-overview"></div>
+						<div class="vobiz-agent-toolbar">
+							<div class="vobiz-agent-status-filter" data-role="agent-status-filter">
+								<span>${__('Status')}:</span>
+								<button class="active" data-agent-filter="all">${__('All Agents')}</button>
+								<button data-agent-filter="online"><i class="fa fa-circle"></i>${__('Online')}</button>
+								<button data-agent-filter="offline"><i class="fa fa-circle"></i>${__('Offline')}</button>
+							</div>
+							<div class="vobiz-agent-toolbar-actions">
+								<div class="vobiz-agent-search">
+									<i class="fa fa-search"></i>
+									<input class="form-control input-sm" data-role="agent-search" placeholder="${__('Search by email...')}">
+								</div>
+								<div class="vobiz-agent-sort">
+									<span><i class="fa fa-sort-amount-desc"></i>${__('Sort')}:</span>
+									<select class="form-control input-sm" data-role="agent-sort">
+										<option value="total">${__('Total Calls')}</option>
+										<option value="unique">${__('Unique Calls')}</option>
+										<option value="answer">${__('Answer Rate (%)')}</option>
+										<option value="talk">${__('Total Talk Time')}</option>
+										<option value="rejected">${__('Rejected Calls')}</option>
+									</select>
+								</div>
+							</div>
 						</div>
 						<div data-role="agent-chart"></div>
 					</section>
@@ -205,7 +235,7 @@ class VobizAgentAnalytics {
 				.vobiz-filter-grid label { color: #667085; display: block; font-size: 11px; font-weight: 800; margin-bottom: 5px; text-transform: uppercase; }
 				.vobiz-filter-action { display: flex; justify-content: flex-end; }
 				.vobiz-summary { padding: 0; }
-				.vobiz-kpi-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); }
+				.vobiz-kpi-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
 				.vobiz-kpi { background: #fff; border-right: 1px solid #edf0ea; min-height: 106px; padding: 18px 16px; position: relative; }
 				.vobiz-kpi:last-child { border-right: 0; }
 				.vobiz-kpi[role="button"] { cursor: pointer; }
@@ -215,6 +245,7 @@ class VobizAgentAnalytics {
 				.vobiz-kpi.missed:before { background: #e2554f; }
 				.vobiz-kpi.connected:before { background: #1f9d72; }
 				.vobiz-kpi.total:before { background: #f2a93b; }
+				.vobiz-kpi.unique:before { background: #14b8a6; }
 				.vobiz-kpi.average:before { background: #3b82c4; }
 				.vobiz-kpi.busy:before { background: #b875e6; }
 				.vobiz-kpi.no-answer:before { background: #5f7dd4; }
@@ -245,21 +276,83 @@ class VobizAgentAnalytics {
 				.vobiz-legend-dot { border-radius: 50%; height: 9px; width: 9px; }
 				.vobiz-stack { background: #eef1ed; border-radius: 4px; display: flex; height: 18px; overflow: hidden; }
 				.vobiz-stack span { display: block; height: 100%; }
-				.vobiz-agent-grid { display: grid; gap: 10px; }
-				.vobiz-agent-card { align-items: center; border: 1px solid #edf0ea; border-radius: 8px; display: grid; gap: 14px; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) repeat(5, minmax(88px, 112px)); padding: 12px; }
-				.vobiz-agent-card:hover { background: #fbfcfa; }
-				.vobiz-agent-title { color: #344054; font-size: 13px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-				.vobiz-agent-sub { color: #667085; font-size: 11px; margin-top: 4px; }
-				.vobiz-agent-status { align-items: center; display: inline-flex; gap: 6px; margin-top: 4px; }
+				@keyframes vobiz-status-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .65; transform: scale(1.28); } }
+				.vobiz-agent-grid { display: grid; gap: 14px; }
+				.vobiz-agent-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; box-shadow: 0 1px 3px rgba(15, 23, 42, .06); overflow: hidden; transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease; }
+				.vobiz-agent-card:hover { border-color: #a7f3d0; box-shadow: 0 10px 24px rgba(15, 23, 42, .08); transform: translateY(-1px); }
+				.vobiz-agent-card-inner { align-items: center; display: grid; gap: 22px; grid-template-columns: minmax(250px, 300px) minmax(220px, 1fr) minmax(390px, .9fr) minmax(210px, 250px); padding: 20px; }
+				.vobiz-agent-identity { align-items: center; display: flex; gap: 14px; min-width: 0; }
+				.vobiz-agent-identity-body { min-width: 0; }
+				.vobiz-agent-avatar-wrap { flex: 0 0 auto; position: relative; }
+				.vobiz-agent-avatar { align-items: center; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04); color: #334155; display: flex; font-size: 18px; font-weight: 900; height: 48px; justify-content: center; text-transform: uppercase; width: 48px; }
+				.vobiz-agent-presence { border: 2px solid #fff; border-radius: 50%; bottom: -4px; height: 16px; position: absolute; right: -4px; width: 16px; }
+				.vobiz-agent-presence.online { background: #10b981; }
+				.vobiz-agent-presence.offline { background: #94a3b8; }
+				.vobiz-agent-presence-ring { animation: vobiz-status-pulse 2s infinite ease-in-out; background: #34d399; border-radius: 50%; bottom: -4px; height: 16px; opacity: .75; position: absolute; right: -4px; width: 16px; }
+				.vobiz-agent-title { color: #0f172a; font-size: 14px; font-weight: 900; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+				.vobiz-agent-sub { color: #64748b; font-size: 11px; margin-top: 4px; }
+				.vobiz-agent-meta { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+				.vobiz-agent-role { color: #64748b; font-size: 12px; font-weight: 700; }
+				.vobiz-agent-status-pill { border: 1px solid #e2e8f0; border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: .03em; padding: 2px 8px; text-transform: uppercase; }
+				.vobiz-agent-status-pill.online { background: #10b981; border-color: #10b981; color: #fff; }
+				.vobiz-agent-status-pill.offline { background: #f1f5f9; border-color: #e2e8f0; color: #64748b; }
+				.vobiz-agent-meter { align-self: center; display: grid; gap: 8px; min-width: 0; }
+				.vobiz-agent-meter-head { align-items: center; display: flex; gap: 10px; justify-content: space-between; min-width: 0; }
+				.vobiz-agent-meter-label { color: #475569; font-size: 12px; font-weight: 800; }
+				.vobiz-agent-meter-count { background: #f8fafc; border-radius: 6px; color: #333333; font-size: 11px; font-weight: 900; max-width: 100%; overflow: hidden; padding: 2px 8px; text-overflow: ellipsis; white-space: nowrap; }
+				.vobiz-agent-meter .vobiz-stack { background: #f1f5f9; border-radius: 999px; box-shadow: inset 0 1px 2px rgba(15, 23, 42, .08); height: 12px; }
+				.vobiz-agent-meter .vobiz-stack span { transition: filter .18s ease; }
+				.vobiz-agent-meter .vobiz-stack span:hover { filter: brightness(.95); }
+				.vobiz-agent-metrics { background: rgba(248, 250, 252, .72); border: 1px solid #f1f5f9; border-radius: 8px; display: grid; gap: 14px; grid-template-columns: repeat(5, minmax(74px, 1fr)); padding: 14px; }
+				.vobiz-agent-mini { min-width: 0; }
+				.vobiz-agent-mini span { color: #333333; display: block; font-size: 10px; font-weight: 900; letter-spacing: .02em; margin-bottom: 5px; text-transform: uppercase; }
+				.vobiz-agent-mini strong { color: #0f172a; display: block; font-size: 18px; font-weight: 900; line-height: 1.1; }
+				.vobiz-agent-answer-badge { border: 1px solid #e2e8f0; border-radius: 8px; display: inline-block; min-width: 58px; padding: 5px 8px; text-align: center; }
+				.vobiz-agent-answer-badge.good { background: #ecfdf5; border-color: #a7f3d0; color: #059669; }
+				.vobiz-agent-answer-badge.warn { background: #fffbeb; border-color: #fde68a; color: #d97706; }
+				.vobiz-agent-answer-badge.bad { background: #fff1f2; border-color: #fecdd3; color: #e11d48; }
+				.vobiz-agent-metric-icon { color: #94a3b8; margin-right: 6px; }
+				.vobiz-agent-rejected { color: #e11d48 !important; }
+				.vobiz-agent-attendance { border-left: 1px solid #f1f5f9; display: grid; gap: 8px; min-width: 0; padding-left: 18px; }
+				.vobiz-agent-attendance-title { color: #333333; font-size: 10px; font-weight: 900; letter-spacing: .02em; text-transform: uppercase; }
+				.vobiz-agent-status { align-items: center; display: inline-flex; gap: 6px; }
 				.vobiz-agent-status-dot { border-radius: 50%; height: 8px; width: 8px; }
-				.vobiz-agent-status-dot.online { background: #1f9d72; }
-				.vobiz-agent-status-dot.offline { background: #98a2b3; }
-				.vobiz-agent-status-text { color: #344054; font-size: 18px; font-weight: 800; line-height: 1.1; }
-				.vobiz-agent-meter { align-self: center; display: grid; gap: 6px; }
-				.vobiz-agent-meter .vobiz-stack { height: 16px; }
-				.vobiz-agent-mini { align-self: center; }
-				.vobiz-agent-mini span { color: #667085; display: block; font-size: 10px; font-weight: 800; text-transform: uppercase; }
-				.vobiz-agent-mini strong { color: #344054; display: block; font-size: 18px; line-height: 1.1; margin-top: 4px; }
+				.vobiz-agent-status-dot.online { background: #10b981; }
+				.vobiz-agent-status-dot.offline { background: #94a3b8; }
+				.vobiz-agent-status-text { color: #0f172a; font-size: 16px; font-weight: 900; line-height: 1.1; }
+				.vobiz-agent-status-times { display: grid; gap: 6px; }
+				.vobiz-agent-status-times div { align-items: center; color: #64748b; display: flex; font-size: 12px; gap: 8px; justify-content: space-between; line-height: 1.2; white-space: nowrap; }
+				.vobiz-agent-status-times b { color: #0f172a; font-weight: 900; }
+				.vobiz-agent-status-times .online b { color: #059669; }
+				.vobiz-agent-status-times .offline b { color: #64748b; }
+				.vobiz-agent-overview { display: grid; gap: 16px; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 4px 0 32px; }
+				.vobiz-agent-stat-card { align-items: center; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; box-shadow: 0 1px 4px rgba(15, 23, 42, .06); display: flex; justify-content: space-between; min-height: 96px; padding: 20px; }
+				.vobiz-agent-stat-card span { color: #475569; display: block; font-size: 15px; font-weight: 700; }
+				.vobiz-agent-stat-card strong { color: #020617; display: block; font-size: 28px; font-weight: 900; line-height: 1; margin-top: 8px; }
+				.vobiz-agent-stat-icon { align-items: center; border-radius: 8px; display: flex; font-size: 22px; height: 48px; justify-content: center; width: 48px; }
+				.vobiz-agent-stat-icon.active { background: #d1fae5; color: #059669; }
+				.vobiz-agent-stat-icon.calls { background: #eef2ff; color: #4f46e5; }
+				.vobiz-agent-stat-icon.answer { background: #fffbeb; color: #d97706; }
+				.vobiz-agent-stat-icon.rejected { background: #fff1f2; color: #e11d48; }
+				.vobiz-agent-toolbar { align-items: center; background: #fff; border: 1px solid #e9edf3; border-radius: 10px; box-shadow: 0 1px 5px rgba(15, 23, 42, .05); display: flex; gap: 20px; justify-content: space-between; margin: 0 0 18px; min-height: 72px; padding: 16px; }
+				.vobiz-agent-status-filter { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+				.vobiz-agent-status-filter > span { color: #334155; font-size: 14px; font-weight: 800; margin-right: 8px; }
+				.vobiz-agent-status-filter button { align-items: center; background: #f1f5f9; border: 0; border-radius: 8px; color: #475569; display: inline-flex; font-size: 12px; font-weight: 800; gap: 7px; height: 30px; padding: 0 14px; }
+				.vobiz-agent-status-filter button.active { background: #0b1328; color: #fff; padding-left: 16px; padding-right: 16px; }
+				.vobiz-agent-status-filter button i { color: #10b981; font-size: 8px; }
+				.vobiz-agent-status-filter button[data-agent-filter="offline"] i { color: #94a3b8; }
+				.vobiz-agent-toolbar-actions { align-items: center; display: flex; flex-wrap: nowrap; gap: 14px; justify-content: flex-end; }
+				.vobiz-agent-search { position: relative; width: 245px; }
+				.vobiz-agent-search i { color: #8aa0bf; font-size: 14px; left: 13px; pointer-events: none; position: absolute; top: 50%; transform: translateY(-50%); z-index: 1; }
+				.vobiz-agent-search input { appearance: none; background: #fbfdff; border: 1px solid #d9e2ee; border-radius: 6px; box-shadow: none !important; color: #334155; font-size: 14px; height: 38px; line-height: 20px; padding: 8px 12px 8px 36px; transition: border-color .15s ease, background .15s ease; }
+				.vobiz-agent-search input::placeholder { color: #94a3b8; }
+				.vobiz-agent-search input:focus { background: #fff; border-color: #c7d2e2; box-shadow: none !important; outline: 0; }
+				.vobiz-agent-sort { align-items: center; display: flex; gap: 9px; }
+				.vobiz-agent-sort span { color: #64748b; font-size: 14px; white-space: nowrap; }
+				.vobiz-agent-sort span i { color: #94a3b8; margin-right: 7px; }
+				.vobiz-agent-sort select { appearance: auto; background-color: #fff; border: 1px solid #d9e2ee; border-radius: 6px; box-shadow: none !important; color: #0f172a; font-size: 14px; height: 38px; line-height: 20px; min-width: 175px; padding: 8px 12px; transition: border-color .15s ease; }
+				.vobiz-agent-sort select:focus { border-color: #c7d2e2; box-shadow: none !important; outline: 0; }
+				.vobiz-agent-empty { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; color: #64748b; font-size: 13px; font-weight: 700; padding: 24px; text-align: center; }
 				.vobiz-breakdown { display: grid; gap: 10px; }
 				.vobiz-breakdown-row { align-items: center; display: grid; gap: 10px; grid-template-columns: 110px minmax(0, 1fr) 44px; }
 				.vobiz-breakdown-label { color: #475467; font-size: 12px; font-weight: 800; }
@@ -295,7 +388,18 @@ class VobizAgentAnalytics {
 					.vobiz-analytics-page { padding: 14px; }
 					.vobiz-filter-grid, .vobiz-kpi-grid, .vobiz-chart-grid { grid-template-columns: 1fr; }
 					.vobiz-filter-action { justify-content: flex-start; }
-					.vobiz-agent-card { grid-template-columns: 1fr; }
+					.vobiz-agent-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+					.vobiz-agent-toolbar { align-items: stretch; flex-direction: column; }
+					.vobiz-agent-toolbar-actions { flex-wrap: wrap; justify-content: flex-start; }
+					.vobiz-agent-card-inner { align-items: stretch; grid-template-columns: 1fr; }
+					.vobiz-agent-attendance { border-left: 0; border-top: 1px solid #f1f5f9; padding-left: 0; padding-top: 14px; }
+				}
+				@media (max-width: 640px) {
+					.vobiz-agent-card-inner { gap: 16px; padding: 16px; }
+					.vobiz-agent-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+					.vobiz-agent-meter-head { align-items: flex-start; flex-direction: column; gap: 6px; }
+					.vobiz-agent-overview { grid-template-columns: 1fr; }
+					.vobiz-agent-search, .vobiz-agent-sort, .vobiz-agent-sort select { width: 100%; }
 				}
 			</style>
 		`);
@@ -317,7 +421,21 @@ class VobizAgentAnalytics {
 		$main.on('click', '[data-action="load-more-calls"]', () => this.load_calls(false));
 		$main.on('click', '[data-action="play-recording"]', (e) => this.play_recording($(e.currentTarget)));
 		$main.on('click', '[data-action="stop-recording"]', (e) => this.stop_recording($(e.currentTarget)));
+		$main.on('click', '[data-agent-filter]', (e) => this.set_agent_status_filter($(e.currentTarget).data('agent-filter')));
+		$main.on('input', '[data-role="agent-search"]', (e) => {
+			this.state.agent_search = ($(e.currentTarget).val() || '').trim();
+			this.render_agent_chart(this.state.agents || []);
+		});
+		$main.on('change', '[data-role="agent-sort"]', (e) => {
+			this.state.agent_sort = ($(e.currentTarget).val() || 'total').trim();
+			this.render_agent_chart(this.state.agents || []);
+		});
 		$main.on('change', '[data-role="from-date"], [data-role="to-date"], [data-role="status-filter"], [data-role="queue-source"], [data-role="agent-user"], [data-role="team"], [data-role="department"]', () => this.schedule_load());
+	}
+
+	set_agent_status_filter(filter) {
+		this.state.agent_status_filter = filter || 'all';
+		this.render_agent_chart(this.state.agents || []);
 	}
 
 	on_page_show() {
@@ -356,8 +474,9 @@ class VobizAgentAnalytics {
 	show_call_list(status_filter) {
 		clearTimeout(this.load_timer);
 		const selected_status = (status_filter || 'total').trim();
-		this.state.status_filter = selected_status;
-		this.page.main.find('[data-role="status-filter"]').val(selected_status);
+		const effective_status = selected_status === 'unique' ? 'total' : selected_status;
+		this.state.status_filter = effective_status;
+		this.page.main.find('[data-role="status-filter"]').val(effective_status);
 		const request_id = ++this.request_id;
 		const filters = this.filters();
 		this.loading = true;
@@ -392,13 +511,14 @@ class VobizAgentAnalytics {
 
 	load_selected_calls(status_filter) {
 		const selected_status = (status_filter || this.state.status_filter || 'total').trim();
-		const filters = Object.assign({}, this.filters(), { status_filter: selected_status });
+		const unique_only = selected_status === 'unique';
+		const filters = Object.assign({}, this.filters(), { status_filter: unique_only ? 'total' : selected_status });
 		const label = this.call_list_label(selected_status);
 		this.page.main.find('[data-role="selected-call-section"]').removeClass('hide');
 		this.page.main.find('[data-role="selected-call-title"]').text(__('{0} List', [label]));
 		this.page.main.find('[data-role="selected-calls"]').html(`
 			<tr>
-				<td colspan="10" class="text-muted text-center">${__('Loading {0}...', [label.toLowerCase()])}</td>
+				<td colspan="11" class="text-muted text-center">${__('Loading {0}...', [label.toLowerCase()])}</td>
 			</tr>
 		`);
 		this.page.main.find('[data-role="selected-calls-note"]').text(__('Loading...'));
@@ -407,7 +527,8 @@ class VobizAgentAnalytics {
 			args: Object.assign({}, filters, {
 				include_calls: 1,
 				call_limit: 100,
-				call_offset: 0
+				call_offset: 0,
+				unique_only: unique_only ? 1 : 0
 			}),
 			freeze: false
 		}).then((r) => {
@@ -556,6 +677,7 @@ class VobizAgentAnalytics {
 			{ label: __('Missed'), value: summary.missed || 0, note: `${summary.missed_rate || 0}% ${__('missed')}`, className: 'missed', status_filter: 'missed' },
 			{ label: __('Connected'), value: summary.connected || 0, note: `${summary.answer_rate || 0}% ${__('answer rate')}`, className: 'connected', status_filter: 'connected' },
 			{ label: __('Total Calls'), value: summary.total || 0, note: data.queue_source || '', className: 'total', status_filter: 'total' },
+			{ label: __('Unique Calls'), value: summary.unique_calls || 0, note: __('repeat calls counted once'), className: 'unique', status_filter: 'unique' },
 			{ label: __('Avg Talk Time'), value: summary.average_duration_label || '0s', note: __('connected calls only'), className: 'average' },
 			{ label: __('Busy'), value: summary.busy || 0, note: __('busy outcomes'), className: 'busy', status_filter: 'busy' },
 			{ label: __('No Answer'), value: summary.no_answer || 0, note: __('ring timeout'), className: 'no-answer', status_filter: 'no_answer' }
@@ -586,9 +708,9 @@ class VobizAgentAnalytics {
 
 	render_selected_calls(calls, data, status_filter) {
 		const label = this.call_list_label(status_filter);
-		const html = calls.map(row => this.call_row_html(row)).join('');
+		const html = calls.map(row => this.call_row_html(row, true)).join('');
 		this.page.main.find('[data-role="selected-calls"]').html(
-			html || `<tr><td colspan="10" class="text-muted text-center">${__('No {0} found for this filter.', [label.toLowerCase()])}</td></tr>`
+			html || `<tr><td colspan="11" class="text-muted text-center">${__('No {0} found for this filter.', [label.toLowerCase()])}</td></tr>`
 		);
 		const total = data && data.matching_call_count != null ? data.matching_call_count : calls.length;
 		this.page.main.find('[data-role="selected-calls-note"]').text(`${__('Showing')} ${calls.length} ${__('of')} ${total} ${label.toLowerCase()}`);
@@ -599,12 +721,13 @@ class VobizAgentAnalytics {
 			total: __('Total Calls'),
 			connected: __('Connected Calls'),
 			missed: __('Missed Calls'),
+			unique: __('Unique Calls'),
 			busy: __('Busy Calls'),
 			no_answer: __('No Answer Calls')
 		}[status_filter || 'total'] || __('Calls');
 	}
 
-	call_row_html(row) {
+	call_row_html(row, include_attempts = false) {
 		const route = row.reference_name ? `/app/${frappe.router.slug(row.reference_doctype || 'CRM Lead')}/${encodeURIComponent(row.reference_name)}` : '';
 		return `
 			<tr>
@@ -613,6 +736,7 @@ class VobizAgentAnalytics {
 				<td>${this.escape(row.reference_doctype || '')}</td>
 				<td>${route ? `<a href="${route}"><code>${this.escape(row.reference_name || '')}</code></a>` : ''}</td>
 				<td>${this.escape(row.customer_number || '')}</td>
+				${include_attempts ? `<td>${this.escape(String(row.attempt_count || 1))}</td>` : ''}
 				<td><span class="vobiz-status-pill" style="background:${this.bucket_fill(row.bucket)}; color:${this.bucket_color(row.bucket)}">${this.escape(row.bucket_label || row.status || '')}</span></td>
 				<td>${this.escape(row.duration_label || '0s')}</td>
 				<td>${this.escape(row.disposition || '')}</td>
@@ -763,62 +887,161 @@ class VobizAgentAnalytics {
 	}
 
 	render_agent_chart(agents) {
-		const rows = agents.slice(0, 8);
+		this.state.agents = agents || [];
+		this.render_agent_overview(this.state.agents);
+		this.sync_agent_controls();
+		const rows = this.filtered_agent_rows(this.state.agents).slice(0, 8);
 		if (!rows.length) {
-			this.page.main.find('[data-role="agent-chart"]').html(`<div class="text-muted">${__('Agent chart is available for System Manager users.')}</div>`);
+			this.page.main.find('[data-role="agent-chart"]').html(`<div class="vobiz-agent-empty">${__('No agents found for this view.')}</div>`);
 			return;
 		}
 		this.page.main.find('[data-role="agent-chart"]').html(`
 			<div class="vobiz-agent-grid">
 				${rows.map(row => this.agent_card_html(row)).join('')}
 			</div>
-			${this.legend_html([
-				{ label: __('Missed'), color: this.bucket_color('missed') },
-				{ label: __('Connected'), color: this.bucket_color('connected') },
-				{ label: __('Other'), color: this.bucket_color('other') }
-			])}
 		`);
+	}
+
+	render_agent_overview(agents) {
+		const totalAgents = agents.length;
+		const activeAgents = agents.filter(row => row.is_online).length;
+		const totalCalls = agents.reduce((sum, row) => sum + (Number(row.total) || 0), 0);
+		const uniqueCalls = agents.reduce((sum, row) => sum + (Number(row.unique_calls) || 0), 0);
+		const totalRejected = agents.reduce((sum, row) => sum + (Number(row.rejected || row.cancelled) || 0), 0);
+		const avgAnswer = totalAgents
+			? (agents.reduce((sum, row) => sum + (Number(row.answer_rate) || 0), 0) / totalAgents).toFixed(1)
+			: '0.0';
+		const cards = [
+			{ label: __('Active Agents'), value: `${activeAgents} / ${totalAgents}`, icon: 'fa-users', className: 'active' },
+			{ label: __('Total Calls Handled'), value: totalCalls, icon: 'fa-phone', className: 'calls' },
+			{ label: __('Unique Calls'), value: uniqueCalls, icon: 'fa-address-book-o', className: 'calls' },
+			{ label: __('Average Answer Rate'), value: `${avgAnswer}%`, icon: 'fa-headphones', className: 'answer' },
+			{ label: __('Rejected Calls'), value: totalRejected, icon: 'fa-phone', className: 'rejected' },
+		];
+		this.page.main.find('[data-role="agent-overview"]').html(cards.map(card => `
+			<div class="vobiz-agent-stat-card">
+				<div>
+					<span>${this.escape(card.label)}</span>
+					<strong>${this.escape(String(card.value))}</strong>
+				</div>
+				<div class="vobiz-agent-stat-icon ${this.escape(card.className)}">
+					<i class="fa ${this.escape(card.icon)}"></i>
+				</div>
+			</div>
+		`).join(''));
+	}
+
+	sync_agent_controls() {
+		this.page.main.find('[data-agent-filter]').removeClass('active');
+		this.page.main.find(`[data-agent-filter="${this.escape(this.state.agent_status_filter || 'all')}"]`).addClass('active');
+		this.page.main.find('[data-role="agent-search"]').val(this.state.agent_search || '');
+		this.page.main.find('[data-role="agent-sort"]').val(this.state.agent_sort || 'total');
+	}
+
+	filtered_agent_rows(agents) {
+		const filter = this.state.agent_status_filter || 'all';
+		const query = (this.state.agent_search || '').toLowerCase();
+		const sort = this.state.agent_sort || 'total';
+		const rows = (agents || []).filter(row => {
+			const matchesStatus = filter === 'all' || (filter === 'online' ? row.is_online : !row.is_online);
+			const matchesSearch = !query || String(row.user || '').toLowerCase().includes(query);
+			return matchesStatus && matchesSearch;
+		});
+		const value = {
+			total: row => Number(row.total) || 0,
+			unique: row => Number(row.unique_calls) || 0,
+			answer: row => Number(row.answer_rate) || 0,
+			talk: row => Number(row.talk_seconds) || 0,
+			rejected: row => Number(row.rejected || row.cancelled) || 0,
+		}[sort] || (row => Number(row.total) || 0);
+		return rows.sort((a, b) => value(b) - value(a));
 	}
 
 	agent_card_html(row) {
 		const connected = row.connected || 0;
 		const missed = row.missed || 0;
 		const total = row.total || 0;
+		const unique = row.unique_calls || 0;
 		const rejected = row.rejected || row.cancelled || 0;
 		const other = Math.max(0, total - connected - missed);
 		const is_online = Boolean(row.is_online);
 		const availability_label = row.availability_label || (is_online ? __('Online') : __('Offline'));
 		const duration_label = row.availability_duration_label || '';
+		const online_today = row.online_today_label || '0m';
+		const offline_today = row.offline_today_label || '0m';
+		const answerRate = Number(row.answer_rate || 0);
+		const answerClass = answerRate >= 70 ? 'good' : (answerRate >= 45 ? 'warn' : 'bad');
+		const initials = (row.user || '?').trim().slice(0, 1).toUpperCase();
 		const segment = (value, bucket) => {
 			if (!value || !total) return '';
 			return `<span title="${this.escape(this.bucket_label(bucket))}: ${value}" style="background:${this.bucket_color(bucket)}; width:${Math.round((value / total) * 100)}%"></span>`;
 		};
 		return `
 			<div class="vobiz-agent-card">
-				<div>
-					<div class="vobiz-agent-title" title="${this.escape(row.user || '')}">${this.escape(row.user || '')}</div>
-					<div class="vobiz-agent-sub">${__('Agent')}</div>
-				</div>
-				<div class="vobiz-agent-meter">
-					<div class="vobiz-stack">
-						${segment(missed, 'missed')}
-						${segment(connected, 'connected')}
-						${segment(other, 'other')}
+				<div class="vobiz-agent-card-inner">
+					<div class="vobiz-agent-identity">
+						<div class="vobiz-agent-avatar-wrap">
+							<div class="vobiz-agent-avatar">${this.escape(initials)}</div>
+							${is_online ? '<span class="vobiz-agent-presence-ring"></span>' : ''}
+							<span class="vobiz-agent-presence ${is_online ? 'online' : 'offline'}"></span>
+						</div>
+						<div class="vobiz-agent-identity-body">
+							<div class="vobiz-agent-title" title="${this.escape(row.user || '')}">${this.escape(row.user || '')}</div>
+							<div class="vobiz-agent-meta">
+								<span class="vobiz-agent-role">${__('Agent')}</span>
+								<span class="vobiz-agent-status-pill ${is_online ? 'online' : 'offline'}">${this.escape(availability_label)}</span>
+							</div>
+						</div>
 					</div>
-					<div class="vobiz-agent-sub">${missed} ${__('missed')} / ${connected} ${__('connected')}</div>
-				</div>
-				<div class="vobiz-agent-mini"><span>${__('Answer')}</span><strong>${row.answer_rate || 0}%</strong></div>
-				<div class="vobiz-agent-mini"><span>${__('Total Talk')}</span><strong>${this.escape(row.talk_time_label || '0s')}</strong></div>
-				<div class="vobiz-agent-mini"><span>${__('Total')}</span><strong>${total}</strong></div>
-				<div class="vobiz-agent-mini" title="${this.escape(row.availability_status || availability_label)}">
-					<span>${__('Status')}</span>
-					<div class="vobiz-agent-status">
-						<span class="vobiz-agent-status-dot ${is_online ? 'online' : 'offline'}"></span>
-						<strong class="vobiz-agent-status-text">${this.escape(availability_label)}</strong>
+
+					<div class="vobiz-agent-meter">
+						<div class="vobiz-agent-meter-head">
+							<span class="vobiz-agent-meter-label"><i class="fa fa-bar-chart vobiz-agent-metric-icon"></i>${__('Performance Timeline')}</span>
+							<span class="vobiz-agent-meter-count">${missed} ${__('Missed')} / ${connected} ${__('Connected')}</span>
+						</div>
+						<div class="vobiz-stack" title="${this.escape(`${missed} ${__('Missed')}, ${connected} ${__('Connected')}, ${other} ${__('Other')}`)}">
+							${segment(missed, 'missed')}
+							${segment(connected, 'connected')}
+							${segment(other, 'other')}
+						</div>
 					</div>
-					<div class="vobiz-agent-sub">${this.escape(duration_label)}</div>
+
+					<div class="vobiz-agent-metrics">
+						<div class="vobiz-agent-mini">
+							<span>${__('Answer')}</span>
+							<strong class="vobiz-agent-answer-badge ${answerClass}">${answerRate}%</strong>
+						</div>
+						<div class="vobiz-agent-mini">
+							<span>${__('Total Talk')}</span>
+							<strong><i class="fa fa-clock-o vobiz-agent-metric-icon"></i>${this.escape(row.talk_time_label || '0s')}</strong>
+						</div>
+						<div class="vobiz-agent-mini">
+							<span>${__('Total Calls')}</span>
+							<strong>${total}</strong>
+						</div>
+						<div class="vobiz-agent-mini">
+							<span>${__('Unique')}</span>
+							<strong>${unique}</strong>
+						</div>
+						<div class="vobiz-agent-mini">
+							<span>${__('Rejected')}</span>
+							<strong class="${rejected ? 'vobiz-agent-rejected' : ''}">${rejected}</strong>
+						</div>
+					</div>
+
+					<div class="vobiz-agent-attendance" title="${this.escape(row.availability_status || availability_label)}">
+						<div class="vobiz-agent-attendance-title">${__('Attendance Shift Details')}</div>
+						<div class="vobiz-agent-status">
+							<span class="vobiz-agent-status-dot ${is_online ? 'online' : 'offline'}"></span>
+							<strong class="vobiz-agent-status-text">${this.escape(availability_label)}</strong>
+						</div>
+						<div class="vobiz-agent-status-times">
+							<div class="online"><span>${__('Online Today')}</span><b>${this.escape(online_today)}</b></div>
+							<div class="offline"><span>${__('Offline Today')}</span><b>${this.escape(offline_today)}</b></div>
+							${duration_label ? `<div><span>${__('Current')}</span><b>${this.escape(duration_label)}</b></div>` : ''}
+						</div>
+					</div>
 				</div>
-				<div class="vobiz-agent-mini"><span>${__('Rejected')}</span><strong>${rejected}</strong></div>
 			</div>
 		`;
 	}
