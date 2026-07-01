@@ -462,6 +462,7 @@ def get_call_performance(
     to_date: str | None = None,
     queue_source: str | None = None,
     agent_user: str | None = None,
+    lead_owner: str | None = None,
     team: str | None = None,
     department: str | None = None,
 ) -> dict[str, Any]:
@@ -475,6 +476,7 @@ def get_call_performance(
         status_filter=status_filter,
         queue_source=queue_source or _agent_queue_source(agent),
         agent_user=agent_user,
+        lead_owner=lead_owner,
         team=team,
         department=department,
         agent=agent,
@@ -491,6 +493,7 @@ def get_call_performance(
         "from_date": data.get("from_date"),
         "to_date": data.get("to_date"),
         "queue_source": data.get("queue_source"),
+        "lead_owner": data.get("lead_owner"),
         "team": data.get("team"),
         "department": data.get("department"),
     }
@@ -503,6 +506,7 @@ def get_analytics(
     status_filter: str | None = None,
     queue_source: str | None = None,
     agent_user: str | None = None,
+    lead_owner: str | None = None,
     team: str | None = None,
     department: str | None = None,
     include_calls: int | str = 0,
@@ -520,6 +524,7 @@ def get_analytics(
         status_filter=status_filter,
         queue_source=queue_source or _agent_queue_source(agent),
         agent_user=agent_user,
+        lead_owner=lead_owner,
         team=team,
         department=department,
         agent=agent,
@@ -540,6 +545,7 @@ def _analytics_data(
     status_filter: str | None = None,
     queue_source: str | None = None,
     agent_user: str | None = None,
+    lead_owner: str | None = None,
     team: str | None = None,
     department: str | None = None,
     agent: dict[str, Any] | None = None,
@@ -569,18 +575,20 @@ def _analytics_data(
 
     team_scope = [] if is_admin else _team_member_users_for_leader(frappe.session.user)
     agent_user = (agent_user or "").strip()
+    lead_owner = (lead_owner or "").strip()
     team = (team or "").strip()
     department = (department or "").strip()
     if is_crm_lead_queue:
         _apply_crm_lead_analytics_filters(
             filters,
-            lead_owner=agent_user,
+            lead_owner=lead_owner,
             team=team,
             visible_leads=visible_crm_leads,
         )
     elif is_patient_queue:
         _apply_patient_department_analytics_filter(filters, department=department)
-    elif is_admin and agent_user:
+
+    if is_admin and agent_user:
         filters["user"] = agent_user
     elif team_scope:
         if agent_user and agent_user in team_scope:
@@ -643,10 +651,12 @@ def _analytics_data(
         "status_filter": status_filter,
         "queue_source": queue_source,
         "queue_sources": list(QUEUE_SOURCE_DOCTYPES.keys()),
-        "agent_user": filters.get("lead_owner") if is_crm_lead_queue else filters.get("user") or "",
+        "agent_user": filters.get("user") or "",
+        "lead_owner": lead_owner if is_crm_lead_queue else "",
         "team": team if is_crm_lead_queue else "",
         "department": department if is_patient_queue else "",
         "team_options": _analytics_team_options(queue_source, visible_leads=visible_crm_leads),
+        "lead_owner_options": _analytics_lead_owner_options(queue_source, team=team, visible_leads=visible_crm_leads),
         "department_options": _analytics_department_options(queue_source),
         "agent_options": _analytics_agent_options(
             is_admin,
@@ -1345,8 +1355,6 @@ def _analytics_agent_options(
     team: str | None = None,
     visible_leads: list[str] | None = None,
 ) -> list[str]:
-    if queue_source in {"CRM Lead", "Discontinued"}:
-        return _crm_lead_distinct_options("lead_owner", team=team, visible_leads=visible_leads)
     if team_scope:
         return team_scope
     if not is_admin:
@@ -1385,6 +1393,12 @@ def _analytics_agent_options(
             cleaned.append(value)
             seen.add(value)
     return cleaned
+
+
+def _analytics_lead_owner_options(queue_source: str | None = None, team: str | None = None, visible_leads: list[str] | None = None) -> list[str]:
+    if queue_source not in {"CRM Lead", "Discontinued"}:
+        return []
+    return _crm_lead_distinct_options("lead_owner", team=team, visible_leads=visible_leads)
 
 
 def _analytics_team_options(queue_source: str | None = None, visible_leads: list[str] | None = None) -> list[str]:
