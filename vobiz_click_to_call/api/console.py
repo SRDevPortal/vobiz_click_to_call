@@ -792,7 +792,7 @@ def _analytics_bucket_sql() -> str:
     recording = _analytics_recording_duration_sql()
     return f"""
         case
-            when {recording} > 0 or coalesce(`billsec`, 0) > 0 or coalesce(`duration`, 0) >= 30 then 'connected'
+            when {recording} > 0 or coalesce(`billsec`, 0) > 0 then 'connected'
             when `status` in ('Connected', 'Completed') then 'connected'
             when {signal} like '%%busy%%' then 'busy'
             when {signal} like '%%no-answer%%' or {signal} like '%%no answer%%' or {signal} like '%%timeout%%' or {signal} like '%%unanswered%%' then 'no_answer'
@@ -814,7 +814,7 @@ def _analytics_recording_duration_sql() -> str:
 
 
 def _analytics_talk_sql() -> str:
-    return f"coalesce(nullif({_analytics_recording_duration_sql()}, 0), nullif(`billsec`, 0), nullif(`duration`, 0), 0)"
+    return f"coalesce(nullif({_analytics_recording_duration_sql()}, 0), nullif(`billsec`, 0), 0)"
 
 
 def _analytics_unique_key_sql() -> str:
@@ -1069,7 +1069,7 @@ def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
     mappings = frappe.get_all(
         "Vobiz User Mapping",
         filters={"user": ["in", users], "enabled": 1},
-        fields=["user", "availability_status", "accept_calls", "last_status_at"],
+        fields=["user", "availability_status", "accept_calls", "current_call_log", "last_status_at"],
     )
     by_user = {row.user: row for row in mappings}
     now = frappe.utils.now_datetime()
@@ -1083,6 +1083,8 @@ def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
             row.update(
                 {
                     "availability_status": "Offline",
+                    "is_on_call": False,
+                    "current_call_log": "",
                     "is_online": False,
                     "availability_label": _("Offline"),
                     "availability_duration_label": "",
@@ -1098,8 +1100,9 @@ def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
             )
             continue
 
-        status = mapping.availability_status or "Offline"
-        is_online = status in online_statuses or is_agent_console_online(row.get("user"))
+        active_call = is_active_call_log(mapping.current_call_log)
+        status = "Busy" if active_call else (mapping.availability_status or "Offline")
+        is_online = active_call or status in online_statuses or is_agent_console_online(row.get("user"))
         since = frappe.utils.get_datetime(mapping.last_status_at) if mapping.last_status_at else None
         duration_label = _human_duration(now - since) if since else ""
         online_seconds, offline_seconds = _today_availability_seconds(
@@ -1113,6 +1116,8 @@ def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
         row.update(
             {
                 "availability_status": status,
+                "is_on_call": active_call,
+                "current_call_log": mapping.current_call_log if active_call else "",
                 "is_online": is_online,
                 "availability_label": _("Online") if is_online else _("Offline"),
                 "availability_duration_label": duration_label,

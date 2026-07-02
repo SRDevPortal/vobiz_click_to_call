@@ -240,7 +240,7 @@ class VobizAgentAnalytics {
 				.vobiz-filter-grid label { color: #667085; display: block; font-size: 11px; font-weight: 800; margin-bottom: 5px; text-transform: uppercase; }
 				.vobiz-filter-action { display: flex; justify-content: flex-end; }
 				.vobiz-summary { padding: 0; }
-				.vobiz-kpi-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+				.vobiz-kpi-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); }
 				.vobiz-kpi { background: #fff; border-right: 1px solid #edf0ea; min-height: 106px; padding: 18px 16px; position: relative; }
 				.vobiz-kpi:last-child { border-right: 0; }
 				.vobiz-kpi[role="button"] { cursor: pointer; }
@@ -254,6 +254,7 @@ class VobizAgentAnalytics {
 				.vobiz-kpi.average:before { background: #3b82c4; }
 				.vobiz-kpi.busy:before { background: #b875e6; }
 				.vobiz-kpi.no-answer:before { background: #5f7dd4; }
+				.vobiz-kpi.rejected:before { background: #e11d48; }
 				.vobiz-kpi span { color: #667085; display: block; font-size: 11px; font-weight: 800; text-transform: uppercase; }
 				.vobiz-kpi strong { color: #344054; display: block; font-size: 30px; line-height: 1.05; margin: 9px 0 6px; }
 				.vobiz-kpi small { color: #667085; display: block; font-size: 11px; min-height: 15px; }
@@ -301,6 +302,7 @@ class VobizAgentAnalytics {
 				.vobiz-agent-status-pill { border: 1px solid #e2e8f0; border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: .03em; padding: 2px 8px; text-transform: uppercase; }
 				.vobiz-agent-status-pill.online { background: #10b981; border-color: #10b981; color: #fff; }
 				.vobiz-agent-status-pill.offline { background: #f1f5f9; border-color: #e2e8f0; color: #64748b; }
+				.vobiz-agent-status-pill.on-call { background: #fff7ed; border-color: #fdba74; color: #c2410c; }
 				.vobiz-agent-meter { align-self: center; display: grid; gap: 8px; min-width: 0; }
 				.vobiz-agent-meter-head { align-items: center; display: flex; gap: 10px; justify-content: space-between; min-width: 0; }
 				.vobiz-agent-meter-label { color: #475569; font-size: 12px; font-weight: 800; }
@@ -309,9 +311,10 @@ class VobizAgentAnalytics {
 				.vobiz-agent-meter .vobiz-stack span { transition: filter .18s ease; }
 				.vobiz-agent-meter .vobiz-stack span:hover { filter: brightness(.95); }
 				.vobiz-agent-metrics { background: rgba(248, 250, 252, .72); border: 1px solid #f1f5f9; border-radius: 8px; display: grid; gap: 14px; grid-template-columns: repeat(5, minmax(74px, 1fr)); padding: 14px; }
-				.vobiz-agent-mini { min-width: 0; }
+				.vobiz-agent-mini { min-width: 0; text-align: center; }
 				.vobiz-agent-mini span { color: #333333; display: block; font-size: 10px; font-weight: 900; letter-spacing: .02em; margin-bottom: 5px; text-transform: uppercase; }
 				.vobiz-agent-mini strong { color: #0f172a; display: block; font-size: 18px; font-weight: 900; line-height: 1.1; }
+				.vobiz-agent-mini strong.vobiz-agent-talk-value { font-size: 14px; line-height: 1.2; white-space: nowrap; }
 				.vobiz-agent-answer-badge { border: 1px solid #e2e8f0; border-radius: 8px; display: inline-block; min-width: 58px; padding: 5px 8px; text-align: center; }
 				.vobiz-agent-answer-badge.good { background: #ecfdf5; border-color: #a7f3d0; color: #059669; }
 				.vobiz-agent-answer-badge.warn { background: #fffbeb; border-color: #fde68a; color: #d97706; }
@@ -701,7 +704,8 @@ class VobizAgentAnalytics {
 			{ label: __('Unique Calls'), value: summary.unique_calls || 0, note: __('repeat calls counted once'), className: 'unique', status_filter: 'unique' },
 			{ label: __('Avg Talk Time'), value: summary.average_duration_label || '0s', note: __('connected calls only'), className: 'average' },
 			{ label: __('Busy'), value: summary.busy || 0, note: __('busy outcomes'), className: 'busy', status_filter: 'busy' },
-			{ label: __('No Answer'), value: summary.no_answer || 0, note: __('ring timeout'), className: 'no-answer', status_filter: 'no_answer' }
+			{ label: __('No Answer'), value: summary.no_answer || 0, note: __('ring timeout'), className: 'no-answer', status_filter: 'no_answer' },
+			{ label: __('Rejected Calls'), value: summary.rejected || summary.cancelled || 0, note: __('rejected outcomes'), className: 'rejected', status_filter: 'cancelled' }
 		];
 		this.page.main.find('[data-role="kpis"]').html(kpis.map(row => `
 			<div class="vobiz-kpi ${this.escape(row.className)}" ${row.status_filter ? `data-action="show-call-list" data-status-filter="${this.escape(row.status_filter)}" role="button" tabindex="0"` : ''}>
@@ -744,7 +748,8 @@ class VobizAgentAnalytics {
 			missed: __('Missed Calls'),
 			unique: __('Unique Calls'),
 			busy: __('Busy Calls'),
-			no_answer: __('No Answer Calls')
+			no_answer: __('No Answer Calls'),
+			cancelled: __('Rejected Calls')
 		}[status_filter || 'total'] || __('Calls');
 	}
 
@@ -986,6 +991,7 @@ class VobizAgentAnalytics {
 		const rejected = row.rejected || row.cancelled || 0;
 		const other = Math.max(0, total - connected - missed);
 		const is_online = Boolean(row.is_online);
+		const is_on_call = Boolean(row.is_on_call);
 		const availability_label = row.availability_label || (is_online ? __('Online') : __('Offline'));
 		const duration_label = row.availability_duration_label || '';
 		const online_today = row.online_today_label || '0m';
@@ -1011,6 +1017,7 @@ class VobizAgentAnalytics {
 							<div class="vobiz-agent-meta">
 								<span class="vobiz-agent-role">${__('Agent')}</span>
 								<span class="vobiz-agent-status-pill ${is_online ? 'online' : 'offline'}">${this.escape(availability_label)}</span>
+								${is_on_call ? `<span class="vobiz-agent-status-pill on-call"><i class="fa fa-phone"></i> ${__('On Call')}</span>` : ''}
 							</div>
 						</div>
 					</div>
@@ -1034,7 +1041,7 @@ class VobizAgentAnalytics {
 						</div>
 						<div class="vobiz-agent-mini">
 							<span>${__('Total Talk')}</span>
-							<strong><i class="fa fa-clock-o vobiz-agent-metric-icon"></i>${this.escape(row.talk_time_label || '0s')}</strong>
+							<strong class="vobiz-agent-talk-value"><i class="fa fa-clock-o vobiz-agent-metric-icon"></i>${this.escape(row.talk_time_label || '0s')}</strong>
 						</div>
 						<div class="vobiz-agent-mini">
 							<span>${__('Total Calls')}</span>
