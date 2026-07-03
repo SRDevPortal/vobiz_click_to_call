@@ -10,7 +10,7 @@ from frappe import _
 
 from vobiz_click_to_call.api.call import get_call_capability, get_call_status, is_active_call_log, restore_mapping_after_call
 from vobiz_click_to_call.api.recording import recording_proxy_url
-from vobiz_click_to_call.api.disposition import get_disposition_options_api
+from vobiz_click_to_call.api.disposition import get_disposition_options_api, get_patient_followup_status_options_api
 from vobiz_click_to_call.services.call_status import MISSED_STATUSES, status_bucket
 from vobiz_click_to_call.services.lead_disposition import get_lead_disposition_context
 from vobiz_click_to_call.services.settings import get_settings
@@ -160,6 +160,7 @@ def _get_console_static_context(queue_source: str, queue_doctype: str, agent_que
     context = {
         "queue_meta": _queue_meta(queue_source, queue_doctype, agent_queue_source=agent_queue_source),
         "dispositions": get_disposition_options_api(),
+        "patient_followup_status_options": get_patient_followup_status_options_api(),
         "ai_disposition_enabled": bool(settings.enable_ai_disposition),
     }
     try:
@@ -672,7 +673,15 @@ def _analytics_data(
         "status_breakdown": _analytics_status_breakdown_sql(conditions, params),
         "outcome_breakdown": _analytics_outcome_breakdown_sql(conditions, params),
         "daily": _analytics_daily_sql(conditions, params, from_date, to_date),
-        "agents": _analytics_agents_sql(conditions, params, status_filter=status_filter, queue_source=queue_source),
+        "agents": _analytics_agents_sql(
+            conditions,
+            params,
+            status_filter=status_filter,
+            queue_source=queue_source,
+            agent_user=agent_user,
+            lead_owner=lead_owner,
+            team_scope=team_scope,
+        ),
         "calls": [_performance_call_row(row) for row in call_slice],
         "calls_loaded": include_call_rows,
         "call_limit": call_limit,
@@ -984,6 +993,9 @@ def _analytics_agents_sql(
     params: dict[str, Any],
     status_filter: str | None = None,
     queue_source: str | None = None,
+    agent_user: str | None = None,
+    lead_owner: str | None = None,
+    team_scope: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     bucket_expr = _analytics_bucket_sql()
     bucket_filter = _analytics_bucket_filter_sql(status_filter)
@@ -1057,8 +1069,79 @@ def _analytics_agents_sql(
         {"user": user, **_summary_from_bucket_rows(user_rows, unique_calls=unique_by_agent.get(user, 0))}
         for user, user_rows in grouped.items()
     ]
+    _append_mapped_agents_with_zero_calls(
+        data,
+        queue_source=queue_source,
+        agent_user=agent_user,
+        lead_owner=lead_owner,
+        team_scope=team_scope,
+    )
     _attach_agent_availability(data)
     return sorted(data, key=lambda row: row["total"], reverse=True)
+
+
+def _append_mapped_agents_with_zero_calls(
+    rows: list[dict[str, Any]],
+    *,
+    queue_source: str | None = None,
+    agent_user: str | None = None,
+    lead_owner: str | None = None,
+    team_scope: list[str] | None = None,
+) -> None:
+    if not frappe.db.exists("DocType", "Vobiz User Mapping"):
+        return
+
+    filters: dict[str, Any] = {"enabled": 1}
+    queue_filter = _analytics_mapped_agent_queue_filter(queue_source)
+    if queue_filter:
+        filters["queue_source"] = ["in", queue_filter]
+    users = _analytics_mapped_agent_scope(
+        queue_source=queue_source,
+        agent_user=agent_user,
+        lead_owner=lead_owner,
+        team_scope=team_scope,
+    )
+    if users is not None:
+        if not users:
+            return
+        filters["user"] = ["in", sorted(users)]
+
+    mapped_users = frappe.get_all(
+        "Vobiz User Mapping",
+        filters=filters,
+        pluck="user",
+        limit_page_length=50000,
+    )
+    existing = {row.get("user") for row in rows}
+    for user in mapped_users:
+        if not user or user in existing:
+            continue
+        rows.append({"user": user, **_summary_from_bucket_rows([], unique_calls=0)})
+        existing.add(user)
+
+
+def _analytics_mapped_agent_queue_filter(queue_source: str | None = None) -> list[str]:
+    if queue_source in {"CRM Lead", "Discontinued"}:
+        return ["CRM Lead", "CRM Lead and Patient"]
+    if queue_source == "Patient":
+        return ["Patient", "CRM Lead and Patient"]
+    return []
+
+
+def _analytics_mapped_agent_scope(
+    *,
+    queue_source: str | None = None,
+    agent_user: str | None = None,
+    lead_owner: str | None = None,
+    team_scope: list[str] | None = None,
+) -> set[str] | None:
+    if agent_user:
+        return {agent_user}
+    if queue_source in {"CRM Lead", "Discontinued"} and lead_owner:
+        return {lead_owner}
+    if team_scope:
+        return {user for user in team_scope if user}
+    return None
 
 
 def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
@@ -2048,7 +2131,10 @@ def _reference_row(doctype: str, doc) -> dict[str, Any]:
     )
     company = data.get("company_name") or data.get("organization") or doctype
     phone_field = _first_value(data, ("mobile_no", "mobile", "phone", "phone_no"))
-    status = _first_value(data, ("status", "lead_status", "sr_lead_status", "qualification_status")).get("value") or "New"
+    if doctype == "Patient":
+        status = data.get("sr_followup_status") or _first_value(data, ("status",)).get("value") or "New"
+    else:
+        status = _first_value(data, ("status", "lead_status", "sr_lead_status", "qualification_status")).get("value") or "New"
     next_action = data.get("vobiz_last_call_status") or data.get("vobiz_next_follow_up") or "Initial contact"
 
     return {

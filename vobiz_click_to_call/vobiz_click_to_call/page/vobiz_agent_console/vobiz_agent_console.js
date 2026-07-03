@@ -34,6 +34,7 @@ class VobizAgentConsole {
 			active_call: null,
 			call_started_at: null,
 			dispositions: [],
+			patient_followup_status_options: ['Pending'],
 			lead_disposition_context: {},
 			ai_disposition_enabled: false,
 			restore_checked: false,
@@ -520,6 +521,7 @@ class VobizAgentConsole {
 			this.reset_filter_group_if_doctype_changed();
 			this.state.active_call = data.active_call || null;
 			this.state.dispositions = data.dispositions || [];
+			this.state.patient_followup_status_options = data.patient_followup_status_options || ['Pending'];
 			this.state.ai_disposition_enabled = Boolean(data.ai_disposition_enabled);
 			if (!this.state.lead_disposition_context || !this.state.lead_disposition_context.name) {
 				this.state.lead_disposition_context = { options: (data.dispositions || []).map(value => ({ name: value })) };
@@ -1240,7 +1242,7 @@ class VobizAgentConsole {
 	}
 
 	patient_followup_status_options() {
-		return ['Pending', 'Done'];
+		return this.state.patient_followup_status_options || ['Pending'];
 	}
 
 	render_manual_disposition_visibility() {
@@ -3269,7 +3271,11 @@ class VobizAgentConsole {
 		if (!matchesWorkdesk) return;
 
 		this.state.disposition_prompted_call_log = call.name;
-		setTimeout(() => this.open_post_call_disposition_dialog(call, row), 150);
+		setTimeout(() => this.open_post_call_disposition_dialog(call, row, null, {
+			force_timer: true,
+			timeout_seconds: 60,
+			timeout_status: 'Agent Not Available'
+		}), 150);
 	}
 
 	open_post_call_disposition_dialog(call, row, on_done, options = {}) {
@@ -3299,11 +3305,13 @@ class VobizAgentConsole {
 
 		const leadContext = this.state.lead_disposition_context || {};
 		const isPatientDisposition = this.is_patient_disposition_reference(call, row);
-		const autoDialDisposition = Boolean(options.auto_dial) && !isPatientDisposition;
+		const autoDialDisposition = Boolean(options.auto_dial);
+		const timedDisposition = Boolean(options.auto_dial || options.force_timer);
+		const timedAutoSave = timedDisposition;
 		const timeoutStatus = options.timeout_status || 'Agent Not Available';
 		const timeoutSeconds = parseInt(options.timeout_seconds, 10) || 60;
 		const statusOptions = (leadContext.status_options || []).slice();
-		if (autoDialDisposition && !statusOptions.includes(timeoutStatus)) {
+		if (timedAutoSave && !isPatientDisposition && !statusOptions.includes(timeoutStatus)) {
 			statusOptions.push(timeoutStatus);
 		}
 		const currentStatus = leadContext.status || '';
@@ -3343,9 +3351,10 @@ class VobizAgentConsole {
 				sr_followup_status: isPatientDisposition ? values.sr_followup_status : '',
 				notes: values.notes
 			}).then(() => {
+				const savedStatus = isPatientDisposition ? values.sr_followup_status : values.lead_status;
 				frappe.show_alert({
 					message: isAutoSave
-						? __('Disposition auto-saved as {0}', [values.lead_status])
+						? __('Disposition auto-saved as {0}', [savedStatus])
 						: __('Disposition saved'),
 					indicator: isAutoSave ? 'orange' : 'green'
 				});
@@ -3358,7 +3367,7 @@ class VobizAgentConsole {
 		};
 		const dialog = new frappe.ui.Dialog({
 			title: __('Complete Call Disposition'),
-			static: autoDialDisposition,
+			static: timedAutoSave,
 			fields: [
 				{
 					fieldname: 'call_info',
@@ -3375,13 +3384,15 @@ class VobizAgentConsole {
 				{
 					fieldname: 'auto_dial_timer',
 					fieldtype: 'HTML',
-					hidden: !autoDialDisposition,
+					hidden: !timedDisposition,
 					options: `
 						<div class="alert alert-warning" style="margin-bottom: 12px;">
-							<strong>${__('Auto Dial')}</strong>:
+							<strong>${autoDialDisposition ? __('Auto Dial') : __('Call Disposition')}</strong>:
 							${__('Submit disposition within')}
 							<span data-role="auto-disposition-countdown">${timeoutSeconds}</span>
-							${__('seconds, otherwise CRM Status will be set to Agent Not Available automatically.')}
+							${isPatientDisposition
+								? __('seconds, otherwise Follow-up Status will be set to Agent Not Available automatically.')
+								: __('seconds, otherwise CRM Status will be set to Agent Not Available automatically.')}
 						</div>
 					`
 				},
@@ -3421,7 +3432,26 @@ class VobizAgentConsole {
 		});
 		dialog.$wrapper.on('hidden.bs.modal', finish);
 		dialog.show();
-		if (autoDialDisposition) {
+		if (isPatientDisposition) {
+			frappe.call({
+				method: 'vobiz_click_to_call.api.disposition.get_patient_followup_status_options_api'
+			}).then((r) => {
+				const options = (r.message || []).filter(Boolean);
+				if (timedDisposition && !options.includes(timeoutStatus)) {
+					options.push(timeoutStatus);
+				}
+				if (!options.length) return;
+				this.state.patient_followup_status_options = options;
+				dialog.set_df_property('sr_followup_status', 'options', [''].concat(options).join('\n'));
+				const currentValue = dialog.get_value('sr_followup_status');
+				if (currentValue && !options.includes(currentValue)) {
+					dialog.set_value('sr_followup_status', '');
+				} else if (!currentValue && row.sr_followup_status && options.includes(row.sr_followup_status)) {
+					dialog.set_value('sr_followup_status', row.sr_followup_status);
+				}
+			});
+		}
+		if (timedDisposition) {
 			dialog.get_close_btn().hide();
 			const $countdown = dialog.$wrapper.find('[data-role="auto-disposition-countdown"]');
 			countdownTimer = setInterval(() => {
@@ -3429,8 +3459,9 @@ class VobizAgentConsole {
 				$countdown.text(String(Math.max(0, countdownSeconds)));
 				if (countdownSeconds <= 0) {
 					saveDisposition({
-						lead_status: timeoutStatus,
-						disposition: dialog.get_value('disposition'),
+						lead_status: isPatientDisposition ? '' : timeoutStatus,
+						disposition: isPatientDisposition ? '' : dialog.get_value('disposition'),
+						sr_followup_status: isPatientDisposition ? timeoutStatus : '',
 						notes: dialog.get_value('notes')
 					}, true);
 				}

@@ -478,9 +478,11 @@ def _append_callback_if_enabled(call_log: str, event: str, payload: dict) -> Non
             queue="short",
             timeout=120,
             enqueue_after_commit=True,
-            call_log=call_log,
-            event=event,
-            payload=payload,
+            kwargs={
+                "call_log": call_log,
+                "event": event,
+                "payload": payload,
+            },
         )
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Vobiz callback payload append failed")

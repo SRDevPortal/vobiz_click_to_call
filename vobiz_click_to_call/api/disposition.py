@@ -5,6 +5,7 @@ from frappe import _
 
 from vobiz_click_to_call.services.disposition import (
     get_reference_call_summary as get_summary,
+    get_patient_followup_status_options,
     save_call_disposition,
 )
 from vobiz_click_to_call.services.lead_disposition import get_lead_disposition_context
@@ -69,3 +70,10 @@ def get_reference_call_summary(reference_doctype: str, reference_name: str) -> d
 @frappe.whitelist()
 def get_ai_disposition_options() -> list[str]:
     return get_disposition_options()
+
+
+@frappe.whitelist()
+def get_patient_followup_status_options_api() -> list[str]:
+    if frappe.session.user == "Guest":
+        frappe.throw(_("Login required."))
+    return get_patient_followup_status_options()

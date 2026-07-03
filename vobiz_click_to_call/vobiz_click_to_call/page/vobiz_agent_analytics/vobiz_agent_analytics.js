@@ -263,30 +263,35 @@ class VobizAgentAnalytics {
 				.vobiz-section-title { align-items: center; display: flex; gap: 10px; justify-content: space-between; margin-bottom: 12px; }
 				.vobiz-section-title h3 { font-size: 15px; font-weight: 800; margin: 0; }
 				.vobiz-section-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
-				.vobiz-chart { min-height: 320px; }
+				.vobiz-chart { min-height: 320px; max-width: 100%; min-width: 0; }
 				.vobiz-axis-chart { display: grid; gap: 10px; grid-template-columns: 42px minmax(0, 1fr); }
 				.vobiz-y-axis { color: #8a94a3; display: grid; font-size: 11px; grid-template-rows: repeat(5, 1fr); height: 230px; line-height: 1; text-align: right; }
 				.vobiz-y-axis span { transform: translateY(-5px); }
-				.vobiz-plot { min-width: 0; }
-				.vobiz-plot-area { border-bottom: 1px solid #dfe4dc; border-left: 1px solid #dfe4dc; display: grid; grid-template-rows: 230px 34px; position: relative; }
+				.vobiz-plot { min-width: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 4px; }
+				.vobiz-plot-area { border-bottom: 1px solid #dfe4dc; border-left: 1px solid #dfe4dc; display: grid; grid-template-rows: 230px 34px; min-width: 100%; position: relative; width: max-content; }
 				.vobiz-grid-lines { bottom: 34px; display: grid; grid-template-rows: repeat(4, 1fr); left: 0; pointer-events: none; position: absolute; right: 0; top: 0; }
 				.vobiz-grid-lines span { border-top: 1px solid #edf0ea; }
-				.vobiz-daily-chart { align-items: end; display: grid; gap: 12px; grid-auto-flow: column; grid-auto-columns: minmax(50px, 1fr); height: 230px; padding: 8px 12px 0; position: relative; z-index: 1; }
+				.vobiz-daily-chart { align-items: end; display: grid; gap: 12px; grid-auto-flow: column; grid-auto-columns: 56px; height: 230px; min-width: 100%; padding: 8px 12px 0; position: relative; width: max-content; z-index: 1; }
 				.vobiz-day { align-items: end; display: grid; gap: 6px; grid-template-rows: 18px minmax(0, 1fr); justify-items: center; min-width: 0; }
 				.vobiz-day-total { color: #475467; font-size: 11px; font-weight: 800; }
 				.vobiz-day-bar { align-items: stretch; display: flex; flex-direction: column; justify-content: end; width: min(38px, 72%); }
 				.vobiz-day-segment { width: 100%; }
-				.vobiz-x-axis { color: #667085; display: grid; font-size: 11px; gap: 12px; grid-auto-flow: column; grid-auto-columns: minmax(50px, 1fr); padding: 8px 12px 0; text-align: center; }
+				.vobiz-x-axis { color: #667085; display: grid; font-size: 11px; gap: 12px; grid-auto-flow: column; grid-auto-columns: 56px; min-width: 100%; padding: 8px 12px 0; text-align: center; width: max-content; }
 				.vobiz-chart-legend { align-items: center; display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; }
 				.vobiz-legend-item { align-items: center; color: #475467; display: inline-flex; font-size: 12px; font-weight: 700; gap: 7px; }
 				.vobiz-legend-dot { border-radius: 50%; height: 9px; width: 9px; }
 				.vobiz-stack { background: #eef1ed; border-radius: 4px; display: flex; height: 18px; overflow: hidden; }
 				.vobiz-stack span { display: block; height: 100%; }
 				@keyframes vobiz-status-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .65; transform: scale(1.28); } }
+				@keyframes vobiz-call-ring { 0%, 100% { transform: rotate(0); } 20% { transform: rotate(-16deg); } 40% { transform: rotate(14deg); } 60% { transform: rotate(-10deg); } 80% { transform: rotate(8deg); } }
+				@keyframes vobiz-call-pulse { 0% { opacity: .75; transform: scale(.65); } 100% { opacity: 0; transform: scale(1.65); } }
 				.vobiz-agent-grid { display: grid; gap: 14px; }
-				.vobiz-agent-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; box-shadow: 0 1px 3px rgba(15, 23, 42, .06); overflow: hidden; transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease; }
+				.vobiz-agent-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; box-shadow: 0 1px 3px rgba(15, 23, 42, .06); overflow: hidden; position: relative; transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease; }
 				.vobiz-agent-card:hover { border-color: #a7f3d0; box-shadow: 0 10px 24px rgba(15, 23, 42, .08); transform: translateY(-1px); }
 				.vobiz-agent-card-inner { align-items: center; display: grid; gap: 22px; grid-template-columns: minmax(250px, 300px) minmax(220px, 1fr) minmax(390px, .9fr) minmax(210px, 250px); padding: 20px; }
+				.vobiz-agent-call-indicator { align-items: center; background: #dc2626; border: 2px solid #fff; border-radius: 999px; box-shadow: 0 8px 18px rgba(220, 38, 38, .28); color: #fff; display: inline-flex; height: 26px; justify-content: center; left: 10px; position: absolute; top: 10px; width: 26px; z-index: 2; }
+				.vobiz-agent-call-indicator i { animation: vobiz-call-ring .9s ease-in-out infinite; font-size: 12px; transform-origin: 50% 50%; }
+				.vobiz-agent-call-indicator::after { animation: vobiz-call-pulse 1.3s ease-out infinite; border: 1px solid rgba(220, 38, 38, .55); border-radius: 999px; content: ""; inset: -5px; position: absolute; }
 				.vobiz-agent-identity { align-items: center; display: flex; gap: 14px; min-width: 0; }
 				.vobiz-agent-identity-body { min-width: 0; }
 				.vobiz-agent-avatar-wrap { flex: 0 0 auto; position: relative; }
@@ -302,7 +307,6 @@ class VobizAgentAnalytics {
 				.vobiz-agent-status-pill { border: 1px solid #e2e8f0; border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: .03em; padding: 2px 8px; text-transform: uppercase; }
 				.vobiz-agent-status-pill.online { background: #10b981; border-color: #10b981; color: #fff; }
 				.vobiz-agent-status-pill.offline { background: #f1f5f9; border-color: #e2e8f0; color: #64748b; }
-				.vobiz-agent-status-pill.on-call { background: #fff7ed; border-color: #fdba74; color: #c2410c; }
 				.vobiz-agent-meter { align-self: center; display: grid; gap: 8px; min-width: 0; }
 				.vobiz-agent-meter-head { align-items: center; display: flex; gap: 10px; justify-content: space-between; min-width: 0; }
 				.vobiz-agent-meter-label { color: #475569; font-size: 12px; font-weight: 800; }
@@ -916,7 +920,7 @@ class VobizAgentAnalytics {
 		this.state.agents = agents || [];
 		this.render_agent_overview(this.state.agents);
 		this.sync_agent_controls();
-		const rows = this.filtered_agent_rows(this.state.agents).slice(0, 8);
+		const rows = this.filtered_agent_rows(this.state.agents);
 		if (!rows.length) {
 			this.page.main.find('[data-role="agent-chart"]').html(`<div class="vobiz-agent-empty">${__('No agents found for this view.')}</div>`);
 			return;
@@ -1005,6 +1009,7 @@ class VobizAgentAnalytics {
 		};
 		return `
 			<div class="vobiz-agent-card">
+				${is_on_call ? `<span class="vobiz-agent-call-indicator" title="${this.escape(__('On Call'))}"><i class="fa fa-phone"></i></span>` : ''}
 				<div class="vobiz-agent-card-inner">
 					<div class="vobiz-agent-identity">
 						<div class="vobiz-agent-avatar-wrap">
@@ -1017,7 +1022,6 @@ class VobizAgentAnalytics {
 							<div class="vobiz-agent-meta">
 								<span class="vobiz-agent-role">${__('Agent')}</span>
 								<span class="vobiz-agent-status-pill ${is_online ? 'online' : 'offline'}">${this.escape(availability_label)}</span>
-								${is_on_call ? `<span class="vobiz-agent-status-pill on-call"><i class="fa fa-phone"></i> ${__('On Call')}</span>` : ''}
 							</div>
 						</div>
 					</div>

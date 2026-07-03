@@ -15,6 +15,21 @@ TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled"}
 CONNECTED_STATUSES = {"Connected", "Completed"}
 MISSED_STATUSES = {"Failed", "Busy", "No Answer", "Cancelled"}
 DND_DISPOSITIONS = {"Wrong Number", "Invalid Number", "Do Not Call"}
+AUTO_DIAL_TIMEOUT_STATUS = "Agent Not Available"
+
+
+def get_patient_followup_status_options() -> list[str]:
+    if not frappe.db.exists("DocType", "Patient"):
+        return ["Pending"]
+
+    field = frappe.get_meta("Patient").get_field("sr_followup_status")
+    if not field:
+        return ["Pending"]
+
+    options = [row.strip() for row in str(field.options or "").splitlines() if row.strip()]
+    if AUTO_DIAL_TIMEOUT_STATUS not in options:
+        options.append(AUTO_DIAL_TIMEOUT_STATUS)
+    return options or ["Pending"]
 
 
 def save_call_disposition(
@@ -50,6 +65,7 @@ def save_call_disposition(
 
     if disposition:
         sync_call_log_disposition_options(disposition)
+        doc.meta = frappe.get_meta("Vobiz Call Log", cached=False)
     doc.disposition = disposition
     doc.disposition_notes = notes
     doc.follow_up_datetime = follow_up_datetime
@@ -103,19 +119,32 @@ def sync_patient_followup_status(patient: str | None, sr_followup_status: str | 
     if not sr_followup_status:
         return {"synced": False, "reason": "No follow-up status provided."}
 
-    options = [row.strip() for row in str(field.options or "").splitlines() if row.strip()]
+    options = get_patient_followup_status_options()
     if options and sr_followup_status not in options:
         frappe.throw(_("Invalid follow-up status."))
 
-    frappe.db.set_value("Patient", patient, "sr_followup_status", sr_followup_status, update_modified=True)
-    return {"synced": True, "patient": patient, "sr_followup_status": sr_followup_status}
+    values = {"sr_followup_status": sr_followup_status}
+    status_field = meta.get_field("status")
+    status_options = [row.strip() for row in str((status_field and status_field.options) or "").splitlines() if row.strip()]
+    if not status_options or "Active" in status_options:
+        values["status"] = "Active"
+
+    frappe.db.set_value("Patient", patient, values, update_modified=True)
+    return {
+        "synced": True,
+        "patient": patient,
+        "sr_followup_status": sr_followup_status,
+        "status": values.get("status"),
+    }
 
 
 def sync_call_log_disposition_options(disposition: str | None = None) -> None:
     try:
         from vobiz_click_to_call.install import ensure_vobiz_call_log_disposition_field
 
-        ensure_vobiz_call_log_disposition_field(extra_options=[disposition] if disposition else None)
+        extra_options = [disposition] if disposition else []
+        extra_options.extend(get_patient_followup_status_options())
+        ensure_vobiz_call_log_disposition_field(extra_options=extra_options)
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Vobiz Call Log disposition selector sync failed")
 
