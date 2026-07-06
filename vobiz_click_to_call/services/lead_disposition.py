@@ -6,6 +6,7 @@ import frappe
 
 
 SR_LEAD_DISPOSITION = "SR Lead Disposition"
+SR_FOLLOWUP_STATUS = "SR Followup Status"
 CRM_LEAD = "CRM Lead"
 LEAD_DISPOSITION_FIELDS = (
     "sr_lead_disposition",
@@ -57,9 +58,18 @@ def get_lead_disposition_rows(
 
 
 def get_lead_status_options() -> list[str]:
-    if not frappe.db.exists("DocType", "CRM Lead Status"):
+    if not frappe.db.exists("DocType", SR_FOLLOWUP_STATUS):
         return []
-    return frappe.get_all("CRM Lead Status", pluck="name", order_by="name asc")
+    meta = frappe.get_meta(SR_FOLLOWUP_STATUS)
+    filters: dict[str, Any] = {}
+    if meta.has_field("is_active"):
+        filters["is_active"] = 1
+    return frappe.get_all(
+        SR_FOLLOWUP_STATUS,
+        filters=filters,
+        pluck="name",
+        order_by="sort_order asc, name asc" if meta.has_field("sort_order") else "name asc",
+    )
 
 
 def get_lead_disposition_context(

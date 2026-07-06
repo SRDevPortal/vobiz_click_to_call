@@ -576,14 +576,16 @@ def _analytics_data(
 
     team_scope = [] if is_admin else _team_member_users_for_leader(frappe.session.user)
     agent_user = (agent_user or "").strip()
-    lead_owner = (lead_owner or "").strip()
-    team = (team or "").strip()
+    lead_owner_values = _analytics_filter_values(lead_owner)
+    team_values = _analytics_filter_values(team)
+    lead_owner = lead_owner_values[0] if len(lead_owner_values) == 1 else ""
+    team = team_values[0] if len(team_values) == 1 else ""
     department = (department or "").strip()
     if is_crm_lead_queue:
         _apply_crm_lead_analytics_filters(
             filters,
-            lead_owner=lead_owner,
-            team=team,
+            lead_owner=lead_owner_values,
+            team=team_values,
             visible_leads=visible_crm_leads,
         )
     elif is_patient_queue:
@@ -653,11 +655,11 @@ def _analytics_data(
         "queue_source": queue_source,
         "queue_sources": list(QUEUE_SOURCE_DOCTYPES.keys()),
         "agent_user": filters.get("user") or "",
-        "lead_owner": lead_owner if is_crm_lead_queue else "",
-        "team": team if is_crm_lead_queue else "",
+        "lead_owner": lead_owner_values if is_crm_lead_queue else [],
+        "team": team_values if is_crm_lead_queue else [],
         "department": department if is_patient_queue else "",
         "team_options": _analytics_team_options(queue_source, visible_leads=visible_crm_leads),
-        "lead_owner_options": _analytics_lead_owner_options(queue_source, team=team, visible_leads=visible_crm_leads),
+        "lead_owner_options": _analytics_lead_owner_options(queue_source, team=team_values, visible_leads=visible_crm_leads),
         "department_options": _analytics_department_options(queue_source),
         "agent_options": _analytics_agent_options(
             is_admin,
@@ -679,7 +681,7 @@ def _analytics_data(
             status_filter=status_filter,
             queue_source=queue_source,
             agent_user=agent_user,
-            lead_owner=lead_owner,
+            lead_owner=lead_owner_values,
             team_scope=team_scope,
         ),
         "calls": [_performance_call_row(row) for row in call_slice],
@@ -721,33 +723,33 @@ def _analytics_sql_conditions(start: str, end: str, filters: dict[str, Any]) -> 
 def _apply_crm_lead_analytics_filters(
     filters: dict[str, Any],
     *,
-    lead_owner: str | None = None,
-    team: str | None = None,
+    lead_owner: str | list[str] | None = None,
+    team: str | list[str] | None = None,
     visible_leads: list[str] | None = None,
 ) -> None:
     if not frappe.db.exists("DocType", "CRM Lead"):
         filters["force_empty"] = True
         return
 
-    lead_owner = (lead_owner or "").strip()
-    team = (team or "").strip()
-    filters["lead_owner"] = lead_owner
-    filters["team"] = team
-    if not lead_owner and not team:
+    lead_owners = _analytics_filter_values(lead_owner)
+    teams = _analytics_filter_values(team)
+    filters["lead_owner"] = lead_owners
+    filters["team"] = teams
+    if not lead_owners and not teams:
         return
 
     lead_filters: dict[str, Any] = {}
     meta = frappe.get_meta("CRM Lead")
-    if lead_owner and not meta.has_field("lead_owner"):
+    if lead_owners and not meta.has_field("lead_owner"):
         filters["force_empty"] = True
         return
-    if team and not meta.has_field("team"):
+    if teams and not meta.has_field("team"):
         filters["force_empty"] = True
         return
-    if lead_owner:
-        lead_filters["lead_owner"] = lead_owner
-    if team:
-        lead_filters["team"] = team
+    if lead_owners:
+        lead_filters["lead_owner"] = ["in", lead_owners] if len(lead_owners) > 1 else lead_owners[0]
+    if teams:
+        lead_filters["team"] = ["in", teams] if len(teams) > 1 else teams[0]
     if visible_leads is not None:
         if visible_leads:
             lead_filters["name"] = ["in", visible_leads]
@@ -960,6 +962,7 @@ def _analytics_outcome_breakdown_sql(conditions: str, params: dict[str, Any]) ->
 
 def _analytics_daily_sql(conditions: str, params: dict[str, Any], from_date: str, to_date: str) -> list[dict[str, Any]]:
     bucket_expr = _analytics_bucket_sql()
+    unique_key_expr = _analytics_unique_key_sql()
     rows = frappe.db.sql(
         f"""
         select call_date, bucket, count(*) as call_count, sum(talk_seconds) as talk_seconds, sum(cost) as cost
@@ -973,9 +976,23 @@ def _analytics_daily_sql(conditions: str, params: dict[str, Any], from_date: str
         params,
         as_dict=True,
     )
+    unique_rows = frappe.db.sql(
+        f"""
+        select call_date, count(distinct unique_key) as unique_calls
+        from (
+            select date(`creation`) as call_date, {unique_key_expr} as unique_key
+            from `tabVobiz Call Log`
+            where {conditions}
+        ) analytics
+        group by call_date
+        """,
+        params,
+        as_dict=True,
+    )
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         grouped.setdefault(str(row.call_date), []).append(row)
+    unique_by_day = {str(row.call_date): frappe.utils.cint(row.unique_calls) for row in unique_rows}
 
     start = frappe.utils.getdate(from_date)
     end = frappe.utils.getdate(to_date)
@@ -983,7 +1000,7 @@ def _analytics_daily_sql(conditions: str, params: dict[str, Any], from_date: str
     current = start
     while current <= end:
         day = str(current)
-        days.append({"date": day, **_summary_from_bucket_rows(grouped.get(day, []))})
+        days.append({"date": day, **_summary_from_bucket_rows(grouped.get(day, []), unique_calls=unique_by_day.get(day, 0))})
         current = frappe.utils.add_days(current, 1)
     return days
 
@@ -1085,7 +1102,7 @@ def _append_mapped_agents_with_zero_calls(
     *,
     queue_source: str | None = None,
     agent_user: str | None = None,
-    lead_owner: str | None = None,
+    lead_owner: str | list[str] | None = None,
     team_scope: list[str] | None = None,
 ) -> None:
     if not frappe.db.exists("DocType", "Vobiz User Mapping"):
@@ -1114,10 +1131,15 @@ def _append_mapped_agents_with_zero_calls(
     )
     existing = {row.get("user") for row in rows}
     for user in mapped_users:
-        if not user or user in existing:
+        if not user or user in existing or _is_demo_analytics_user(user):
             continue
         rows.append({"user": user, **_summary_from_bucket_rows([], unique_calls=0)})
         existing.add(user)
+
+
+def _is_demo_analytics_user(user: str | None) -> bool:
+    user = (user or "").strip().lower()
+    return user.startswith("demo.agent.") or user == "offline.agent.demo@sriaas.com"
 
 
 def _analytics_mapped_agent_queue_filter(queue_source: str | None = None) -> list[str]:
@@ -1132,13 +1154,14 @@ def _analytics_mapped_agent_scope(
     *,
     queue_source: str | None = None,
     agent_user: str | None = None,
-    lead_owner: str | None = None,
+    lead_owner: str | list[str] | None = None,
     team_scope: list[str] | None = None,
 ) -> set[str] | None:
     if agent_user:
         return {agent_user}
-    if queue_source in {"CRM Lead", "Discontinued"} and lead_owner:
-        return {lead_owner}
+    lead_owners = _analytics_filter_values(lead_owner)
+    if queue_source in {"CRM Lead", "Discontinued"} and lead_owners:
+        return {user for user in lead_owners if user}
     if team_scope:
         return {user for user in team_scope if user}
     return None
@@ -1158,8 +1181,6 @@ def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
     now = frappe.utils.now_datetime()
     shift_start, shift_end, shift_elapsed_until, shift_elapsed_seconds = _today_shift_window(now)
     shift_min_label = _human_duration_seconds(AGENT_SHIFT_MIN_SECONDS)
-    online_statuses = {"Available", "Busy"}
-
     for row in rows:
         mapping = by_user.get(row.get("user"))
         if not mapping:
@@ -1184,8 +1205,9 @@ def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
             continue
 
         active_call = is_active_call_log(mapping.current_call_log)
-        status = "Busy" if active_call else (mapping.availability_status or "Offline")
-        is_online = active_call or status in online_statuses or is_agent_console_online(row.get("user"))
+        heartbeat_online = is_agent_console_online(row.get("user"))
+        is_online = active_call or heartbeat_online
+        status = "Busy" if active_call else ("Available" if heartbeat_online else "Offline")
         since = frappe.utils.get_datetime(mapping.last_status_at) if mapping.last_status_at else None
         duration_label = _human_duration(now - since) if since else ""
         online_seconds, offline_seconds = _today_availability_seconds(
@@ -1422,6 +1444,7 @@ def _performance_call_row(row) -> dict[str, Any]:
         "status": row.get("status"),
         "bucket": row.get("bucket"),
         "bucket_label": row.get("bucket_label"),
+        "talk_seconds": frappe.utils.cint(row.get("talk_seconds")),
         "duration_label": _duration_label(row.get("talk_seconds")),
         "creation": row.get("creation"),
         "reference_doctype": row.get("reference_doctype"),
@@ -1477,13 +1500,13 @@ def _analytics_agent_options(
     seen = set()
     for value in values:
         value = (value or "").strip()
-        if value and value not in seen:
+        if value and value not in seen and not _is_demo_analytics_user(value):
             cleaned.append(value)
             seen.add(value)
     return cleaned
 
 
-def _analytics_lead_owner_options(queue_source: str | None = None, team: str | None = None, visible_leads: list[str] | None = None) -> list[str]:
+def _analytics_lead_owner_options(queue_source: str | None = None, team: str | list[str] | None = None, visible_leads: list[str] | None = None) -> list[str]:
     if queue_source not in {"CRM Lead", "Discontinued"}:
         return []
     return _crm_lead_distinct_options("lead_owner", team=team, visible_leads=visible_leads)
@@ -1524,7 +1547,7 @@ def _analytics_department_options(queue_source: str | None = None) -> list[str]:
 def _crm_lead_distinct_options(
     fieldname: str,
     *,
-    team: str | None = None,
+    team: str | list[str] | None = None,
     visible_leads: list[str] | None = None,
 ) -> list[str]:
     if not frappe.db.exists("DocType", "CRM Lead"):
@@ -1533,8 +1556,9 @@ def _crm_lead_distinct_options(
     if not meta.has_field(fieldname):
         return []
     filters: dict[str, Any] = {fieldname: ["is", "set"]}
-    if team and fieldname != "team" and meta.has_field("team"):
-        filters["team"] = team
+    teams = _analytics_filter_values(team)
+    if teams and fieldname != "team" and meta.has_field("team"):
+        filters["team"] = ["in", teams] if len(teams) > 1 else teams[0]
     if visible_leads is not None:
         if not visible_leads:
             return []
@@ -1551,7 +1575,7 @@ def _crm_lead_distinct_options(
     seen = set()
     for value in rows:
         value = (value or "").strip()
-        if value and value not in seen:
+        if value and value not in seen and not (fieldname == "lead_owner" and _is_demo_analytics_user(value)):
             cleaned.append(value)
             seen.add(value)
     return cleaned
@@ -2899,6 +2923,29 @@ def _first_value(data: dict[str, Any], candidates: tuple[str, ...]) -> dict[str,
         if value:
             return {"fieldname": fieldname, "value": value}
     return {"fieldname": None, "value": None}
+
+
+def _analytics_filter_values(value) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        raw_values = value
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return []
+        try:
+            parsed = frappe.parse_json(text)
+            raw_values = parsed if isinstance(parsed, list) else [parsed]
+        except Exception:
+            raw_values = text.replace(",", "\n").splitlines()
+
+    cleaned = []
+    seen = set()
+    for item in raw_values:
+        item = str(item or "").strip()
+        if item and item not in seen:
+            cleaned.append(item)
+            seen.add(item)
+    return cleaned
 
 
 def _duration_label(seconds: int) -> str:

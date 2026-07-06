@@ -15,21 +15,24 @@ TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled"}
 CONNECTED_STATUSES = {"Connected", "Completed"}
 MISSED_STATUSES = {"Failed", "Busy", "No Answer", "Cancelled"}
 DND_DISPOSITIONS = {"Wrong Number", "Invalid Number", "Do Not Call"}
-AUTO_DIAL_TIMEOUT_STATUS = "Agent Not Available"
+SR_FOLLOWUP_STATUS_DOCTYPE = "SR Followup Status"
 
 
 def get_patient_followup_status_options() -> list[str]:
-    if not frappe.db.exists("DocType", "Patient"):
-        return ["Pending"]
+    if not frappe.db.exists("DocType", SR_FOLLOWUP_STATUS_DOCTYPE):
+        return []
 
-    field = frappe.get_meta("Patient").get_field("sr_followup_status")
-    if not field:
-        return ["Pending"]
+    filters = {}
+    meta = frappe.get_meta(SR_FOLLOWUP_STATUS_DOCTYPE)
+    if meta.has_field("is_active"):
+        filters["is_active"] = 1
 
-    options = [row.strip() for row in str(field.options or "").splitlines() if row.strip()]
-    if AUTO_DIAL_TIMEOUT_STATUS not in options:
-        options.append(AUTO_DIAL_TIMEOUT_STATUS)
-    return options or ["Pending"]
+    return frappe.get_all(
+        SR_FOLLOWUP_STATUS_DOCTYPE,
+        filters=filters,
+        pluck="name",
+        order_by="sort_order asc, name asc" if meta.has_field("sort_order") else "name asc",
+    )
 
 
 def save_call_disposition(
@@ -120,7 +123,7 @@ def sync_patient_followup_status(patient: str | None, sr_followup_status: str | 
         return {"synced": False, "reason": "No follow-up status provided."}
 
     options = get_patient_followup_status_options()
-    if options and sr_followup_status not in options:
+    if sr_followup_status not in options:
         frappe.throw(_("Invalid follow-up status."))
 
     values = {"sr_followup_status": sr_followup_status}

@@ -1238,7 +1238,11 @@ class VobizAgentConsole {
 	}
 
 	is_patient_disposition_reference(call = {}, row = {}) {
-		return ((call.reference_doctype || row.doctype || '') === 'Patient');
+		return (
+			(call.reference_doctype || '') === 'Patient'
+			|| (row.doctype || '') === 'Patient'
+			|| this.is_patient_queue()
+		);
 	}
 
 	patient_followup_status_options() {
@@ -3307,14 +3311,13 @@ class VobizAgentConsole {
 		const isPatientDisposition = this.is_patient_disposition_reference(call, row);
 		const autoDialDisposition = Boolean(options.auto_dial);
 		const timedDisposition = Boolean(options.auto_dial || options.force_timer);
-		const timedAutoSave = timedDisposition;
 		const timeoutStatus = options.timeout_status || 'Agent Not Available';
 		const timeoutSeconds = parseInt(options.timeout_seconds, 10) || 60;
 		const statusOptions = (leadContext.status_options || []).slice();
-		if (timedAutoSave && !isPatientDisposition && !statusOptions.includes(timeoutStatus)) {
-			statusOptions.push(timeoutStatus);
-		}
-		const currentStatus = leadContext.status || '';
+		const patientTimeoutStatus = this.patient_followup_status_options().includes(timeoutStatus) ? timeoutStatus : '';
+		const leadTimeoutStatus = statusOptions.includes(timeoutStatus) ? timeoutStatus : '';
+		const timedAutoSave = timedDisposition && (isPatientDisposition ? Boolean(patientTimeoutStatus) : Boolean(leadTimeoutStatus));
+		const currentStatus = statusOptions.includes(leadContext.status || '') ? leadContext.status : '';
 		const dispositionOptions = this.state.dispositions || [];
 		const suggested = call.ai_disposition && dispositionOptions.includes(call.ai_disposition) ? call.ai_disposition : '';
 		const notes = [call.ai_summary, call.ai_next_action].filter(Boolean).join('\n\n');
@@ -3391,8 +3394,12 @@ class VobizAgentConsole {
 							${__('Submit disposition within')}
 							<span data-role="auto-disposition-countdown">${timeoutSeconds}</span>
 							${isPatientDisposition
-								? __('seconds, otherwise Follow-up Status will be set to Agent Not Available automatically.')
-								: __('seconds, otherwise CRM Status will be set to Agent Not Available automatically.')}
+								? (patientTimeoutStatus
+									? __('seconds, otherwise Follow-up Status will be set automatically.')
+									: __('seconds. Please select a Follow-up Status.'))
+								: (leadTimeoutStatus
+									? __('seconds, otherwise CRM Status will be set automatically.')
+									: __('seconds. Please select a CRM Status.'))}
 						</div>
 					`
 				},
@@ -3408,7 +3415,7 @@ class VobizAgentConsole {
 					fieldtype: 'Select',
 					label: __('CRM Status'),
 					options: [''].concat(statusOptions).join('\n'),
-					reqd: Boolean(statusOptions.length),
+					reqd: 1,
 					default: currentStatus
 				},
 				{
@@ -3432,25 +3439,6 @@ class VobizAgentConsole {
 		});
 		dialog.$wrapper.on('hidden.bs.modal', finish);
 		dialog.show();
-		if (isPatientDisposition) {
-			frappe.call({
-				method: 'vobiz_click_to_call.api.disposition.get_patient_followup_status_options_api'
-			}).then((r) => {
-				const options = (r.message || []).filter(Boolean);
-				if (timedDisposition && !options.includes(timeoutStatus)) {
-					options.push(timeoutStatus);
-				}
-				if (!options.length) return;
-				this.state.patient_followup_status_options = options;
-				dialog.set_df_property('sr_followup_status', 'options', [''].concat(options).join('\n'));
-				const currentValue = dialog.get_value('sr_followup_status');
-				if (currentValue && !options.includes(currentValue)) {
-					dialog.set_value('sr_followup_status', '');
-				} else if (!currentValue && row.sr_followup_status && options.includes(row.sr_followup_status)) {
-					dialog.set_value('sr_followup_status', row.sr_followup_status);
-				}
-			});
-		}
 		if (timedDisposition) {
 			dialog.get_close_btn().hide();
 			const $countdown = dialog.$wrapper.find('[data-role="auto-disposition-countdown"]');
@@ -3458,12 +3446,16 @@ class VobizAgentConsole {
 				countdownSeconds -= 1;
 				$countdown.text(String(Math.max(0, countdownSeconds)));
 				if (countdownSeconds <= 0) {
-					saveDisposition({
-						lead_status: isPatientDisposition ? '' : timeoutStatus,
-						disposition: isPatientDisposition ? '' : dialog.get_value('disposition'),
-						sr_followup_status: isPatientDisposition ? timeoutStatus : '',
-						notes: dialog.get_value('notes')
-					}, true);
+					if (timedAutoSave) {
+						saveDisposition({
+							lead_status: isPatientDisposition ? '' : leadTimeoutStatus,
+							disposition: isPatientDisposition ? '' : dialog.get_value('disposition'),
+							sr_followup_status: isPatientDisposition ? patientTimeoutStatus : '',
+							notes: dialog.get_value('notes')
+						}, true);
+					} else {
+						clearInterval(countdownTimer);
+					}
 				}
 			}, 1000);
 		}
