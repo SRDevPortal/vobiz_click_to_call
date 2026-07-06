@@ -34,7 +34,7 @@ class VobizAgentConsole {
 			active_call: null,
 			call_started_at: null,
 			dispositions: [],
-			patient_followup_status_options: ['Pending'],
+			patient_followup_status_options: [],
 			lead_disposition_context: {},
 			ai_disposition_enabled: false,
 			restore_checked: false,
@@ -521,7 +521,7 @@ class VobizAgentConsole {
 			this.reset_filter_group_if_doctype_changed();
 			this.state.active_call = data.active_call || null;
 			this.state.dispositions = data.dispositions || [];
-			this.state.patient_followup_status_options = data.patient_followup_status_options || ['Pending'];
+			this.state.patient_followup_status_options = data.patient_followup_status_options || [];
 			this.state.ai_disposition_enabled = Boolean(data.ai_disposition_enabled);
 			if (!this.state.lead_disposition_context || !this.state.lead_disposition_context.name) {
 				this.state.lead_disposition_context = { options: (data.dispositions || []).map(value => ({ name: value })) };
@@ -1246,7 +1246,7 @@ class VobizAgentConsole {
 	}
 
 	patient_followup_status_options() {
-		return this.state.patient_followup_status_options || ['Pending'];
+		return this.state.patient_followup_status_options || [];
 	}
 
 	render_manual_disposition_visibility() {
@@ -1255,8 +1255,12 @@ class VobizAgentConsole {
 
 	apply_context_dispositions(context) {
 		const leadDisposition = ((context || {}).workdesk || {}).lead_disposition || {};
+		const patientFollowupOptions = ((context || {}).workdesk || {}).patient_followup_status_options || [];
 		const options = (leadDisposition.options || []).map(row => row.name).filter(Boolean);
 		this.state.lead_disposition_context = leadDisposition;
+		if (patientFollowupOptions.length) {
+			this.state.patient_followup_status_options = patientFollowupOptions;
+		}
 		this.state.dispositions = options.length ? options : this.state.dispositions;
 		this.render_dispositions();
 	}
@@ -3309,6 +3313,28 @@ class VobizAgentConsole {
 
 		const leadContext = this.state.lead_disposition_context || {};
 		const isPatientDisposition = this.is_patient_disposition_reference(call, row);
+		const patientOptions = this.patient_followup_status_options();
+		const shouldRefreshPatientOptions = isPatientDisposition
+			&& !options.patient_followup_options_refreshed
+			&& (patientOptions.length <= 1 || !patientOptions.includes('Agent Not Available'));
+		if (shouldRefreshPatientOptions) {
+			frappe.call('vobiz_click_to_call.api.disposition.get_patient_followup_status_options_api')
+				.then((r) => {
+					const refreshedOptions = r.message || [];
+					if (refreshedOptions.length) {
+						this.state.patient_followup_status_options = refreshedOptions;
+					}
+				})
+				.always(() => {
+					if (this.state.active_disposition_call_log === call.name) {
+						this.state.active_disposition_call_log = null;
+					}
+					this.open_post_call_disposition_dialog(call, row, on_done, Object.assign({}, options, {
+						patient_followup_options_refreshed: true
+					}));
+				});
+			return;
+		}
 		const autoDialDisposition = Boolean(options.auto_dial);
 		const timedDisposition = Boolean(options.auto_dial || options.force_timer);
 		const timeoutStatus = options.timeout_status || 'Agent Not Available';
@@ -3370,7 +3396,7 @@ class VobizAgentConsole {
 		};
 		const dialog = new frappe.ui.Dialog({
 			title: __('Complete Call Disposition'),
-			static: timedAutoSave,
+			static: true,
 			fields: [
 				{
 					fieldname: 'call_info',
@@ -3439,8 +3465,8 @@ class VobizAgentConsole {
 		});
 		dialog.$wrapper.on('hidden.bs.modal', finish);
 		dialog.show();
+		dialog.get_close_btn().hide();
 		if (timedDisposition) {
-			dialog.get_close_btn().hide();
 			const $countdown = dialog.$wrapper.find('[data-role="auto-disposition-countdown"]');
 			countdownTimer = setInterval(() => {
 				countdownSeconds -= 1;

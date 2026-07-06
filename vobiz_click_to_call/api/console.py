@@ -2378,6 +2378,7 @@ def _workdesk_context(
         "agent": _agent_context(),
         "lead": _lead_details(reference_doctype, reference_name, doc, include_conversation_ai=not lite),
         "lead_disposition": get_lead_disposition_context(reference_doctype, reference_name),
+        "patient_followup_status_options": get_patient_followup_status_options_api(),
         "patient": patient,
         "vobiz": _vobiz_summary_from_history(history) if history is not None else _vobiz_summary(reference_doctype, reference_name),
         "whatsapp": _whatsapp_deferred(reference_doctype, reference_name),
