@@ -3110,14 +3110,16 @@ class VobizAgentConsole {
 			return;
 		}
 
-		frappe.call('vobiz_click_to_call.api.console.get_reference_context', {
-			reference_doctype: row.doctype || call.reference_doctype,
-			reference_name: row.name || call.reference_name,
-			lite: 1
+			frappe.call('vobiz_click_to_call.api.console.get_reference_context', {
+				reference_doctype: row.doctype || call.reference_doctype,
+				reference_name: row.name || call.reference_name,
+				lite: 1
 		}).then((r) => {
 			this.state.context = r.message || {};
 			this.apply_context_dispositions(this.state.context);
-			this.open_post_call_disposition_dialog(call, row, continue_after_disposition, dispositionOptions);
+			this.open_post_call_disposition_dialog(call, row, continue_after_disposition, Object.assign({}, dispositionOptions, {
+				disposition_context_refreshed: true
+			}));
 		}).catch(() => {
 			this.open_post_call_disposition_dialog(call, row, continue_after_disposition, dispositionOptions);
 		});
@@ -3288,6 +3290,21 @@ class VobizAgentConsole {
 
 	open_post_call_disposition_dialog(call, row, on_done, options = {}) {
 		if (this.state.active_disposition_call_log === call.name) return;
+		if (!options.disposition_context_refreshed && (row.doctype || call.reference_doctype) && (row.name || call.reference_name)) {
+			frappe.call('vobiz_click_to_call.api.console.get_reference_context', {
+				reference_doctype: row.doctype || call.reference_doctype,
+				reference_name: row.name || call.reference_name,
+				lite: 1
+			}).then((r) => {
+				this.state.context = r.message || {};
+				this.apply_context_dispositions(this.state.context);
+			}).always(() => {
+				this.open_post_call_disposition_dialog(call, row, on_done, Object.assign({}, options, {
+					disposition_context_refreshed: true
+				}));
+			});
+			return;
+		}
 		this.state.active_disposition_call_log = call.name;
 		this.state.disposition_prompted_call_log = call.name;
 		if (this.state.ai_disposition_enabled) {

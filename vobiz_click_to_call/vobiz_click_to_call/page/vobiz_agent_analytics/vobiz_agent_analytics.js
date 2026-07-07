@@ -164,13 +164,20 @@ class VobizAgentAnalytics {
 					<div class="vobiz-selected-call-pagination" data-role="selected-call-pagination"></div>
 				</section>
 
-				<div class="vobiz-chart-grid single">
+				<div class="vobiz-chart-grid vobiz-trend-grid">
 					<section class="vobiz-band">
 						<div class="vobiz-section-title">
 							<h3>${__('Daily Call Trend')}</h3>
 							<span class="text-muted" data-role="range-label"></span>
 						</div>
 						<div class="vobiz-chart" data-role="daily-chart"></div>
+					</section>
+					<section class="vobiz-band">
+						<div class="vobiz-section-title">
+							<h3>${__('Call Status Mix')}</h3>
+							<span class="text-muted" data-role="status-mix-label"></span>
+						</div>
+						<div class="vobiz-chart vobiz-pie-chart-wrap" data-role="status-pie-chart"></div>
 					</section>
 				</div>
 
@@ -290,24 +297,51 @@ class VobizAgentAnalytics {
 				.vobiz-kpi strong { color: #344054; display: block; font-size: 30px; line-height: 1.05; margin: 9px 0 6px; }
 				.vobiz-kpi small { color: #667085; display: block; font-size: 11px; min-height: 15px; }
 				.vobiz-chart-grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1.4fr) minmax(320px, .6fr); }
+				.vobiz-trend-grid { grid-template-columns: minmax(0, 3fr) minmax(300px, 2fr); }
 				.vobiz-chart-grid.single { grid-template-columns: 1fr; }
 				.vobiz-section-title { align-items: center; display: flex; gap: 10px; justify-content: space-between; margin-bottom: 12px; }
 				.vobiz-section-title h3 { font-size: 15px; font-weight: 800; margin: 0; }
 				.vobiz-section-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
 				.vobiz-chart { min-height: 320px; max-width: 100%; min-width: 0; }
+				.vobiz-pie-chart-wrap { align-content: center; display: grid; min-height: 320px; }
+				.vobiz-pie-chart { align-items: center; display: grid; gap: 22px; grid-template-columns: minmax(160px, 230px) minmax(0, 1fr); position: relative; }
+				.vobiz-pie-svg { display: block; height: 230px; max-width: 100%; overflow: visible; width: 100%; }
+				.vobiz-pie-slice { cursor: pointer; outline: none; transform-box: fill-box; transform-origin: center; transition: filter .16s ease, opacity .16s ease, transform .16s ease; }
+				.vobiz-pie-slice:hover { filter: drop-shadow(0 8px 14px rgba(15, 23, 42, .18)); opacity: .96; transform: scale(1.035); }
+				.vobiz-pie-slice:focus { filter: drop-shadow(0 8px 14px rgba(15, 23, 42, .18)); transform: scale(1.035); }
+				.vobiz-pie-tooltip { background: #1e293b; border-radius: 8px; box-shadow: 0 12px 28px rgba(15, 23, 42, .22); color: #fff; display: none; left: 0; min-width: 150px; padding: 10px 12px; pointer-events: none; position: absolute; top: 0; transform: translate(-50%, -112%); z-index: 8; }
+				.vobiz-pie-tooltip.visible { display: block; }
+				.vobiz-pie-tooltip:after { border: 6px solid transparent; border-top-color: #1e293b; content: ""; left: 50%; position: absolute; top: 100%; transform: translateX(-50%); }
+				.vobiz-pie-tooltip-label { align-items: center; display: flex; font-size: 12px; font-weight: 800; gap: 7px; line-height: 1.2; margin-bottom: 5px; }
+				.vobiz-pie-tooltip-dot { border-radius: 50%; height: 9px; width: 9px; }
+				.vobiz-pie-tooltip-value { font-size: 15px; font-weight: 900; line-height: 1.15; }
+				.vobiz-pie-tooltip-percent { color: #cbd5e1; font-size: 11px; font-weight: 800; margin-left: 6px; }
+				.vobiz-pie-empty { align-items: center; background: #f8fafc; border: 1px dashed #d9e2ee; border-radius: 8px; color: #667085; display: flex; font-size: 13px; font-weight: 700; justify-content: center; min-height: 220px; text-align: center; }
+				.vobiz-pie-legend { display: grid; gap: 9px; min-width: 0; width: 100%; }
+				.vobiz-pie-legend-item { align-items: center; border: 1px solid transparent; border-radius: 8px; display: flex; gap: 12px; justify-content: space-between; min-height: 42px; padding: 10px 12px; }
+				.vobiz-pie-legend-item span { font-size: 12px; font-weight: 800; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+				.vobiz-pie-legend-item strong { font-size: 12px; font-weight: 900; text-align: right; white-space: nowrap; }
+				.vobiz-pie-legend-item.connected { background: #ecfdf5; border-color: #d1fae5; color: #047857; }
+				.vobiz-pie-legend-item.no_answer { background: #fffbeb; border-color: #fde68a; color: #b45309; }
+				.vobiz-pie-legend-item.cancelled { background: #faf5ff; border-color: #e9d5ff; color: #7e22ce; }
+				.vobiz-pie-legend-item.busy { background: #eff6ff; border-color: #dbeafe; color: #1d4ed8; }
+				.vobiz-pie-legend-item.failed { background: #fef2f2; border-color: #fee2e2; color: #b91c1c; }
+				.vobiz-pie-legend-item.missed { background: #fff1f2; border-color: #ffe4e6; color: #be123c; }
+				.vobiz-pie-legend-item.other { background: #f8fafc; border-color: #e2e8f0; color: #475569; }
 				.vobiz-axis-chart { display: grid; gap: 10px; grid-template-columns: 42px minmax(0, 1fr); }
 				.vobiz-y-axis { color: #8a94a3; display: grid; font-size: 11px; grid-template-rows: repeat(5, 1fr); height: 230px; line-height: 1; text-align: right; }
 				.vobiz-y-axis span { transform: translateY(-5px); }
 				.vobiz-plot { min-width: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 4px; }
-				.vobiz-plot-area { border-bottom: 1px solid #dfe4dc; border-left: 1px solid #dfe4dc; display: grid; grid-template-rows: 230px 34px; min-width: 100%; position: relative; width: max-content; }
+				.vobiz-plot-area { border-bottom: 1px solid #dfe4dc; border-left: 1px solid #dfe4dc; min-width: 100%; position: relative; width: 100%; }
 				.vobiz-grid-lines { bottom: 34px; display: grid; grid-template-rows: repeat(4, 1fr); left: 0; pointer-events: none; position: absolute; right: 0; top: 0; }
 				.vobiz-grid-lines span { border-top: 1px solid #edf0ea; }
-				.vobiz-daily-chart { align-items: end; display: grid; gap: 12px; grid-auto-flow: column; grid-auto-columns: 56px; height: 230px; min-width: 100%; padding: 8px 12px 0; position: relative; width: max-content; z-index: 1; }
-				.vobiz-day { align-items: end; display: grid; gap: 6px; grid-template-rows: 18px minmax(0, 1fr); justify-items: center; min-width: 0; }
-				.vobiz-day-total { color: #475467; font-size: 11px; font-weight: 800; }
-				.vobiz-day-bar { align-items: stretch; display: flex; flex-direction: column; justify-content: end; width: min(38px, 72%); }
-				.vobiz-day-segment { width: 100%; }
-				.vobiz-x-axis { color: #667085; display: grid; font-size: 11px; gap: 12px; grid-auto-flow: column; grid-auto-columns: 56px; min-width: 100%; padding: 8px 12px 0; text-align: center; width: max-content; }
+				.vobiz-line-chart { height: 264px; min-width: 100%; position: relative; width: 100%; z-index: 1; }
+				.vobiz-line-svg { display: block; height: 264px; overflow: visible; width: 100%; }
+				.vobiz-line-area { fill: rgba(47, 128, 237, .11); }
+				.vobiz-line-path { fill: none; stroke: #2f80ed; stroke-linecap: round; stroke-linejoin: round; stroke-width: 3; }
+				.vobiz-line-dot { cursor: default; fill: #fff; stroke: #2f80ed; stroke-width: 3; transition: fill .16s ease, r .16s ease; }
+				.vobiz-line-dot:hover { fill: #2f80ed; r: 6; }
+				.vobiz-line-x-label { fill: #667085; font-size: 11px; }
 				.vobiz-chart-legend { align-items: center; display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; }
 				.vobiz-legend-item { align-items: center; color: #475467; display: inline-flex; font-size: 12px; font-weight: 700; gap: 7px; }
 				.vobiz-legend-dot { border-radius: 50%; height: 9px; width: 9px; }
@@ -474,6 +508,7 @@ class VobizAgentAnalytics {
 					.vobiz-analytics-page { padding: 14px; }
 					.vobiz-filter-grid, .vobiz-kpi-grid, .vobiz-chart-grid { grid-template-columns: 1fr; }
 					.vobiz-filter-action { justify-content: flex-start; }
+					.vobiz-pie-chart { grid-template-columns: minmax(150px, 210px) minmax(0, 1fr); }
 					.vobiz-agent-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 					.vobiz-agent-details { grid-template-columns: 1fr; }
 					.vobiz-agent-toolbar { align-items: stretch; flex-direction: column; }
@@ -487,6 +522,9 @@ class VobizAgentAnalytics {
 					.vobiz-agent-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 					.vobiz-agent-meter-head { align-items: flex-start; flex-direction: column; gap: 6px; }
 					.vobiz-agent-overview { grid-template-columns: 1fr; }
+					.vobiz-pie-chart { grid-template-columns: 1fr; justify-items: center; }
+					.vobiz-pie-legend { width: 100%; }
+					.vobiz-pie-svg { height: 210px; }
 					.vobiz-agent-search, .vobiz-agent-sort, .vobiz-agent-sort select { width: 100%; }
 				}
 			</style>
@@ -513,6 +551,9 @@ class VobizAgentAnalytics {
 		$main.on('click', '[data-action="load-more-calls"]', () => this.load_calls(false));
 		$main.on('click', '[data-action="play-recording"]', (e) => this.play_recording($(e.currentTarget)));
 		$main.on('click', '[data-action="stop-recording"]', (e) => this.stop_recording($(e.currentTarget)));
+		$main.on('mouseenter focus', '.vobiz-pie-slice', (e) => this.show_pie_tooltip($(e.currentTarget), e));
+		$main.on('mousemove', '.vobiz-pie-slice', (e) => this.move_pie_tooltip($(e.currentTarget), e));
+		$main.on('mouseleave blur', '.vobiz-pie-slice', (e) => this.hide_pie_tooltip($(e.currentTarget)));
 		$main.on('click', '[data-agent-filter]', (e) => this.set_agent_status_filter($(e.currentTarget).data('agent-filter')));
 		$main.on('click', '[data-action="toggle-agent-details"]', (e) => {
 			if ($(e.target).closest('a, button, select, input, audio, [data-recording-player], .vobiz-agent-details').length) return;
@@ -1206,6 +1247,7 @@ class VobizAgentAnalytics {
 
 	render_charts(data) {
 		this.render_daily_chart(data.daily || []);
+		this.render_status_pie_chart(data.summary || {});
 		this.render_agent_chart(data.agents || []);
 	}
 
@@ -1213,28 +1255,143 @@ class VobizAgentAnalytics {
 		const max = Math.max(...rows.map(row => row.total || 0), 1);
 		const axisMax = this.axis_max(max);
 		const ticks = this.axis_ticks(axisMax);
+		const chartWidth = this.page.main.find('[data-role="daily-chart"]').innerWidth() || 700;
+		const plotWidth = Math.max(320, chartWidth - 52);
 		this.page.main.find('[data-role="daily-chart"]').html(`
 			<div class="vobiz-axis-chart">
 				<div class="vobiz-y-axis">${ticks.map(value => `<span>${value}</span>`).join('')}</div>
 				<div class="vobiz-plot">
 					<div class="vobiz-plot-area">
 						<div class="vobiz-grid-lines">${[0, 1, 2, 3].map(() => '<span></span>').join('')}</div>
-						<div class="vobiz-daily-chart">
-							${rows.map(row => this.daily_bar_html(row, axisMax)).join('')}
-						</div>
-						<div class="vobiz-x-axis">
-							${rows.map(row => `<span>${this.escape(this.short_date(row.date))}</span>`).join('')}
-						</div>
+						${this.daily_line_chart_html(rows, axisMax, plotWidth)}
 					</div>
 				</div>
 			</div>
 			${this.legend_html([
-				{ label: __('Total shown above each bar'), color: '#475467' },
-				{ label: __('Missed'), color: this.bucket_color('missed') },
-				{ label: __('Connected'), color: this.bucket_color('connected') },
-				{ label: __('Other'), color: this.bucket_color('other') }
+				{ label: __('Total Calls'), color: '#2f80ed' }
 			])}
 		`);
+	}
+
+	render_status_pie_chart(summary) {
+		const busy = Number(summary.busy) || 0;
+		const noAnswer = Number(summary.no_answer) || 0;
+		const failed = Number(summary.failed) || 0;
+		const cancelled = Number(summary.cancelled || summary.rejected) || 0;
+		const missed = Math.max(0, (Number(summary.missed) || 0) - busy - noAnswer - failed - cancelled);
+		const rows = [
+			{ bucket: 'connected', label: __('Connected'), value: Number(summary.connected) || 0, color: '#10b981' },
+			{ bucket: 'no_answer', label: __('No Answer'), value: noAnswer, color: '#f59e0b' },
+			{ bucket: 'cancelled', label: __('Rejected'), value: cancelled, color: '#a855f7' },
+			{ bucket: 'busy', label: __('Busy'), value: busy, color: '#3b82f6' },
+			{ bucket: 'failed', label: __('Failed'), value: failed, color: '#ef4444' },
+			{ bucket: 'missed', label: __('Missed'), value: missed, color: '#e2554f' },
+			{ bucket: 'other', label: __('Other'), value: Number(summary.other) || 0, color: '#64748b' }
+		].filter(row => row.value > 0);
+		const total = rows.reduce((sum, row) => sum + row.value, 0);
+		this.page.main.find('[data-role="status-mix-label"]').text(total ? `${total} ${__('calls')}` : __('No calls'));
+		if (!total) {
+			this.page.main.find('[data-role="status-pie-chart"]').html(`<div class="vobiz-pie-empty">${__('No call status data for this filter.')}</div>`);
+			return;
+		}
+		let cursor = 0;
+		const geometry = {
+			cx: 115,
+			cy: 115,
+			radius: 104
+		};
+		const slices = rows.map(row => {
+			const start = cursor;
+			cursor += (row.value / total) * 100;
+			return Object.assign({}, row, {
+				percent: (row.value / total) * 100,
+				startAngle: (start / 100) * 360 - 90,
+				endAngle: (cursor / 100) * 360 - 90
+			});
+		});
+		this.page.main.find('[data-role="status-pie-chart"]').html(`
+			<div class="vobiz-pie-chart">
+				<svg class="vobiz-pie-svg" viewBox="0 0 230 230" role="img" aria-label="${this.escape(__('Call Status Mix'))}">
+					${slices.map(row => this.pie_slice_svg(row, geometry)).join('')}
+				</svg>
+				<div class="vobiz-pie-tooltip" data-role="pie-tooltip"></div>
+				<div class="vobiz-pie-legend">
+					${rows.map(row => {
+						const percent = total ? ((row.value / total) * 100).toFixed(1) : '0.0';
+						return `
+							<div class="vobiz-pie-legend-item ${this.escape(row.bucket)}">
+								<span>${this.escape(row.label)}</span>
+								<strong>${this.escape(this.format_number(row.value))} (${percent}%)</strong>
+							</div>
+						`;
+					}).join('')}
+				</div>
+			</div>
+		`);
+	}
+
+	pie_slice_svg(row, geometry) {
+		const d = this.pie_slice_path(geometry.cx, geometry.cy, geometry.radius, row.startAngle, row.endAngle);
+		const title = `${row.label}: ${row.value} (${row.percent.toFixed(1)}%)`;
+		return `
+			<path class="vobiz-pie-slice" d="${this.escape(d)}" fill="${this.escape(row.color)}" tabindex="0" aria-label="${this.escape(title)}" data-label="${this.escape(row.label)}" data-value="${this.escape(this.format_number(row.value))}" data-percent="${this.escape(row.percent.toFixed(1))}" data-color="${this.escape(row.color)}"></path>
+		`;
+	}
+
+	show_pie_tooltip($slice, event) {
+		const $chart = $slice.closest('.vobiz-pie-chart');
+		const $tooltip = $chart.find('[data-role="pie-tooltip"]');
+		const color = $slice.data('color') || '#10b981';
+		$tooltip.html(`
+			<div class="vobiz-pie-tooltip-label">
+				<i class="vobiz-pie-tooltip-dot" style="background:${this.escape(color)}"></i>
+				<span>${this.escape($slice.data('label') || '')}</span>
+			</div>
+			<div>
+				<span class="vobiz-pie-tooltip-value" style="color:${this.escape(color)}">${this.escape($slice.data('value') || '0')}</span>
+				<span class="vobiz-pie-tooltip-percent">${this.escape($slice.data('percent') || '0.0')}%</span>
+			</div>
+		`).addClass('visible');
+		this.move_pie_tooltip($slice, event);
+	}
+
+	move_pie_tooltip($slice, event) {
+		const $chart = $slice.closest('.vobiz-pie-chart');
+		const $tooltip = $chart.find('[data-role="pie-tooltip"]');
+		if (!$tooltip.length) return;
+		const chartOffset = $chart.offset();
+		const chartRect = $chart.get(0).getBoundingClientRect();
+		const sliceRect = $slice.get(0).getBoundingClientRect();
+		const x = event && event.pageX ? event.pageX - chartOffset.left : (sliceRect.left - chartRect.left) + (sliceRect.width / 2);
+		const y = event && event.pageY ? event.pageY - chartOffset.top : (sliceRect.top - chartRect.top) + 18;
+		$tooltip.css({
+			left: `${Math.max(72, Math.min($chart.outerWidth() - 72, x))}px`,
+			top: `${Math.max(58, y)}px`
+		});
+	}
+
+	hide_pie_tooltip($slice) {
+		$slice.closest('.vobiz-pie-chart').find('[data-role="pie-tooltip"]').removeClass('visible');
+	}
+
+	pie_slice_path(cx, cy, radius, startAngle, endAngle) {
+		const start = this.pie_point(cx, cy, radius, startAngle);
+		const end = this.pie_point(cx, cy, radius, endAngle);
+		const largeArc = endAngle - startAngle > 180 ? 1 : 0;
+		return [
+			`M ${cx} ${cy}`,
+			`L ${start.x.toFixed(2)} ${start.y.toFixed(2)}`,
+			`A ${radius} ${radius} 0 ${largeArc} 1 ${end.x.toFixed(2)} ${end.y.toFixed(2)}`,
+			'Z'
+		].join(' ');
+	}
+
+	pie_point(cx, cy, radius, angle) {
+		const radians = (angle * Math.PI) / 180;
+		return {
+			x: cx + radius * Math.cos(radians),
+			y: cy + radius * Math.sin(radians)
+		};
 	}
 
 	render_agent_chart(agents) {
@@ -1487,25 +1644,38 @@ class VobizAgentAnalytics {
 		`;
 	}
 
-	daily_bar_html(row, axisMax) {
-		const total = row.total || 0;
-		const height = total ? Math.max(8, Math.round((total / axisMax) * 190)) : 3;
-		const connected = row.connected || 0;
-		const missed = row.missed || 0;
-		const other = Math.max(0, total - connected - missed);
-		const segment = (value, bucket) => {
-			if (!value || !total) return '';
-			return `<div class="vobiz-day-segment" title="${this.escape(this.bucket_label(bucket))}: ${value}" style="background:${this.bucket_color(bucket)}; height:${Math.max(3, Math.round((value / total) * height))}px"></div>`;
-		};
+	daily_line_chart_html(rows, axisMax, width) {
+		width = Math.max(320, Math.round(Number(width) || 0));
+		const plotHeight = 230;
+		const height = 264;
+		const padding = { top: 18, right: 18, bottom: 28, left: 18 };
+		const usableWidth = width - padding.left - padding.right;
+		const usableHeight = plotHeight - padding.top - padding.bottom;
+		const points = (rows.length ? rows : [{ total: 0, date: '' }]).map((row, index, list) => {
+			const x = list.length === 1 ? padding.left : padding.left + ((usableWidth / (list.length - 1)) * index);
+			const y = padding.top + (1 - ((Number(row.total) || 0) / axisMax)) * usableHeight;
+			return { x, y, row };
+		});
+		const linePoints = points.map(point => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(' ');
+		const areaPoints = [
+			`${points[0].x.toFixed(2)},${(plotHeight - padding.bottom).toFixed(2)}`,
+			linePoints,
+			`${points[points.length - 1].x.toFixed(2)},${(plotHeight - padding.bottom).toFixed(2)}`
+		].join(' ');
 		return `
-			<div class="vobiz-day">
-				<div class="vobiz-day-total">${total}</div>
-				<div class="vobiz-day-bar" title="${this.escape(row.date)} - ${total} ${__('calls')}">
-					${segment(other, 'other')}
-					${segment(connected, 'connected')}
-					${segment(missed, 'missed')}
-					${!total ? `<div class="vobiz-day-segment" style="background:#d8ddd6; height:${height}px"></div>` : ''}
-				</div>
+			<div class="vobiz-line-chart">
+				<svg class="vobiz-line-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${this.escape(__('Daily Call Trend'))}">
+					<polygon class="vobiz-line-area" points="${this.escape(areaPoints)}"></polygon>
+					<polyline class="vobiz-line-path" points="${this.escape(linePoints)}"></polyline>
+					${points.map(point => `
+						<circle class="vobiz-line-dot" cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="4">
+							<title>${this.escape(`${point.row.date || ''} - ${this.format_number(point.row.total || 0)} ${__('calls')}`)}</title>
+						</circle>
+					`).join('')}
+					${points.map(point => `
+						<text class="vobiz-line-x-label" x="${point.x.toFixed(2)}" y="252" text-anchor="middle">${this.escape(this.short_date(point.row.date))}</text>
+					`).join('')}
+				</svg>
 			</div>
 		`;
 	}
@@ -1577,6 +1747,10 @@ class VobizAgentAnalytics {
 		const parts = String(value).split('-');
 		if (parts.length !== 3) return value;
 		return `${parts[2]}-${parts[1]}`;
+	}
+
+	format_number(value) {
+		return (Number(value) || 0).toLocaleString();
 	}
 
 	escape(value) {

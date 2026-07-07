@@ -6,7 +6,10 @@ from frappe import _
 from vobiz_ai.api.call_log import sync_linked_summaries
 from vobiz_click_to_call.services.call_status import status_bucket
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
-from vobiz_click_to_call.services.lead_disposition import sync_call_disposition_to_lead
+from vobiz_click_to_call.services.lead_disposition import (
+    get_patient_followup_status_field_options,
+    sync_call_disposition_to_lead,
+)
 from vobiz_click_to_call.services.safety import block_number
 from vobiz_click_to_call.services.settings import get_manual_disposition_options
 
@@ -20,7 +23,7 @@ SR_FOLLOWUP_STATUS_DOCTYPE = "SR Followup Status"
 
 def get_patient_followup_status_options() -> list[str]:
     if not frappe.db.exists("DocType", SR_FOLLOWUP_STATUS_DOCTYPE):
-        return []
+        return get_patient_followup_status_field_options()
 
     filters = {}
     meta = frappe.get_meta(SR_FOLLOWUP_STATUS_DOCTYPE)

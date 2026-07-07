@@ -8,6 +8,12 @@ import frappe
 SR_LEAD_DISPOSITION = "SR Lead Disposition"
 SR_FOLLOWUP_STATUS = "SR Followup Status"
 CRM_LEAD = "CRM Lead"
+PATIENT = "Patient"
+PATIENT_FOLLOWUP_STATUS_FIELDS = (
+    "sr_followup_status",
+    "followup_status",
+    "follow_up_status",
+)
 LEAD_DISPOSITION_FIELDS = (
     "sr_lead_disposition",
     "lead_disposition",
@@ -59,7 +65,7 @@ def get_lead_disposition_rows(
 
 def get_lead_status_options() -> list[str]:
     if not frappe.db.exists("DocType", SR_FOLLOWUP_STATUS):
-        return []
+        return get_patient_followup_status_field_options()
     meta = frappe.get_meta(SR_FOLLOWUP_STATUS)
     filters: dict[str, Any] = {}
     if meta.has_field("is_active"):
@@ -70,6 +76,31 @@ def get_lead_status_options() -> list[str]:
         pluck="name",
         order_by="sort_order asc, name asc" if meta.has_field("sort_order") else "name asc",
     )
+
+
+def get_patient_followup_status_field_options() -> list[str]:
+    if not frappe.db.exists("DocType", PATIENT):
+        return []
+
+    meta = frappe.get_meta(PATIENT)
+    field = None
+    for fieldname in PATIENT_FOLLOWUP_STATUS_FIELDS:
+        field = meta.get_field(fieldname)
+        if field:
+            break
+    if not field:
+        for candidate in meta.fields:
+            label = (candidate.label or "").strip().lower().replace("-", " ")
+            if label == "followup status":
+                field = candidate
+                break
+
+    if not field or not getattr(field, "options", None):
+        return []
+    if (field.fieldtype or "").lower() == "link":
+        return []
+
+    return [option.strip() for option in str(field.options).splitlines() if option.strip()]
 
 
 def get_lead_disposition_context(
