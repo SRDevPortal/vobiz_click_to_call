@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import frappe
 from frappe import _
@@ -26,18 +27,31 @@ QUEUE_SOURCE_DOCTYPES = {
 }
 COMBINED_QUEUE_SOURCE = "CRM Lead and Patient"
 HTML_TAG_RE = re.compile(r"<[^>]*>")
-CONSOLE_SESSION_TTL_SECONDS = 12
+CONSOLE_SESSION_TTL_SECONDS = 75
 CONSOLE_STATIC_CONTEXT_TTL_SECONDS = 60
 CONSOLE_QUEUE_LIMIT_MAX = 100
 ANALYTICS_STATUS_OPTIONS = ("total", "connected", "missed", "busy", "no_answer", "failed", "cancelled")
 ANALYTICS_CALL_LIMIT_MAX = 100
-AGENT_SHIFT_START_HOUR = 10
-AGENT_SHIFT_END_HOUR = 20
-AGENT_SHIFT_MIN_SECONDS = 9 * 60 * 60
+AGENT_SHIFT_START_HOUR = 9
+AGENT_SHIFT_END_HOUR = 21
+AGENT_SHIFT_MIN_SECONDS = 12 * 60 * 60
+AGENT_ATTENDANCE_TZ = ZoneInfo("Asia/Kolkata")
 
 
 def _console_session_key(user: str) -> str:
     return f"vobiz_agent_console:online:{user}"
+
+
+def _console_tab_key(user: str, tab_id: str) -> str:
+    return f"vobiz_agent_console:online:{user}:{tab_id}"
+
+
+def _console_tabs_key(user: str) -> str:
+    return f"vobiz_agent_console:tabs:{user}"
+
+
+def _console_attendance_key(user: str, shift_date: str) -> str:
+    return f"vobiz_agent_console:attendance:{shift_date}:{user}"
 
 
 def _console_static_context_key(user: str, queue_source: str, queue_doctype: str, agent_queue_source: str) -> str:
@@ -58,17 +72,27 @@ def _console_static_context_key(user: str, queue_source: str, queue_doctype: str
 def is_agent_console_online(user: str | None) -> bool:
     if not user:
         return False
-    return bool(frappe.cache().get_value(_console_session_key(user)))
+    return _active_console_tabs(user) > 0
 
 
 @frappe.whitelist(methods=["POST"])
-def heartbeat_agent_console() -> dict[str, Any]:
+def heartbeat_agent_console(tab_id: str | None = None) -> dict[str, Any]:
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
 
+    user = frappe.session.user
+    tab_id = _clean_tab_id(tab_id)
+    now = _now_ist()
+    _set_attendance_state(user, True, now)
     _mark_console_user_available()
+    _remember_console_tab(user, tab_id)
     frappe.cache().set_value(
-        _console_session_key(frappe.session.user),
+        _console_tab_key(user, tab_id),
+        frappe.utils.now(),
+        expires_in_sec=CONSOLE_SESSION_TTL_SECONDS,
+    )
+    frappe.cache().set_value(
+        _console_session_key(user),
         frappe.utils.now(),
         expires_in_sec=CONSOLE_SESSION_TTL_SECONDS,
     )
@@ -79,11 +103,20 @@ def heartbeat_agent_console() -> dict[str, Any]:
 
 
 @frappe.whitelist(methods=["GET", "POST"])
-def mark_agent_console_offline() -> dict[str, Any]:
+def mark_agent_console_offline(tab_id: str | None = None) -> dict[str, Any]:
     if frappe.session.user == "Guest":
         return {"online": False}
 
-    frappe.cache().delete_value(_console_session_key(frappe.session.user))
+    user = frappe.session.user
+    tab_id = _clean_tab_id(tab_id)
+    frappe.cache().delete_value(_console_tab_key(user, tab_id))
+    _forget_console_tab(user, tab_id)
+    still_online = is_agent_console_online(user)
+    if still_online:
+        return {"online": True}
+
+    frappe.cache().delete_value(_console_session_key(user))
+    _set_attendance_state(user, False, _now_ist())
     mapping_name = frappe.db.get_value("Vobiz User Mapping", {"user": frappe.session.user, "enabled": 1}, "name")
     if mapping_name:
         current_call_log = frappe.db.get_value("Vobiz User Mapping", mapping_name, "current_call_log")
@@ -1178,7 +1211,7 @@ def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
         fields=["user", "availability_status", "accept_calls", "current_call_log", "last_status_at"],
     )
     by_user = {row.user: row for row in mappings}
-    now = frappe.utils.now_datetime()
+    now = _now_ist()
     shift_start, shift_end, shift_elapsed_until, shift_elapsed_seconds = _today_shift_window(now)
     shift_min_label = _human_duration_seconds(AGENT_SHIFT_MIN_SECONDS)
     for row in rows:
@@ -1206,18 +1239,10 @@ def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
 
         active_call = is_active_call_log(mapping.current_call_log)
         heartbeat_online = is_agent_console_online(row.get("user"))
-        is_online = active_call or heartbeat_online
-        status = "Busy" if active_call else ("Available" if heartbeat_online else "Offline")
-        since = frappe.utils.get_datetime(mapping.last_status_at) if mapping.last_status_at else None
-        duration_label = _human_duration(now - since) if since else ""
-        online_seconds, offline_seconds = _today_availability_seconds(
-            shift_start,
-            shift_end,
-            shift_elapsed_until,
-            shift_elapsed_seconds,
-            since,
-            is_online,
-        )
+        is_online = heartbeat_online
+        status = "Busy" if active_call and heartbeat_online else ("Available" if heartbeat_online else "Offline")
+        attendance = _attendance_snapshot(row.get("user"), now, is_online)
+        duration_label = _human_duration(now - attendance["since"]) if attendance.get("since") else ""
         row.update(
             {
                 "availability_status": status,
@@ -1226,10 +1251,10 @@ def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
                 "is_online": is_online,
                 "availability_label": _("Online") if is_online else _("Offline"),
                 "availability_duration_label": duration_label,
-                "online_today_seconds": online_seconds,
-                "offline_today_seconds": offline_seconds,
-                "online_today_label": _human_duration_seconds(online_seconds),
-                "offline_today_label": _human_duration_seconds(offline_seconds),
+                "online_today_seconds": attendance["online_seconds"],
+                "offline_today_seconds": attendance["offline_seconds"],
+                "online_today_label": _human_duration_seconds(attendance["online_seconds"]),
+                "offline_today_label": _human_duration_seconds(attendance["offline_seconds"]),
                 "shift_start": shift_start,
                 "shift_end": shift_end,
                 "shift_min_seconds": AGENT_SHIFT_MIN_SECONDS,
@@ -1238,8 +1263,49 @@ def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
         )
 
 
+def _now_ist():
+    return datetime.now(AGENT_ATTENDANCE_TZ).replace(tzinfo=None)
+
+
+def _clean_tab_id(tab_id: str | None) -> str:
+    tab_id = re.sub(r"[^A-Za-z0-9_-]", "", str(tab_id or ""))[:80]
+    return tab_id or "default"
+
+
+def _remember_console_tab(user: str, tab_id: str) -> None:
+    tabs = _console_tab_ids(user)
+    if tab_id not in tabs:
+        tabs.append(tab_id)
+    frappe.cache().set_value(_console_tabs_key(user), tabs[-20:], expires_in_sec=24 * 60 * 60)
+
+
+def _forget_console_tab(user: str, tab_id: str) -> None:
+    tabs = [value for value in _console_tab_ids(user) if value != tab_id]
+    frappe.cache().set_value(_console_tabs_key(user), tabs, expires_in_sec=24 * 60 * 60)
+
+
+def _console_tab_ids(user: str) -> list[str]:
+    try:
+        tabs = frappe.cache().get_value(_console_tabs_key(user)) or []
+    except Exception:
+        tabs = []
+    if not isinstance(tabs, list):
+        return []
+    return [str(tab_id) for tab_id in tabs if tab_id]
+
+
+def _active_console_tabs(user: str) -> int:
+    active = []
+    for tab_id in _console_tab_ids(user):
+        if frappe.cache().get_value(_console_tab_key(user, tab_id)):
+            active.append(tab_id)
+    if active != _console_tab_ids(user):
+        frappe.cache().set_value(_console_tabs_key(user), active, expires_in_sec=24 * 60 * 60)
+    return len(active)
+
+
 def _today_shift_window(now) -> tuple[Any, Any, Any, int]:
-    today_start = frappe.utils.get_datetime(frappe.utils.today())
+    today_start = datetime.combine(now.date(), datetime.min.time())
     shift_start = today_start + timedelta(hours=AGENT_SHIFT_START_HOUR)
     shift_end = today_start + timedelta(hours=AGENT_SHIFT_END_HOUR)
     elapsed_until = min(max(now, shift_start), shift_end)
@@ -1247,21 +1313,88 @@ def _today_shift_window(now) -> tuple[Any, Any, Any, int]:
     return shift_start, shift_end, elapsed_until, elapsed_seconds
 
 
-def _today_availability_seconds(shift_start, shift_end, shift_elapsed_until, shift_elapsed_seconds: int, since, is_online: bool) -> tuple[int, int]:
-    if not since:
-        return (shift_elapsed_seconds, 0) if is_online else (0, shift_elapsed_seconds)
+def _shift_date(now) -> str:
+    return str(now.date())
 
-    if since <= shift_start:
-        return (shift_elapsed_seconds, 0) if is_online else (0, shift_elapsed_seconds)
 
-    if since >= shift_end or since >= shift_elapsed_until:
-        return (0, shift_elapsed_seconds) if is_online else (shift_elapsed_seconds, 0)
+def _default_attendance_state(now) -> dict[str, Any]:
+    shift_start, _, _, _ = _today_shift_window(now)
+    return {
+        "date": _shift_date(now),
+        "status": "offline",
+        "since": str(shift_start),
+        "online_seconds": 0,
+        "offline_seconds": 0,
+        "last_seen": "",
+    }
 
-    current_seconds = max(0, int((shift_elapsed_until - since).total_seconds()))
-    previous_seconds = max(0, shift_elapsed_seconds - current_seconds)
-    if is_online:
-        return current_seconds, previous_seconds
-    return previous_seconds, current_seconds
+
+def _get_attendance_state(user: str, now) -> dict[str, Any]:
+    try:
+        state = frappe.cache().get_value(_console_attendance_key(user, _shift_date(now))) or {}
+    except Exception:
+        state = {}
+    if not isinstance(state, dict) or state.get("date") != _shift_date(now):
+        return _default_attendance_state(now)
+    return {**_default_attendance_state(now), **state}
+
+
+def _save_attendance_state(user: str, state: dict[str, Any]) -> None:
+    frappe.cache().set_value(_console_attendance_key(user, state["date"]), state, expires_in_sec=36 * 60 * 60)
+
+
+def _set_attendance_state(user: str, online: bool, now=None) -> dict[str, Any]:
+    now = now or _now_ist()
+    state = _get_attendance_state(user, now)
+    new_status = "online" if online else "offline"
+    since = frappe.utils.get_datetime(state.get("since")) if state.get("since") else now
+    if state.get("status") != new_status:
+        seconds = _shift_overlap_seconds(since, now, now)
+        if state.get("status") == "online":
+            state["online_seconds"] = frappe.utils.cint(state.get("online_seconds")) + seconds
+        else:
+            state["offline_seconds"] = frappe.utils.cint(state.get("offline_seconds")) + seconds
+        state["status"] = new_status
+        state["since"] = str(now)
+    if online:
+        state["last_seen"] = str(now)
+    _save_attendance_state(user, state)
+    return state
+
+
+def _attendance_snapshot(user: str, now, is_online: bool) -> dict[str, Any]:
+    state = _get_attendance_state(user, now)
+    if state.get("status") == "online" and not is_online:
+        last_seen = frappe.utils.get_datetime(state.get("last_seen")) if state.get("last_seen") else now
+        offline_at = min(now, last_seen + timedelta(seconds=CONSOLE_SESSION_TTL_SECONDS))
+        state = _set_attendance_state(user, False, offline_at)
+    elif state.get("status") == "offline" and is_online:
+        state = _set_attendance_state(user, True, now)
+
+    since = frappe.utils.get_datetime(state.get("since")) if state.get("since") else now
+    online_seconds = frappe.utils.cint(state.get("online_seconds"))
+    offline_seconds = frappe.utils.cint(state.get("offline_seconds"))
+    current_seconds = _shift_overlap_seconds(since, now, now)
+    if state.get("status") == "online":
+        online_seconds += current_seconds
+    else:
+        offline_seconds += current_seconds
+
+    _, _, _, shift_elapsed_seconds = _today_shift_window(now)
+    online_seconds = max(0, min(online_seconds, shift_elapsed_seconds))
+    offline_seconds = max(0, min(offline_seconds, shift_elapsed_seconds - online_seconds))
+    return {
+        "since": since,
+        "online_seconds": online_seconds,
+        "offline_seconds": offline_seconds,
+    }
+
+
+def _shift_overlap_seconds(start, end, now) -> int:
+    shift_start, shift_end, shift_elapsed_until, _ = _today_shift_window(now)
+    start = max(frappe.utils.get_datetime(start), shift_start)
+    end = min(frappe.utils.get_datetime(end), shift_end, shift_elapsed_until)
+    return max(0, int((end - start).total_seconds()))
 
 
 def _human_duration_seconds(seconds: int) -> str:
@@ -1977,15 +2110,19 @@ def _queue_for_doctype(
     query = (search or "").strip()
     search_fields = _queue_search_fields(meta, fields) if query else []
     fetch_rows = frappe.get_list if doctype == "CRM Lead" else frappe.get_all
+    fetch_limit = max(limit, min(500, CONSOLE_QUEUE_LIMIT_MAX * 5))
     rows = fetch_rows(
         doctype,
         filters=filters,
         or_filters=_queue_search_filters(search_fields, query) if query else None,
         fields=fields,
         order_by=_queue_order_by(meta, sort_by),
-        limit_page_length=limit,
+        limit_page_length=fetch_limit,
     )
-    return _attach_queue_whatsapp([_reference_row(doctype, row) for row in rows], sort_by=sort_by)
+    rows = [_reference_row(doctype, row) for row in rows]
+    rows = _attach_queue_missed_calls(rows)
+    rows = _attach_queue_whatsapp(rows, sort_by=sort_by)
+    return rows[:limit]
 
 
 def _queue_order_by(meta, sort_by: str | None = None) -> str:
@@ -2285,6 +2422,89 @@ def _attach_queue_whatsapp(rows: list[dict[str, Any]], sort_by: str | None = Non
                         apply(by_key[key], data)
                         pending.discard(key)
     return _sort_queue_by_whatsapp(rows, sort_by)
+
+
+def _attach_queue_missed_calls(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows or not frappe.db.exists("DocType", "Vobiz Call Log"):
+        return rows
+
+    for row in rows:
+        row.update({
+            "missed_call_count": 0,
+            "missed_call_status": "",
+            "missed_call_time": None,
+        })
+
+    names_by_doctype: dict[str, list[str]] = {}
+    by_key = {}
+    for row in rows:
+        doctype = row.get("doctype")
+        name = row.get("name")
+        if not doctype or not name:
+            continue
+        names_by_doctype.setdefault(doctype, []).append(name)
+        by_key[(doctype, name)] = row
+
+    missed_statuses = sorted(MISSED_STATUSES | {"Canceled"})
+    seen_logs = set()
+
+    def apply(call, key: tuple[str, str]) -> None:
+        if call.name in seen_logs or key not in by_key:
+            return
+        seen_logs.add(call.name)
+        row = by_key[key]
+        row["missed_call_count"] = frappe.utils.cint(row.get("missed_call_count")) + 1
+        call_time = call.get("start_time") or call.get("creation") or call.get("modified")
+        current_time = row.get("missed_call_time")
+        if not current_time or str(call_time or "") > str(current_time or ""):
+            row.setdefault("record_modified", row.get("modified"))
+            row["modified"] = call_time
+            row["missed_call_time"] = call_time
+            row["missed_call_status"] = call.get("status") or ""
+
+    fields = ["name", "reference_doctype", "reference_name", "status", "start_time", "creation", "modified"]
+    call_meta = frappe.get_meta("Vobiz Call Log")
+    for doctype, names in names_by_doctype.items():
+        for call in frappe.get_all(
+            "Vobiz Call Log",
+            filters={
+                "reference_doctype": doctype,
+                "reference_name": ["in", names],
+                "status": ["in", missed_statuses],
+            },
+            fields=fields,
+            order_by="creation desc",
+            limit_page_length=0,
+        ):
+            apply(call, (call.get("reference_doctype"), call.get("reference_name")))
+
+        link_field = "crm_lead" if doctype == "CRM Lead" else ("patient" if doctype == "Patient" else "")
+        if not link_field or not call_meta.has_field(link_field):
+            continue
+        link_fields = fields + [link_field]
+        for call in frappe.get_all(
+            "Vobiz Call Log",
+            filters={
+                link_field: ["in", names],
+                "status": ["in", missed_statuses],
+            },
+            fields=link_fields,
+            order_by="creation desc",
+            limit_page_length=0,
+        ):
+            apply(call, (doctype, call.get(link_field)))
+
+    return _sort_queue_by_missed_calls(rows)
+
+
+def _sort_queue_by_missed_calls(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def key(row: dict[str, Any]) -> tuple[int, str]:
+        return (
+            1 if frappe.utils.cint(row.get("missed_call_count")) else 0,
+            str(row.get("missed_call_time") or ""),
+        )
+
+    return sorted(rows, key=key, reverse=True)
 
 
 def _sort_queue_by_whatsapp(rows: list[dict[str, Any]], sort_by: str | None = None) -> list[dict[str, Any]]:

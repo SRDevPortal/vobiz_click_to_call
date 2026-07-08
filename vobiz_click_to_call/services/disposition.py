@@ -7,7 +7,6 @@ from vobiz_ai.api.call_log import sync_linked_summaries
 from vobiz_click_to_call.services.call_status import status_bucket
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
 from vobiz_click_to_call.services.lead_disposition import (
-    get_patient_followup_status_field_options,
     sync_call_disposition_to_lead,
 )
 from vobiz_click_to_call.services.safety import block_number
@@ -19,11 +18,17 @@ CONNECTED_STATUSES = {"Connected", "Completed"}
 MISSED_STATUSES = {"Failed", "Busy", "No Answer", "Cancelled"}
 DND_DISPOSITIONS = {"Wrong Number", "Invalid Number", "Do Not Call"}
 SR_FOLLOWUP_STATUS_DOCTYPE = "SR Followup Status"
+SR_LEAD_DISPOSITION_DOCTYPE = "SR Lead Disposition"
+PATIENT_FOLLOWUP_STATUS_FIELDS = (
+    "sr_followup_status",
+    "followup_status",
+    "follow_up_status",
+)
 
 
 def get_patient_followup_status_options() -> list[str]:
     if not frappe.db.exists("DocType", SR_FOLLOWUP_STATUS_DOCTYPE):
-        return get_patient_followup_status_field_options()
+        return get_patient_lead_disposition_fallback_options()
 
     filters = {}
     meta = frappe.get_meta(SR_FOLLOWUP_STATUS_DOCTYPE)
@@ -36,6 +41,37 @@ def get_patient_followup_status_options() -> list[str]:
         pluck="name",
         order_by="sort_order asc, name asc" if meta.has_field("sort_order") else "name asc",
     )
+
+
+def get_patient_lead_disposition_fallback_options() -> list[str]:
+    if not frappe.db.exists("DocType", SR_LEAD_DISPOSITION_DOCTYPE):
+        return []
+
+    meta = frappe.get_meta(SR_LEAD_DISPOSITION_DOCTYPE)
+    filters = {}
+    if meta.has_field("is_active"):
+        filters["is_active"] = 1
+
+    fields = ["name"]
+    if meta.has_field("sr_disposition_name"):
+        fields.append("sr_disposition_name")
+
+    order_by = "sr_disposition_name asc" if meta.has_field("sr_disposition_name") else "name asc"
+    rows = frappe.get_all(
+        SR_LEAD_DISPOSITION_DOCTYPE,
+        filters=filters,
+        fields=fields,
+        order_by=order_by,
+    )
+
+    options = []
+    seen = set()
+    for row in rows:
+        value = (row.get("sr_disposition_name") or row.get("name") or "").strip()
+        if value and value not in seen:
+            options.append(value)
+            seen.add(value)
+    return options
 
 
 def save_call_disposition(
@@ -119,9 +155,9 @@ def sync_patient_followup_status(patient: str | None, sr_followup_status: str | 
     if not frappe.db.exists("DocType", "Patient") or not frappe.db.exists("Patient", patient):
         return {"synced": False, "reason": "Patient not found."}
     meta = frappe.get_meta("Patient")
-    field = meta.get_field("sr_followup_status")
+    field = get_patient_followup_status_field(meta)
     if not field:
-        return {"synced": False, "reason": "Patient sr_followup_status field not found."}
+        return {"synced": False, "reason": "Patient Followup Status field not found."}
     if not sr_followup_status:
         return {"synced": False, "reason": "No follow-up status provided."}
 
@@ -129,7 +165,7 @@ def sync_patient_followup_status(patient: str | None, sr_followup_status: str | 
     if sr_followup_status not in options:
         frappe.throw(_("Invalid follow-up status."))
 
-    values = {"sr_followup_status": sr_followup_status}
+    values = {field.fieldname: sr_followup_status}
     status_field = meta.get_field("status")
     status_options = [row.strip() for row in str((status_field and status_field.options) or "").splitlines() if row.strip()]
     if not status_options or "Active" in status_options:
@@ -139,9 +175,23 @@ def sync_patient_followup_status(patient: str | None, sr_followup_status: str | 
     return {
         "synced": True,
         "patient": patient,
+        "fieldname": field.fieldname,
         "sr_followup_status": sr_followup_status,
         "status": values.get("status"),
     }
+
+
+def get_patient_followup_status_field(meta=None):
+    meta = meta or frappe.get_meta("Patient")
+    for fieldname in PATIENT_FOLLOWUP_STATUS_FIELDS:
+        field = meta.get_field(fieldname)
+        if field:
+            return field
+    for field in meta.fields:
+        label = (field.label or "").strip().lower().replace("-", " ")
+        if label == "followup status":
+            return field
+    return None
 
 
 def sync_call_log_disposition_options(disposition: str | None = None) -> None:

@@ -119,12 +119,15 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         row_html_source = self.method_source("row_html", "is_patient_queue")
 
         self.assertIn("Lead Owner", render_source)
+        self.assertIn("Missed Call", render_source)
         self.assertIn("vobiz-lead-owner-col", render_source)
         self.assertIn("row.owner", visible_rows_source)
+        self.assertIn("row.missed_call_status", visible_rows_source)
         self.assertIn(".vobiz-lead-owner-col", meta_source)
         self.assertIn("=== 'Patient'", meta_source)
-        self.assertIn("? 12 : 11", colspan_source)
+        self.assertIn("? 14 : 13", colspan_source)
         self.assertIn("row.owner || ''", row_html_source)
+        self.assertIn("missed_call_cell_html(row)", row_html_source)
 
     def test_queue_owner_uses_only_lead_owner_field(self):
         source = CONSOLE_API.read_text(encoding="utf-8")

@@ -95,6 +95,19 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         self.assertIn('"Vobiz Call Log", "disposition", "reqd", "0"', self.install)
         self.assertIn("sync_call_log_disposition_options(disposition)", self.disposition)
 
+    def test_patient_followup_status_fallback_uses_sr_lead_disposition(self):
+        self.assertIn('SR_LEAD_DISPOSITION_DOCTYPE = "SR Lead Disposition"', self.disposition)
+        self.assertIn("return get_patient_lead_disposition_fallback_options()", self.disposition)
+        self.assertIn("def get_patient_lead_disposition_fallback_options", self.disposition)
+        self.assertNotIn("return get_patient_followup_status_field_options()", self.disposition)
+
+    def test_patient_disposition_updates_followup_status_field(self):
+        self.assertIn("PATIENT_FOLLOWUP_STATUS_FIELDS", self.disposition)
+        self.assertIn("def get_patient_followup_status_field", self.disposition)
+        self.assertIn("field = get_patient_followup_status_field(meta)", self.disposition)
+        self.assertIn("values = {field.fieldname: sr_followup_status}", self.disposition)
+        self.assertIn('"fieldname": field.fieldname', self.disposition)
+
     def test_ai_uses_existing_sr_lead_dispositions(self):
         self.assertIn("get_lead_disposition_rows(doc.reference_doctype, doc.reference_name)", self.ai)
         self.assertIn("The disposition must be an existing SR Lead Disposition", self.ai)

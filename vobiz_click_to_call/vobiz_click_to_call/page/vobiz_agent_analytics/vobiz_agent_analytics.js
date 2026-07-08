@@ -1555,7 +1555,7 @@ class VobizAgentAnalytics {
 						<div class="vobiz-agent-status-times">
 							<div class="online"><span>${__('Online Today')}</span><b>${this.escape(online_today)}</b></div>
 							<div class="offline"><span>${__('Offline Today')}</span><b>${this.escape(offline_today)}</b></div>
-							${duration_label ? `<div><span>${__('Current')}</span><b>${this.escape(duration_label)}</b></div>` : ''}
+							${duration_label ? `<div><span>${is_online ? __('Currently Online') : __('Currently Offline')}</span><b>${this.escape(duration_label)}</b></div>` : ''}
 						</div>
 					</div>
 				</div>

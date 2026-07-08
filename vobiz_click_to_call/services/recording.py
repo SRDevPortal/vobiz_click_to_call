@@ -22,6 +22,7 @@ def start_recording_if_needed(call_log: str) -> None:
     if not call_uuid:
         doc.recording_status = "Failed"
         doc.recording_error = "Could not start recording because Vobiz Call UUID is missing."
+        doc.reload()
         doc.save(ignore_permissions=True)
         frappe.db.commit()
         return
@@ -33,6 +34,7 @@ def start_recording_if_needed(call_log: str) -> None:
     doc.recording_started_at = frappe.utils.now()
     doc.recording_request_json = json.dumps(redact_callback_tokens(payload), indent=2, default=str)
     doc.transcript_status = "Requested" if settings.enable_transcription else "Not Requested"
+    doc.reload()
     doc.save(ignore_permissions=True)
     frappe.db.commit()
 
@@ -42,6 +44,7 @@ def start_recording_if_needed(call_log: str) -> None:
         doc = frappe.get_doc("Vobiz Call Log", call_log)
         doc.recording_status = "Failed"
         doc.recording_error = str(exc)
+        doc.reload()
         doc.save(ignore_permissions=True)
         frappe.db.commit()
         return
@@ -51,6 +54,7 @@ def start_recording_if_needed(call_log: str) -> None:
     doc.recording_id = extract_provider_id(response, "recording_id", "RecordingID", "id") or doc.recording_id
     doc.recording_url = extract_provider_id(response, "url", "record_url", "recording_url") or doc.recording_url
     doc.recording_response_json = json.dumps(response, indent=2, default=str)
+    doc.reload()
     doc.save(ignore_permissions=True)
     frappe.db.commit()
 

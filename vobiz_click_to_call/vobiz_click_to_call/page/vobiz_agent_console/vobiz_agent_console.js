@@ -22,6 +22,8 @@ frappe.pages['vobiz-agent-console'].on_page_hide = function(wrapper) {
 };
 
 const VOBIZ_WHATSAPP_PAGE_SIZE = 30;
+const VOBIZ_AGENT_IDLE_MS = 5 * 60 * 1000;
+const VOBIZ_MISSED_CALL_SEEN_KEY = 'vobiz_agent_console_missed_call_seen';
 
 class VobizAgentConsole {
 	constructor(page) {
@@ -55,6 +57,7 @@ class VobizAgentConsole {
 			queue_sort_by: 'modified_desc',
 			queue_page: 1,
 			queue_page_size: 25,
+			missed_call_seen: this.load_missed_call_seen(),
 			filter_group: null,
 			auto_dial: {
 				running: false,
@@ -73,6 +76,9 @@ class VobizAgentConsole {
 		this.poller = null;
 		this.search_timer = null;
 		this.heartbeat_timer = null;
+		this.idle_timer = null;
+		this.is_idle_offline = false;
+		this.attendance_tab_id = this.get_attendance_tab_id();
 		this.render();
 		this.bind();
 		this.bind_realtime();
@@ -161,6 +167,7 @@ class VobizAgentConsole {
 										<th style="width: 170px" data-role="queue-id-label">${__('CRM Lead ID')}</th>
 										<th>${__('Name')}</th>
 										<th>${__('Phone')}</th>
+										<th style="width: 112px">${__('Missed Call')}</th>
 										<th style="width: 92px">${__('WhatsApp')}</th>
 										<th class="vobiz-patient-col hidden">${__('Department')}</th>
 										<th class="vobiz-patient-col hidden">${__('Follow-up ID')}</th>
@@ -261,6 +268,13 @@ class VobizAgentConsole {
 				.vobiz-status { font-size: 12px; font-weight: 700; }
 				.vobiz-status.New { color: #0284c7; } .vobiz-status.Qualified, .vobiz-status.Converted { color: #16a34a; }
 				.vobiz-status.Not { color: #dc2626; } .vobiz-status.Contacted { color: #ca8a04; }
+				.vobiz-missed-cell { align-items: center; display: inline-flex; height: 28px; justify-content: center; min-width: 32px; position: relative; }
+				.vobiz-missed-count { align-items: center; background: #f3f4f6; border: 1px solid #eef0f3; border-radius: 6px; color: #111827; display: inline-flex; font-size: 12px; font-weight: 900; height: 28px; justify-content: center; min-width: 32px; padding: 0 7px; }
+				.vobiz-missed-badge { align-items: center; background: #ef4444; border: 2px solid #fff; border-radius: 999px; color: #fff; display: inline-flex; font-size: 9px; height: 18px; justify-content: center; line-height: 1; min-width: 18px; position: absolute; right: -6px; top: -7px; }
+				.vobiz-missed-badge .fa { transform: rotate(135deg); }
+				.vobiz-missed-cell.has-new .vobiz-missed-badge { animation: vobiz-missed-pulse 1.2s ease-in-out infinite; box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45); }
+				.vobiz-missed-empty { opacity: 0.75; }
+				@keyframes vobiz-missed-pulse { 0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.45); } 70% { box-shadow: 0 0 0 7px rgba(220, 38, 38, 0); } 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); } }
 				.vobiz-wa-queue { align-items: center; border-radius: 999px; display: inline-flex; font-size: 12px; font-weight: 800; gap: 5px; justify-content: center; min-height: 26px; min-width: 52px; padding: 3px 9px; }
 				.vobiz-wa-queue.has-new { background: #dcfce7; border-color: #86efac; color: #15803d; }
 				.vobiz-wa-queue.is-quiet { color: #16a34a; }
@@ -477,10 +491,7 @@ class VobizAgentConsole {
 			this.render_queue();
 		});
 		$(document).on('visibilitychange.vobiz-agent-console', () => {
-			if (document.hidden) {
-				this.stop_console_heartbeat();
-				this.mark_console_offline();
-			} else if (this.is_console_visible()) {
+			if (!document.hidden && this.is_console_visible()) {
 				this.start_console_heartbeat();
 			}
 		});
@@ -496,6 +507,7 @@ class VobizAgentConsole {
 			this.stop_console_heartbeat();
 			this.mark_console_offline(true);
 		});
+		this.bind_activity_tracking();
 	}
 
 	load() {
@@ -552,6 +564,7 @@ class VobizAgentConsole {
 
 	on_page_show() {
 		this.state.restore_checked = false;
+		this.note_agent_activity();
 		this.start_console_heartbeat();
 		this.load();
 		this.restore_workdesk_dialog();
@@ -569,19 +582,20 @@ class VobizAgentConsole {
 			clearInterval(this.poller);
 			clearInterval(this.timer);
 			clearTimeout(this.search_timer);
+			clearTimeout(this.idle_timer);
 			this.stop_console_heartbeat();
 			this.mark_console_offline(true);
 			this.unbind_realtime();
-			$(document).off('visibilitychange.vobiz-agent-console page-change.vobiz-agent-console route-change.vobiz-agent-console');
+			$(document).off('visibilitychange.vobiz-agent-console page-change.vobiz-agent-console route-change.vobiz-agent-console mousemove.vobiz-agent-console keydown.vobiz-agent-console click.vobiz-agent-console scroll.vobiz-agent-console touchstart.vobiz-agent-console');
 		});
 	}
 
 	start_console_heartbeat() {
-		if (!this.is_console_visible()) return;
+		if (!this.is_console_visible() || this.is_idle_offline) return;
 		this.send_console_heartbeat();
 		clearInterval(this.heartbeat_timer);
 		this.heartbeat_timer = setInterval(() => {
-			if (this.is_console_visible() && !document.hidden) {
+			if (this.is_console_visible() && !this.is_idle_offline) {
 				this.send_console_heartbeat();
 			}
 		}, 5000);
@@ -597,17 +611,20 @@ class VobizAgentConsole {
 			method: 'vobiz_click_to_call.api.console.heartbeat_agent_console',
 			type: 'POST',
 			freeze: false,
-			args: {}
+			args: { tab_id: this.attendance_tab_id }
 		});
 	}
 
 	mark_console_offline(useKeepalive) {
 		const url = '/api/method/vobiz_click_to_call.api.console.mark_agent_console_offline';
 		if (useKeepalive && window.fetch) {
+			const body = new URLSearchParams();
+			body.set('tab_id', this.attendance_tab_id);
 			fetch(url, {
 				method: 'POST',
 				keepalive: true,
 				headers: { 'X-Frappe-CSRF-Token': frappe.csrf_token || '' },
+				body,
 				credentials: 'same-origin'
 			}).catch(() => {});
 			return;
@@ -616,8 +633,50 @@ class VobizAgentConsole {
 			method: 'vobiz_click_to_call.api.console.mark_agent_console_offline',
 			type: 'POST',
 			freeze: false,
-			args: {}
+			args: { tab_id: this.attendance_tab_id }
 		});
+	}
+
+	get_attendance_tab_id() {
+		const key = 'vobiz_agent_console_tab_id';
+		try {
+			let value = window.sessionStorage && window.sessionStorage.getItem(key);
+			if (!value) {
+				value = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+				window.sessionStorage.setItem(key, value);
+			}
+			return value;
+		} catch (e) {
+			return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		}
+	}
+
+	bind_activity_tracking() {
+		const events = 'mousemove.vobiz-agent-console keydown.vobiz-agent-console click.vobiz-agent-console scroll.vobiz-agent-console touchstart.vobiz-agent-console';
+		$(document).on(events, () => this.note_agent_activity());
+		this.reset_idle_timer();
+	}
+
+	note_agent_activity() {
+		if (!this.is_console_visible()) return;
+		if (this.is_idle_offline) {
+			this.is_idle_offline = false;
+			this.start_console_heartbeat();
+		}
+		this.reset_idle_timer();
+	}
+
+	reset_idle_timer() {
+		clearTimeout(this.idle_timer);
+		if (!this.is_console_visible()) return;
+		this.idle_timer = setTimeout(() => this.mark_idle_offline(), VOBIZ_AGENT_IDLE_MS);
+	}
+
+	mark_idle_offline() {
+		if (!this.is_console_visible()) return;
+		this.is_idle_offline = true;
+		this.stop_console_heartbeat();
+		this.mark_console_offline();
 	}
 
 	bind_realtime() {
@@ -727,7 +786,7 @@ class VobizAgentConsole {
 		const query = (this.page.main.find('[data-role="search"]').val() || '').toLowerCase();
 		return this.state.queue
 			.map((row, index) => ({ ...row, index }))
-			.filter(row => !query || [row.name, row.title, row.company, row.phone, row.owner, row.status, row.next_action, row.team, row.sr_medical_department, row.sr_followup_id, row.sr_followup_day, row.whatsapp_last_message_preview].join(' ').toLowerCase().includes(query));
+			.filter(row => !query || [row.name, row.title, row.company, row.phone, row.owner, row.status, row.next_action, row.team, row.sr_medical_department, row.sr_followup_id, row.sr_followup_day, row.missed_call_status, row.missed_call_time, row.whatsapp_last_message_preview].join(' ').toLowerCase().includes(query));
 	}
 
 	paginated_queue_rows(rows) {
@@ -780,7 +839,7 @@ class VobizAgentConsole {
 
 	queue_colspan() {
 		const meta = this.state.queue_meta || this.default_queue_meta();
-		return (meta.doctype || '') === 'Patient' ? 13 : 12;
+		return (meta.doctype || '') === 'Patient' ? 14 : 13;
 	}
 
 	reset_filter_group_if_doctype_changed() {
@@ -875,6 +934,7 @@ class VobizAgentConsole {
 				<td><code>${frappe.utils.escape_html(row.name || '')}</code></td>
 				<td><div class="vobiz-person"><span class="vobiz-avatar">${frappe.utils.escape_html(initials)}</span><span>${frappe.utils.escape_html(row.title || row.name || '')}</span></div></td>
 				<td>${frappe.utils.escape_html(row.phone || '')}</td>
+				<td>${this.missed_call_cell_html(row)}</td>
 				<td>${this.whatsapp_queue_cell_html(row)}</td>
 				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_medical_department || '')}</td>
 				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_followup_id || '')}</td>
@@ -892,6 +952,64 @@ class VobizAgentConsole {
 				</td>
 			</tr>
 		`;
+	}
+
+	missed_call_cell_html(row) {
+		const count = parseInt(row.missed_call_count || 0, 10) || 0;
+		const isNew = this.is_new_missed_call(row);
+		const title = count
+			? (isNew ? __('New missed calls: {0}', [count]) : __('Missed calls: {0}', [count]))
+			: __('No missed calls');
+		return `
+			<div class="vobiz-missed-cell ${count ? '' : 'vobiz-missed-empty'} ${isNew ? 'has-new' : ''}" title="${frappe.utils.escape_html(title)}">
+				<span class="vobiz-missed-count">${frappe.utils.escape_html(String(count))}</span>
+				${count ? `<span class="vobiz-missed-badge"><i class="fa fa-phone"></i></span>` : ''}
+			</div>
+		`;
+	}
+
+	is_recent_missed_call(value) {
+		if (!value) {
+			return false;
+		}
+		const normalized = String(value).replace(' ', 'T');
+		const missedAt = new Date(normalized);
+		if (Number.isNaN(missedAt.getTime())) {
+			return false;
+		}
+		const minutes = (Date.now() - missedAt.getTime()) / 60000;
+		return minutes >= 0 && minutes <= 120;
+	}
+
+	is_new_missed_call(row) {
+		if (!this.is_recent_missed_call(row.missed_call_time)) {
+			return false;
+		}
+		const key = this.detail_key(row);
+		return !key || this.state.missed_call_seen[key] !== String(row.missed_call_time || '');
+	}
+
+	mark_missed_call_seen(row) {
+		const key = this.detail_key(row);
+		if (!key || !row.missed_call_time) return;
+		this.state.missed_call_seen[key] = String(row.missed_call_time || '');
+		this.save_missed_call_seen();
+	}
+
+	load_missed_call_seen() {
+		try {
+			return JSON.parse(window.localStorage.getItem(VOBIZ_MISSED_CALL_SEEN_KEY) || '{}') || {};
+		} catch (e) {
+			return {};
+		}
+	}
+
+	save_missed_call_seen() {
+		try {
+			window.localStorage.setItem(VOBIZ_MISSED_CALL_SEEN_KEY, JSON.stringify(this.state.missed_call_seen || {}));
+		} catch (e) {
+			// Local storage can be blocked; in that case the cue may return after refresh.
+		}
 	}
 
 	whatsapp_queue_cell_html(row) {
@@ -1397,6 +1515,7 @@ class VobizAgentConsole {
 		const row = this.state.queue[index];
 		if (!row) return;
 		if (this.state.detail_loading_key) return;
+		this.mark_missed_call_seen(row);
 		this.set_detail_loading(row, true);
 		const request = frappe.call({
 			method: 'vobiz_click_to_call.api.console.get_reference_context',
