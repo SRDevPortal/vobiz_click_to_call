@@ -1,0 +1,111 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:normalized_did",
+ "creation": "2026-07-09 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled",
+  "did_number",
+  "normalized_did",
+  "routing_strategy",
+  "default_lead_status",
+  "last_assigned_agent",
+  "agents_section",
+  "agents",
+  "notes"
+ ],
+ "fields": [
+  {
+   "default": "1",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Enabled"
+  },
+  {
+   "description": "Incoming Vobiz DID used for unknown caller routing.",
+   "fieldname": "did_number",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "DID Number",
+   "options": "Phone",
+   "reqd": 1
+  },
+  {
+   "fieldname": "normalized_did",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Normalized DID",
+   "read_only": 1,
+   "unique": 1
+  },
+  {
+   "default": "Round Robin",
+   "fieldname": "routing_strategy",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Routing Strategy",
+   "options": "Round Robin\nLoad Balancing"
+  },
+  {
+   "default": "Select Option",
+   "fieldname": "default_lead_status",
+   "fieldtype": "Link",
+   "label": "Default Lead Status",
+   "options": "CRM Lead Status"
+  },
+  {
+   "fieldname": "last_assigned_agent",
+   "fieldtype": "Link",
+   "label": "Last Assigned Agent",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "agents_section",
+   "fieldtype": "Section Break",
+   "label": "Agents"
+  },
+  {
+   "fieldname": "agents",
+   "fieldtype": "Table",
+   "label": "Agents",
+   "options": "Vobiz Incoming Mapping Agent"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-09 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Vobiz Click To Call",
+ "name": "Vobiz Incoming Mapping",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "did_number",
+ "track_changes": 1
+}

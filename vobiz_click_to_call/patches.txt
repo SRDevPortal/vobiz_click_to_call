@@ -6,3 +6,4 @@
 # Patches added in this section will be executed after doctypes are migrated
 vobiz_click_to_call.patches.v1_0.add_agent_not_available_crm_status
 vobiz_click_to_call.patches.v1_0.add_agent_not_available_patient_followup_status
+vobiz_click_to_call.patches.v1_0.add_select_option_crm_lead_status
