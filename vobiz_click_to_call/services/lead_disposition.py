@@ -6,7 +6,7 @@ import frappe
 
 
 SR_LEAD_DISPOSITION = "SR Lead Disposition"
-SR_FOLLOWUP_STATUS = "SR Followup Status"
+CRM_LEAD_STATUS = "CRM Lead Status"
 CRM_LEAD = "CRM Lead"
 PATIENT = "Patient"
 PATIENT_FOLLOWUP_STATUS_FIELDS = (
@@ -64,18 +64,42 @@ def get_lead_disposition_rows(
 
 
 def get_lead_status_options() -> list[str]:
-    if not frappe.db.exists("DocType", SR_FOLLOWUP_STATUS):
-        return get_patient_followup_status_field_options()
-    meta = frappe.get_meta(SR_FOLLOWUP_STATUS)
-    filters: dict[str, Any] = {}
-    if meta.has_field("is_active"):
-        filters["is_active"] = 1
-    return frappe.get_all(
-        SR_FOLLOWUP_STATUS,
-        filters=filters,
-        pluck="name",
-        order_by="sort_order asc, name asc" if meta.has_field("sort_order") else "name asc",
-    )
+    if not frappe.db.exists("DocType", CRM_LEAD):
+        return []
+
+    meta = frappe.get_meta(CRM_LEAD)
+    status_field = meta.get_field("status")
+    if not status_field:
+        return []
+
+    linked_doctype = (status_field.options or "").strip() if (status_field.fieldtype or "").lower() == "link" else ""
+    if linked_doctype and frappe.db.exists("DocType", linked_doctype):
+        linked_meta = frappe.get_meta(linked_doctype)
+        filters: dict[str, Any] = {}
+        if linked_meta.has_field("is_active"):
+            filters["is_active"] = 1
+        return frappe.get_all(
+            linked_doctype,
+            filters=filters,
+            pluck="name",
+            order_by="sort_order asc, name asc" if linked_meta.has_field("sort_order") else "name asc",
+        )
+
+    if frappe.db.exists("DocType", CRM_LEAD_STATUS):
+        status_meta = frappe.get_meta(CRM_LEAD_STATUS)
+        filters: dict[str, Any] = {}
+        if status_meta.has_field("is_active"):
+            filters["is_active"] = 1
+        return frappe.get_all(
+            CRM_LEAD_STATUS,
+            filters=filters,
+            pluck="name",
+            order_by="sort_order asc, name asc" if status_meta.has_field("sort_order") else "name asc",
+        )
+
+    if not getattr(status_field, "options", None):
+        return []
+    return [option.strip() for option in str(status_field.options).splitlines() if option.strip()]
 
 
 def get_patient_followup_status_field_options() -> list[str]:

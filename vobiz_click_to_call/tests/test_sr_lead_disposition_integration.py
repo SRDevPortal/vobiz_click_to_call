@@ -95,11 +95,19 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         self.assertIn('"Vobiz Call Log", "disposition", "reqd", "0"', self.install)
         self.assertIn("sync_call_log_disposition_options(disposition)", self.disposition)
 
-    def test_patient_followup_status_fallback_uses_sr_lead_disposition(self):
-        self.assertIn('SR_LEAD_DISPOSITION_DOCTYPE = "SR Lead Disposition"', self.disposition)
-        self.assertIn("return get_patient_lead_disposition_fallback_options()", self.disposition)
-        self.assertIn("def get_patient_lead_disposition_fallback_options", self.disposition)
+    def test_patient_followup_status_fallback_uses_custom_options(self):
+        self.assertIn('SR_FOLLOWUP_STATUS_DOCTYPE = "SR Followup Status"', self.disposition)
+        self.assertIn('PATIENT_FOLLOWUP_STATUS_FALLBACK_OPTIONS = ["Pending", "Done", "Agent Not Available"]', self.disposition)
+        self.assertIn("return PATIENT_FOLLOWUP_STATUS_FALLBACK_OPTIONS[:]", self.disposition)
+        self.assertNotIn("def get_patient_lead_disposition_fallback_options", self.disposition)
         self.assertNotIn("return get_patient_followup_status_field_options()", self.disposition)
+
+    def test_crm_lead_status_uses_crm_lead_status_source(self):
+        self.assertIn('CRM_LEAD_STATUS = "CRM Lead Status"', self.lead_disposition)
+        self.assertIn('status_field = meta.get_field("status")', self.lead_disposition)
+        self.assertIn('linked_doctype = (status_field.options or "").strip()', self.lead_disposition)
+        self.assertIn("frappe.db.exists(\"DocType\", CRM_LEAD_STATUS)", self.lead_disposition)
+        self.assertNotIn("frappe.get_meta(SR_FOLLOWUP_STATUS)", self.lead_disposition)
 
     def test_patient_disposition_updates_followup_status_field(self):
         self.assertIn("PATIENT_FOLLOWUP_STATUS_FIELDS", self.disposition)

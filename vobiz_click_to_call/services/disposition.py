@@ -18,7 +18,7 @@ CONNECTED_STATUSES = {"Connected", "Completed"}
 MISSED_STATUSES = {"Failed", "Busy", "No Answer", "Cancelled"}
 DND_DISPOSITIONS = {"Wrong Number", "Invalid Number", "Do Not Call"}
 SR_FOLLOWUP_STATUS_DOCTYPE = "SR Followup Status"
-SR_LEAD_DISPOSITION_DOCTYPE = "SR Lead Disposition"
+PATIENT_FOLLOWUP_STATUS_FALLBACK_OPTIONS = ["Pending", "Done", "Agent Not Available"]
 PATIENT_FOLLOWUP_STATUS_FIELDS = (
     "sr_followup_status",
     "followup_status",
@@ -28,50 +28,20 @@ PATIENT_FOLLOWUP_STATUS_FIELDS = (
 
 def get_patient_followup_status_options() -> list[str]:
     if not frappe.db.exists("DocType", SR_FOLLOWUP_STATUS_DOCTYPE):
-        return get_patient_lead_disposition_fallback_options()
+        return PATIENT_FOLLOWUP_STATUS_FALLBACK_OPTIONS[:]
 
     filters = {}
     meta = frappe.get_meta(SR_FOLLOWUP_STATUS_DOCTYPE)
     if meta.has_field("is_active"):
         filters["is_active"] = 1
 
-    return frappe.get_all(
+    options = frappe.get_all(
         SR_FOLLOWUP_STATUS_DOCTYPE,
         filters=filters,
         pluck="name",
         order_by="sort_order asc, name asc" if meta.has_field("sort_order") else "name asc",
     )
-
-
-def get_patient_lead_disposition_fallback_options() -> list[str]:
-    if not frappe.db.exists("DocType", SR_LEAD_DISPOSITION_DOCTYPE):
-        return []
-
-    meta = frappe.get_meta(SR_LEAD_DISPOSITION_DOCTYPE)
-    filters = {}
-    if meta.has_field("is_active"):
-        filters["is_active"] = 1
-
-    fields = ["name"]
-    if meta.has_field("sr_disposition_name"):
-        fields.append("sr_disposition_name")
-
-    order_by = "sr_disposition_name asc" if meta.has_field("sr_disposition_name") else "name asc"
-    rows = frappe.get_all(
-        SR_LEAD_DISPOSITION_DOCTYPE,
-        filters=filters,
-        fields=fields,
-        order_by=order_by,
-    )
-
-    options = []
-    seen = set()
-    for row in rows:
-        value = (row.get("sr_disposition_name") or row.get("name") or "").strip()
-        if value and value not in seen:
-            options.append(value)
-            seen.add(value)
-    return options
+    return options or PATIENT_FOLLOWUP_STATUS_FALLBACK_OPTIONS[:]
 
 
 def save_call_disposition(

@@ -1348,10 +1348,10 @@ class VobizAgentConsole {
 		const currentDisposition = context.disposition || '';
 		const options = [''].concat(this.state.dispositions || []);
 		this.page.main.find('[data-role="lead-status"]').html([''].concat(statusOptions).map(value =>
-			`<option value="${frappe.utils.escape_html(value)}">${frappe.utils.escape_html(value || __('Select CRM Status'))}</option>`
+			`<option value="${frappe.utils.escape_html(value)}">${frappe.utils.escape_html(value || __('Select Status'))}</option>`
 		).join('')).val(currentStatus);
 		this.page.main.find('[data-role="disposition"]').html(options.map(value =>
-			`<option value="${frappe.utils.escape_html(value)}">${frappe.utils.escape_html(value || __('Select SR Lead Disposition'))}</option>`
+			`<option value="${frappe.utils.escape_html(value)}">${frappe.utils.escape_html(value || __('Select Lead Disposition'))}</option>`
 		).join('')).val(currentDisposition);
 	}
 
@@ -3503,7 +3503,7 @@ class VobizAgentConsole {
 				return;
 			}
 			if (!isPatientDisposition && statusOptions.length && !values.lead_status) {
-				frappe.msgprint(__('Select CRM status.'));
+				frappe.msgprint(__('Select status.'));
 				return;
 			}
 			autoSubmitting = true;
@@ -3560,8 +3560,8 @@ class VobizAgentConsole {
 									? __('seconds, otherwise Follow-up Status will be set automatically.')
 									: __('seconds. Please select a Follow-up Status.'))
 								: (leadTimeoutStatus
-									? __('seconds, otherwise CRM Status will be set automatically.')
-									: __('seconds. Please select a CRM Status.'))}
+									? __('seconds, otherwise Status will be set automatically.')
+									: __('seconds. Please select a Status.'))}
 						</div>
 					`
 				},
@@ -3575,18 +3575,18 @@ class VobizAgentConsole {
 				}] : [{
 					fieldname: 'lead_status',
 					fieldtype: 'Select',
-					label: __('CRM Status'),
+					label: __('Status'),
 					options: [''].concat(statusOptions).join('\n'),
 					reqd: 1,
 					default: currentStatus
 				},
 				{
 					fieldname: 'disposition',
-						fieldtype: 'Select',
-						label: __('SR Lead Disposition'),
-						options: [''].concat(dispositionOptions).join('\n'),
-						default: suggested
-					}]),
+					fieldtype: 'Select',
+					label: __('Lead Disposition'),
+					options: [''].concat(dispositionOptions).join('\n'),
+					default: suggested
+				}]),
 				{
 					fieldname: 'notes',
 					fieldtype: 'Small Text',
@@ -3656,7 +3656,7 @@ class VobizAgentConsole {
 			return;
 		}
 		if (statusOptions.length && !leadStatus) {
-			frappe.msgprint(__('Select CRM status.'));
+			frappe.msgprint(__('Select status.'));
 			return;
 		}
 		frappe.call('vobiz_click_to_call.api.disposition.save_disposition', {
