@@ -682,14 +682,20 @@ class VobizAgentConsole {
 	bind_realtime() {
 		if (!frappe.realtime || this.callback_handler) return;
 		this.callback_handler = (payload) => this.handle_customer_callback(payload || {});
+		this.patient_routed_handler = (payload) => this.handle_patient_routed_call(payload || {});
 		frappe.realtime.on('vobiz_customer_callback', this.callback_handler);
+		frappe.realtime.on('vobiz_patient_routed_call', this.patient_routed_handler);
 	}
 
 	unbind_realtime() {
 		if (frappe.realtime && this.callback_handler && frappe.realtime.off) {
 			frappe.realtime.off('vobiz_customer_callback', this.callback_handler);
 		}
+		if (frappe.realtime && this.patient_routed_handler && frappe.realtime.off) {
+			frappe.realtime.off('vobiz_patient_routed_call', this.patient_routed_handler);
+		}
 		this.callback_handler = null;
+		this.patient_routed_handler = null;
 	}
 
 	is_console_visible() {
@@ -751,6 +757,73 @@ class VobizAgentConsole {
 		frappe.call('vobiz_click_to_call.api.console.get_reference_context', {
 			reference_doctype: row.doctype,
 			reference_name: row.name,
+			lite: 1
+		}).then((r) => {
+			this.state.context = r.message || {};
+			this.apply_context_dispositions(this.state.context);
+			this.open_detail_dialog(row, r.message || {});
+		});
+	}
+
+	handle_patient_routed_call(payload) {
+		if (!this.is_console_visible()) return;
+		const key = payload.call_log || `${payload.patient || ''}:${payload.customer_number || ''}`;
+		if (!payload.patient || this.state.last_patient_routed_call === key) return;
+		this.state.last_patient_routed_call = key;
+		this.load();
+		this.show_patient_routed_popup(payload);
+	}
+
+	show_patient_routed_popup(payload) {
+		if (this.patient_routed_dialog) {
+			this.patient_routed_dialog.hide();
+		}
+		const dialog = new frappe.ui.Dialog({
+			title: __('Incoming Patient Call'),
+			fields: [{
+				fieldname: 'details',
+				fieldtype: 'HTML',
+				options: `
+					<div class="vobiz-callback-popup">
+						<div class="vobiz-callback-icon"><i class="fa fa-phone"></i></div>
+						<div>
+							<h4>${__('Patient call routed to you')}</h4>
+							<div class="vobiz-callback-row"><span>${__('Patient')}</span><strong>${frappe.utils.escape_html(payload.patient_name || payload.patient || '-')}</strong></div>
+							<div class="vobiz-callback-row"><span>${__('Caller')}</span><strong>${frappe.utils.escape_html(payload.customer_number || '-')}</strong></div>
+							<div class="vobiz-callback-row"><span>${__('Department')}</span><strong>${frappe.utils.escape_html(payload.medical_department || '-')}</strong></div>
+							<div class="vobiz-callback-row"><span>${__('Follow-up ID')}</span><strong>${frappe.utils.escape_html(payload.sr_followup_id || '-')}</strong></div>
+						</div>
+					</div>
+				`
+			}],
+			primary_action_label: __('Open Workdesk'),
+			primary_action: () => {
+				dialog.hide();
+				this.open_patient_routed_workdesk(payload);
+			},
+			secondary_action_label: __('Open Patient'),
+			secondary_action: () => {
+				dialog.hide();
+				frappe.set_route('Form', 'Patient', payload.patient);
+			}
+		});
+		this.patient_routed_dialog = dialog;
+		dialog.get_close_btn().show();
+		dialog.show();
+	}
+
+	open_patient_routed_workdesk(payload) {
+		if (!payload.patient) return;
+		const existing = (this.state.queue || []).find(row => row.doctype === 'Patient' && row.name === payload.patient);
+		const row = existing || {
+			doctype: 'Patient',
+			name: payload.patient,
+			title: payload.patient_name || payload.patient,
+			phone: payload.customer_number || ''
+		};
+		frappe.call('vobiz_click_to_call.api.console.get_reference_context', {
+			reference_doctype: 'Patient',
+			reference_name: payload.patient,
 			lite: 1
 		}).then((r) => {
 			this.state.context = r.message || {};
