@@ -125,7 +125,7 @@ def dial_action(call_log: str | None = None, token: str | None = None):
                 doc.error_message = "Vobiz Dial completed without connecting the second leg."
                 _log_webhook_event("dial_action completed without bridge", doc, payload, severity="Warning")
             else:
-                doc.status = "Completed"
+                doc.status = "Completed" if _has_billable_talk_time(doc.billsec) else "No Answer"
             if not doc.end_time:
                 doc.end_time = frappe.utils.now()
 
@@ -598,7 +598,7 @@ def _dial_completed_without_bridge(payload: dict, previous_status: str | None) -
 
 
 def _has_billable_talk_time(billsec=None, duration=None) -> bool:
-    return _safe_int(billsec) > 0 or _safe_int(duration) >= 30
+    return _safe_int(billsec) > 0
 
 
 def _static_event_allowed(payload: dict) -> bool:
@@ -640,5 +640,5 @@ def _status_from_hangup(
     if previous in {"Queued", "Ringing"} and status in {"completed", "hangup"}:
         return "Cancelled"
     if previous == "Connected":
-        return "Completed"
-    return "Completed" if status in {"completed", "hangup"} else previous or "Completed"
+        return "No Answer"
+    return "No Answer" if status in {"completed", "hangup"} else previous or "Completed"

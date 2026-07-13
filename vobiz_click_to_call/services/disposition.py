@@ -4,7 +4,7 @@ import frappe
 from frappe import _
 
 from vobiz_ai.api.call_log import sync_linked_summaries
-from vobiz_click_to_call.services.call_status import status_bucket
+from vobiz_click_to_call.services.call_status import is_inbound_missed_call, status_bucket
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
 from vobiz_click_to_call.services.lead_disposition import (
     sync_call_disposition_to_lead,
@@ -15,7 +15,7 @@ from vobiz_click_to_call.services.settings import get_manual_disposition_options
 
 TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled"}
 CONNECTED_STATUSES = {"Connected", "Completed"}
-MISSED_STATUSES = {"Failed", "Busy", "No Answer", "Cancelled"}
+MISSED_STATUSES = {"Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
 DND_DISPOSITIONS = {"Wrong Number", "Invalid Number", "Do Not Call"}
 SR_FOLLOWUP_STATUS_DOCTYPE = "SR Followup Status"
 PATIENT_FOLLOWUP_STATUS_FALLBACK_OPTIONS = ["Pending", "Done", "Agent Not Available"]
@@ -274,6 +274,7 @@ def update_reference_call_metrics(reference_doctype: str | None, reference_name:
             "hangup_cause",
             "error_message",
             "call_flow",
+            "direction",
             "answer_time",
             "duration",
             "billsec",
@@ -301,9 +302,7 @@ def update_reference_call_metrics(reference_doctype: str | None, reference_name:
     if "vobiz_connected_call_count" in fields:
         values["vobiz_connected_call_count"] = len([row for row in rows if status_bucket(row) == "connected"])
     if "vobiz_missed_call_count" in fields:
-        values["vobiz_missed_call_count"] = len(
-            [row for row in rows if status_bucket(row) in {"missed", "busy", "no_answer", "failed", "cancelled"}]
-        )
+        values["vobiz_missed_call_count"] = len([row for row in rows if is_inbound_missed_call(row)])
 
     last_disposition = next((row.disposition for row in rows if row.disposition), "")
     if "vobiz_last_disposition" in fields:
@@ -410,6 +409,13 @@ def get_reference_call_summary(reference_doctype: str, reference_name: str) -> d
             "user",
             "customer_number",
             "duration",
+            "billsec",
+            "recording_duration",
+            "direction",
+            "call_status",
+            "dial_status",
+            "hangup_cause",
+            "error_message",
             "disposition",
             "follow_up_datetime",
             "recording_url",
@@ -426,10 +432,27 @@ def get_reference_call_summary(reference_doctype: str, reference_name: str) -> d
         "Vobiz Call Log",
         {"reference_doctype": reference_doctype, "reference_name": reference_name, "status": ["in", list(CONNECTED_STATUSES)]},
     )
-    missed = frappe.db.count(
+    missed_rows = frappe.get_all(
         "Vobiz Call Log",
-        {"reference_doctype": reference_doctype, "reference_name": reference_name, "status": ["in", list(MISSED_STATUSES)]},
+        filters={
+            "reference_doctype": reference_doctype,
+            "reference_name": reference_name,
+            "direction": "Incoming",
+            "status": ["in", list(MISSED_STATUSES)],
+        },
+        fields=[
+            "status",
+            "direction",
+            "call_status",
+            "dial_status",
+            "hangup_cause",
+            "error_message",
+            "duration",
+            "billsec",
+            "recording_duration",
+        ],
     )
+    missed = len([row for row in missed_rows if is_inbound_missed_call(row)])
 
     return {
         "total": total,

@@ -33,7 +33,15 @@ USER_MAPPING_JSON = (
     / "vobiz_user_mapping"
     / "vobiz_user_mapping.json"
 )
+AGENT_ATTENDANCE_JSON = (
+    Path(__file__).resolve().parents[1]
+    / "vobiz_click_to_call"
+    / "doctype"
+    / "vobiz_agent_attendance_log"
+    / "vobiz_agent_attendance_log.json"
+)
 PUBLIC_JS = Path(__file__).resolve().parents[1] / "public" / "js"
+AVAILABILITY_JS = PUBLIC_JS / "availability.js"
 
 
 class TestAgentConsoleAutoDial(unittest.TestCase):
@@ -128,6 +136,111 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("? 14 : 13", colspan_source)
         self.assertIn("row.owner || ''", row_html_source)
         self.assertIn("missed_call_cell_html(row)", row_html_source)
+
+    def test_agent_console_missed_calls_are_inbound_only(self):
+        source = CONSOLE_API.read_text(encoding="utf-8")
+        start = source.index("\ndef _attach_queue_missed_calls(")
+        end = source.index("\ndef _sort_queue_by_missed_calls(", start)
+        missed_source = source[start:end]
+
+        self.assertIn("is_inbound_missed_call(call)", missed_source)
+        self.assertEqual(missed_source.count('"direction": "Incoming"'), 2)
+        self.assertIn('"direction",', missed_source)
+        self.assertIn('"billsec",', missed_source)
+        self.assertIn('"recording_duration",', missed_source)
+
+    def test_agent_console_missed_call_count_opens_list(self):
+        bind_source = self.method_source("bind", "load")
+        cell_source = self.method_source("missed_call_cell_html", "is_recent_missed_call")
+        open_source = self.method_source("open_missed_calls", "open_queue_whatsapp")
+        console = CONSOLE_API.read_text(encoding="utf-8")
+
+        self.assertIn('data-action="open-missed-calls"', cell_source)
+        self.assertIn('type="button"', cell_source)
+        self.assertIn("this.open_missed_calls", bind_source)
+        self.assertIn("get_reference_missed_calls", open_source)
+        self.assertIn("missed_call_list_html", open_source)
+        self.assertIn("def get_reference_missed_calls", console)
+        self.assertIn("def _reference_missed_call_rows", console)
+
+    def test_agent_analytics_missed_filter_is_inbound_only(self):
+        source = CONSOLE_API.read_text(encoding="utf-8")
+        start = source.index("\ndef _analytics_bucket_filter_sql(")
+        end = source.index("\ndef _analytics_summary_sql(", start)
+        filter_source = source[start:end]
+        data_start = source.index("\ndef _analytics_data(")
+        data_end = source.index("\ndef _analytics_sql_conditions(", data_start)
+        data_source = source[data_start:data_end]
+        performance_start = source.index("\ndef _performance_summary(")
+        performance_end = source.index("\ndef _performance_by_user(", performance_start)
+        performance_source = source[performance_start:performance_end]
+
+        self.assertIn("and {direction} = 'Incoming'", filter_source)
+        self.assertIn('"direction"', data_source)
+        self.assertIn('row.get("direction") == "Incoming"', performance_source)
+        self.assertNotIn('bucket_filter.replace("bucket"', source)
+
+    def test_agent_analytics_connected_requires_talk_time(self):
+        source = CONSOLE_API.read_text(encoding="utf-8")
+        start = source.index("\ndef _analytics_bucket_sql(")
+        end = source.index("\ndef _analytics_recording_duration_sql(", start)
+        bucket_source = source[start:end]
+
+        self.assertIn("coalesce(`billsec`, 0) > 0 then 'connected'", bucket_source)
+        self.assertNotIn("`status` in ('Connected', 'Completed') then 'connected'", bucket_source)
+
+    def test_agent_analytics_talk_time_starts_from_customer_answer(self):
+        source = CONSOLE_API.read_text(encoding="utf-8")
+        start = source.index("\ndef _analytics_talk_sql(")
+        end = source.index("\ndef _analytics_unique_key_sql(", start)
+        talk_source = source[start:end]
+
+        self.assertIn("`call_flow` = 'Customer First'", talk_source)
+        self.assertIn("timestampdiff(second, `answer_time`, `end_time`)", talk_source)
+        self.assertIn("`call_flow` = 'Agent First'", talk_source)
+        self.assertIn("coalesce(`duration`, 0) > 0", talk_source)
+        self.assertNotIn("nullif({_analytics_recording_duration_sql()}, 0)", talk_source)
+        self.assertNotIn("nullif(`billsec`, 0)", talk_source)
+
+    def test_agent_online_time_uses_persistent_attendance_log(self):
+        source = CONSOLE_API.read_text(encoding="utf-8")
+        attendance = AGENT_ATTENDANCE_JSON.read_text(encoding="utf-8")
+        hooks = (Path(__file__).resolve().parents[1] / "hooks.py").read_text(encoding="utf-8")
+
+        self.assertIn("AGENT_ATTENDANCE_DOCTYPE = \"Vobiz Agent Attendance Log\"", source)
+        self.assertIn("_open_or_touch_attendance_session(user, tab_id, now)", source)
+        self.assertIn("_close_attendance_session(user, tab_id, _now_ist())", source)
+        self.assertIn("def _persistent_attendance_snapshot", source)
+        self.assertIn("Vobiz Agent Attendance Log", attendance)
+        self.assertIn('"agent_user"', attendance)
+        self.assertIn('"online_from"', attendance)
+        self.assertIn('"offline_at"', attendance)
+        self.assertIn("vobiz_click_to_call.api.console.close_stale_agent_attendance_sessions", hooks)
+
+    def test_agent_desk_activity_tracks_online_time_without_call_availability(self):
+        source = CONSOLE_API.read_text(encoding="utf-8")
+        hooks = (Path(__file__).resolve().parents[1] / "hooks.py").read_text(encoding="utf-8")
+        availability = AVAILABILITY_JS.read_text(encoding="utf-8")
+        activity_start = source.index("\ndef record_agent_activity(")
+        activity_end = source.index("\n\n@frappe.whitelist", activity_start + 1)
+        activity_source = source[activity_start:activity_end]
+        inactive_start = source.index("\ndef mark_agent_activity_inactive(")
+        inactive_end = source.index("\n\n@frappe.whitelist", inactive_start + 1)
+        inactive_source = source[inactive_start:inactive_end]
+
+        self.assertIn("/assets/vobiz_click_to_call/js/availability.js", hooks)
+        self.assertIn("def record_agent_activity", source)
+        self.assertIn("def mark_agent_activity_inactive", source)
+        self.assertIn("_open_or_touch_attendance_session(user, tab_id, now, source=\"Desk Activity\")", source)
+        self.assertIn("record_agent_activity", availability)
+        self.assertIn("mark_agent_activity_inactive", availability)
+        self.assertIn("ACTIVITY_HEARTBEAT_MS = 30 * 1000", availability)
+        self.assertIn("ACTIVITY_IDLE_MS = 5 * 60 * 1000", availability)
+        self.assertIn("sessionStorage", availability)
+        self.assertNotIn("availability_status", activity_source)
+        self.assertNotIn("accept_calls", activity_source)
+        self.assertNotIn("availability_status", inactive_source)
+        self.assertNotIn("accept_calls", inactive_source)
 
     def test_queue_owner_uses_only_lead_owner_field(self):
         source = CONSOLE_API.read_text(encoding="utf-8")

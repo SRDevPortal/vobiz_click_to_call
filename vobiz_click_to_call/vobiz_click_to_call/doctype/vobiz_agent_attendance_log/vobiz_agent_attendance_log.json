@@ -1,0 +1,107 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-07-13 18:55:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "agent_user",
+  "tab_id",
+  "status",
+  "shift_date",
+  "online_from",
+  "last_seen_at",
+  "offline_at",
+  "duration_seconds",
+  "source"
+ ],
+ "fields": [
+  {
+   "fieldname": "agent_user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Agent User",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "fieldname": "tab_id",
+   "fieldtype": "Data",
+   "label": "Tab ID"
+  },
+  {
+   "default": "Open",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Open\nClosed",
+   "reqd": 1
+  },
+  {
+   "fieldname": "shift_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Shift Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "online_from",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Online From",
+   "reqd": 1
+  },
+  {
+   "fieldname": "last_seen_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Last Seen At"
+  },
+  {
+   "fieldname": "offline_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Offline At"
+  },
+  {
+   "default": "0",
+   "fieldname": "duration_seconds",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Duration Seconds"
+  },
+  {
+   "default": "Agent Console",
+   "fieldname": "source",
+   "fieldtype": "Data",
+   "label": "Source"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-07-13 18:55:00.000000",
+ "modified_by": "Administrator",
+ "module": "Vobiz Click To Call",
+ "name": "Vobiz Agent Attendance Log",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

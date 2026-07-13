@@ -138,7 +138,7 @@ def dial_action(call_log: str | None = None, token: str | None = None):
         return _xml_response(_hangup_xml())
 
     apply_provider_payload(doc, payload)
-    status = str(_first_value(payload, "DialCallStatus", "dial_call_status", "DialStatus", "dial_status", "Status", "status") or "").strip().lower()
+    status = str(_first_value(payload, "DialCallStatus", "dial_call_status", "DialStatus", "dial_status", "Status", "status") or "").strip().lower().replace("_", "-")
     failed = _dial_failed(status) or _dial_completed_without_bridge(payload, doc.status)
     if failed:
         next_target = _next_inbound_fallback(doc)
@@ -174,7 +174,12 @@ def dial_action(call_log: str | None = None, token: str | None = None):
         doc.status = "Connected"
         doc.answer_time = doc.answer_time or frappe.utils.now()
     elif failed:
-        doc.status = "No Answer" if status in {"no-answer", "no answer", "timeout", "completed"} else "Failed"
+        if status == "busy":
+            doc.status = "Busy"
+        elif status in {"no-answer", "no answer", "timeout", "completed"}:
+            doc.status = "No Answer"
+        else:
+            doc.status = "Failed"
         doc.end_time = doc.end_time or frappe.utils.now()
     elif status == "completed":
         doc.status = "Completed"

@@ -269,12 +269,22 @@ class VobizAgentConsole {
 				.vobiz-status.New { color: #0284c7; } .vobiz-status.Qualified, .vobiz-status.Converted { color: #16a34a; }
 				.vobiz-status.Not { color: #dc2626; } .vobiz-status.Contacted { color: #ca8a04; }
 				.vobiz-missed-cell { align-items: center; display: inline-flex; height: 28px; justify-content: center; min-width: 32px; position: relative; }
+				.vobiz-missed-cell.clickable { cursor: pointer; }
 				.vobiz-missed-count { align-items: center; background: #f3f4f6; border: 1px solid #eef0f3; border-radius: 6px; color: #111827; display: inline-flex; font-size: 12px; font-weight: 900; height: 28px; justify-content: center; min-width: 32px; padding: 0 7px; }
+				button.vobiz-missed-cell { background: transparent; border: 0; padding: 0; }
+				button.vobiz-missed-cell:focus .vobiz-missed-count, button.vobiz-missed-cell:hover .vobiz-missed-count { background: #fee2e2; border-color: #fecaca; color: #991b1b; }
 				.vobiz-missed-badge { align-items: center; background: #ef4444; border: 2px solid #fff; border-radius: 999px; color: #fff; display: inline-flex; font-size: 9px; height: 18px; justify-content: center; line-height: 1; min-width: 18px; position: absolute; right: -6px; top: -7px; }
 				.vobiz-missed-badge .fa { transform: rotate(135deg); }
 				.vobiz-missed-cell.has-new .vobiz-missed-badge { animation: vobiz-missed-pulse 1.2s ease-in-out infinite; box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45); }
 				.vobiz-missed-empty { opacity: 0.75; }
 				@keyframes vobiz-missed-pulse { 0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.45); } 70% { box-shadow: 0 0 0 7px rgba(220, 38, 38, 0); } 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); } }
+				.vobiz-missed-list { display: grid; gap: 10px; max-height: 520px; overflow: auto; }
+				.vobiz-missed-row { border: 1px solid #eef0f3; border-radius: 8px; display: grid; gap: 8px; padding: 10px; }
+				.vobiz-missed-row-head { align-items: center; display: flex; gap: 10px; justify-content: space-between; }
+				.vobiz-missed-row-head strong { font-size: 13px; }
+				.vobiz-missed-row-grid { display: grid; gap: 8px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+				.vobiz-missed-row-grid span { color: #6b7280; display: block; font-size: 11px; font-weight: 800; margin-bottom: 2px; }
+				.vobiz-missed-row-grid div { min-width: 0; overflow-wrap: anywhere; }
 				.vobiz-wa-queue { align-items: center; border-radius: 999px; display: inline-flex; font-size: 12px; font-weight: 800; gap: 5px; justify-content: center; min-height: 26px; min-width: 52px; padding: 3px 9px; }
 				.vobiz-wa-queue.has-new { background: #dcfce7; border-color: #86efac; color: #15803d; }
 				.vobiz-wa-queue.is-quiet { color: #16a34a; }
@@ -430,6 +440,10 @@ class VobizAgentConsole {
 		$main.on('click', '[data-action="call-row"]', (e) => {
 			e.stopPropagation();
 			this.call_row($(e.currentTarget).closest('tr').data('index'));
+		});
+		$main.on('click', '[data-action="open-missed-calls"]', (e) => {
+			e.stopPropagation();
+			this.open_missed_calls($(e.currentTarget).closest('tr').data('index'));
 		});
 		$main.on('click', '[data-action="open-whatsapp-row"]', (e) => {
 			e.stopPropagation();
@@ -1033,11 +1047,21 @@ class VobizAgentConsole {
 		const title = count
 			? (isNew ? __('New missed calls: {0}', [count]) : __('Missed calls: {0}', [count]))
 			: __('No missed calls');
+		const content = `
+			<span class="vobiz-missed-count">${frappe.utils.escape_html(String(count))}</span>
+			${count ? `<span class="vobiz-missed-badge"><i class="fa fa-phone"></i></span>` : ''}
+		`;
+		if (!count) {
+			return `
+				<div class="vobiz-missed-cell vobiz-missed-empty" title="${frappe.utils.escape_html(title)}">
+					${content}
+				</div>
+			`;
+		}
 		return `
-			<div class="vobiz-missed-cell ${count ? '' : 'vobiz-missed-empty'} ${isNew ? 'has-new' : ''}" title="${frappe.utils.escape_html(title)}">
-				<span class="vobiz-missed-count">${frappe.utils.escape_html(String(count))}</span>
-				${count ? `<span class="vobiz-missed-badge"><i class="fa fa-phone"></i></span>` : ''}
-			</div>
+			<button type="button" class="vobiz-missed-cell clickable ${isNew ? 'has-new' : ''}" data-action="open-missed-calls" title="${frappe.utils.escape_html(title)}">
+				${content}
+			</button>
 		`;
 	}
 
@@ -1604,6 +1628,62 @@ class VobizAgentConsole {
 			this.open_detail_dialog(row, r.message || {});
 		});
 		request.always(() => this.set_detail_loading(row, false));
+	}
+
+	open_missed_calls(index) {
+		const row = this.state.queue[index];
+		if (!row || !parseInt(row.missed_call_count || 0, 10)) return;
+		this.mark_missed_call_seen(row);
+		this.render_queue();
+		const dialog = new frappe.ui.Dialog({
+			title: __('Missed Calls'),
+			size: 'large',
+			fields: [{ fieldname: 'missed_calls', fieldtype: 'HTML' }]
+		});
+		dialog.show();
+		dialog.get_field('missed_calls').$wrapper.html(`<div class="text-muted">${__('Loading missed calls...')}</div>`);
+		frappe.call('vobiz_click_to_call.api.console.get_reference_missed_calls', {
+			reference_doctype: row.doctype,
+			reference_name: row.name,
+			limit: 50
+		}).then((r) => {
+			const data = r.message || {};
+			dialog.get_field('missed_calls').$wrapper.html(this.missed_call_list_html(data.calls || []));
+		}).catch(() => {
+			dialog.get_field('missed_calls').$wrapper.html(`<div class="text-danger">${__('Unable to load missed calls.')}</div>`);
+		});
+	}
+
+	missed_call_list_html(calls) {
+		if (!calls.length) {
+			return `<div class="text-muted">${__('No missed calls found.')}</div>`;
+		}
+		return `
+			<div class="vobiz-missed-list">
+				${calls.map(call => this.missed_call_row_html(call)).join('')}
+			</div>
+		`;
+	}
+
+	missed_call_row_html(call) {
+		const when = call.start_time || call.creation || call.modified || '';
+		const reason = call.hangup_cause || call.call_status || call.dial_status || call.error_message || '';
+		return `
+			<div class="vobiz-missed-row">
+				<div class="vobiz-missed-row-head">
+					<strong>${frappe.utils.escape_html(call.status || __('Missed'))}</strong>
+					<a class="btn btn-xs btn-default" href="/app/vobiz-call-log/${frappe.utils.escape_html(call.name || '')}">${__('Open')}</a>
+				</div>
+				<div class="vobiz-missed-row-grid">
+					<div><span>${__('Time')}</span>${frappe.utils.escape_html(when ? this.format_datetime(when) : '-')}</div>
+					<div><span>${__('Customer')}</span>${frappe.utils.escape_html(call.customer_number || '-')}</div>
+					<div><span>${__('Agent')}</span>${frappe.utils.escape_html(call.user || call.user_mobile || call.agent_number || '-')}</div>
+					<div><span>${__('DID')}</span>${frappe.utils.escape_html(call.did_number || '-')}</div>
+					<div><span>${__('Duration')}</span>${frappe.utils.escape_html(call.duration_label || '0s')}</div>
+					<div><span>${__('Reason')}</span>${frappe.utils.escape_html(reason || '-')}</div>
+				</div>
+			</div>
+		`;
 	}
 
 	open_queue_whatsapp(index) {

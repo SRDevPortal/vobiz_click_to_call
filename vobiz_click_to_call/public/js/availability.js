@@ -6,8 +6,18 @@
         Away: "yellow",
         Offline: "gray",
     };
+    const ACTIVITY_HEARTBEAT_MS = 30 * 1000;
+    const ACTIVITY_IDLE_MS = 5 * 60 * 1000;
+    const ACTIVITY_TAB_KEY = "vobiz_agent_activity_tab_id";
 
     let currentAvailability = null;
+    let activityTabId = null;
+    let activityHeartbeatTimer = null;
+    let activityIdleTimer = null;
+    let activityBound = false;
+    let trackingActivity = false;
+    let idleInactive = false;
+    let lastRouteKey = "";
 
     function currentRoute() {
         if (!window.frappe || !frappe.get_route) return [];
@@ -20,13 +30,15 @@
 
     function shouldLoadAvailability() {
         if (isDeskHome()) return false;
-        const route = currentRoute();
-        return route[0] === "Form" || route[0] === "List" || route[0] === "vobiz-agent-console";
+        return window.location && window.location.pathname && window.location.pathname.indexOf("/app") === 0;
     }
 
     function init() {
         if (!window.frappe || !frappe.session || frappe.session.user === "Guest") return;
-        if (!shouldLoadAvailability()) return;
+        if (!shouldLoadAvailability()) {
+            stopActivityTracking(true);
+            return;
+        }
         refresh();
     }
 
@@ -42,6 +54,7 @@
             currentAvailability = data;
             ensureStyles();
             renderControl(data);
+            startActivityTracking();
         });
     }
 
@@ -206,8 +219,154 @@
         });
     }
 
+    function getActivityTabId() {
+        if (activityTabId) return activityTabId;
+        try {
+            activityTabId = window.sessionStorage && window.sessionStorage.getItem(ACTIVITY_TAB_KEY);
+            if (!activityTabId) {
+                activityTabId = `desk-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                window.sessionStorage.setItem(ACTIVITY_TAB_KEY, activityTabId);
+            }
+            return activityTabId;
+        } catch (e) {
+            activityTabId = `desk-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            return activityTabId;
+        }
+    }
+
+    function routeKey() {
+        const route = currentRoute();
+        return route.length ? route.join("/") : ((window.location && window.location.pathname) || "");
+    }
+
+    function startActivityTracking() {
+        if (!currentAvailability || !currentAvailability.is_mapped || !shouldLoadAvailability()) return;
+        bindActivityEvents();
+        trackingActivity = true;
+        idleInactive = false;
+        lastRouteKey = routeKey();
+        recordActivity();
+        resetActivityIdleTimer();
+        clearInterval(activityHeartbeatTimer);
+        activityHeartbeatTimer = setInterval(() => {
+            if (canRecordActivity()) {
+                recordActivity();
+            }
+        }, ACTIVITY_HEARTBEAT_MS);
+    }
+
+    function canRecordActivity() {
+        return Boolean(
+            trackingActivity &&
+            currentAvailability &&
+            currentAvailability.is_mapped &&
+            shouldLoadAvailability() &&
+            document.visibilityState !== "hidden" &&
+            !idleInactive
+        );
+    }
+
+    function recordActivity() {
+        if (!canRecordActivity()) return;
+        frappe.call({
+            method: "vobiz_click_to_call.api.console.record_agent_activity",
+            type: "POST",
+            freeze: false,
+            args: {
+                tab_id: getActivityTabId(),
+                route: routeKey(),
+            },
+        });
+    }
+
+    function stopActivityTracking(closeSession) {
+        clearInterval(activityHeartbeatTimer);
+        clearTimeout(activityIdleTimer);
+        activityHeartbeatTimer = null;
+        activityIdleTimer = null;
+        if (closeSession && trackingActivity && currentAvailability && currentAvailability.is_mapped) {
+            markActivityInactive();
+        }
+        trackingActivity = false;
+    }
+
+    function markActivityInactive() {
+        idleInactive = true;
+        const url = "/api/method/vobiz_click_to_call.api.console.mark_agent_activity_inactive";
+        if (window.fetch) {
+            const body = new URLSearchParams();
+            body.set("tab_id", getActivityTabId());
+            fetch(url, {
+                method: "POST",
+                keepalive: true,
+                headers: { "X-Frappe-CSRF-Token": frappe.csrf_token || "" },
+                body,
+                credentials: "same-origin",
+            }).catch(() => {});
+            return;
+        }
+        frappe.call({
+            method: "vobiz_click_to_call.api.console.mark_agent_activity_inactive",
+            type: "POST",
+            freeze: false,
+            args: { tab_id: getActivityTabId() },
+        });
+    }
+
+    function bindActivityEvents() {
+        if (activityBound) return;
+        activityBound = true;
+        const events = "mousemove.vobiz-agent-activity keydown.vobiz-agent-activity click.vobiz-agent-activity scroll.vobiz-agent-activity touchstart.vobiz-agent-activity";
+        $(document).on(events, noteActivity);
+        $(document).on("visibilitychange.vobiz-agent-activity", handleVisibilityChange);
+        $(window).on("beforeunload.vobiz-agent-activity pagehide.vobiz-agent-activity", () => stopActivityTracking(true));
+    }
+
+    function noteActivity() {
+        if (!currentAvailability || !currentAvailability.is_mapped || !shouldLoadAvailability()) return;
+        if (idleInactive) {
+            idleInactive = false;
+            trackingActivity = true;
+            recordActivity();
+            clearInterval(activityHeartbeatTimer);
+            activityHeartbeatTimer = setInterval(() => {
+                if (canRecordActivity()) {
+                    recordActivity();
+                }
+            }, ACTIVITY_HEARTBEAT_MS);
+        }
+        resetActivityIdleTimer();
+    }
+
+    function resetActivityIdleTimer() {
+        clearTimeout(activityIdleTimer);
+        if (!trackingActivity || !shouldLoadAvailability()) return;
+        activityIdleTimer = setTimeout(() => {
+            stopActivityTracking(false);
+            markActivityInactive();
+        }, ACTIVITY_IDLE_MS);
+    }
+
+    function handleVisibilityChange() {
+        if (document.visibilityState === "hidden") {
+            stopActivityTracking(true);
+            return;
+        }
+        if (currentAvailability && currentAvailability.is_mapped && shouldLoadAvailability()) {
+            startActivityTracking();
+        }
+    }
+
+    function handleRouteChange() {
+        const nextRouteKey = routeKey();
+        if (lastRouteKey && lastRouteKey !== nextRouteKey) {
+            stopActivityTracking(true);
+        }
+        init();
+    }
+
     $(document).on("vobiz_refresh_availability", refresh);
-    $(document).on("page-change route-change", init);
+    $(document).on("page-change route-change", handleRouteChange);
 
     if (frappe.ready) {
         frappe.ready(init);

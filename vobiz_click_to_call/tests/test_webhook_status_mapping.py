@@ -4,6 +4,7 @@ import unittest
 
 from vobiz_click_to_call.api.webhook import _status_from_dial_status, _status_from_hangup
 from vobiz_click_to_call.api.console import _analytics_bucket
+from vobiz_click_to_call.services.call_status import is_inbound_missed_call, status_bucket, talk_seconds
 from vobiz_click_to_call.services.disposition import call_next_action_label
 
 
@@ -14,9 +15,10 @@ class TestWebhookStatusMapping(unittest.TestCase):
                 self.assertEqual(_status_from_hangup("completed", "", previous=previous), "Cancelled")
                 self.assertEqual(_status_from_hangup("hangup", "", previous=previous), "Cancelled")
 
-    def test_connected_hangup_completes_call(self):
-        self.assertEqual(_status_from_hangup("completed", "", previous="Connected"), "Completed")
-        self.assertEqual(_status_from_hangup("hangup", "", previous="Connected"), "Completed")
+    def test_connected_hangup_without_talk_time_is_no_answer(self):
+        self.assertEqual(_status_from_hangup("completed", "", previous="Connected"), "No Answer")
+        self.assertEqual(_status_from_hangup("hangup", "", previous="Connected"), "No Answer")
+        self.assertEqual(_status_from_hangup("completed", "", previous="Connected", billsec=12), "Completed")
 
     def test_billable_normal_clearing_completes_call_even_without_prior_connected(self):
         self.assertEqual(
@@ -35,6 +37,68 @@ class TestWebhookStatusMapping(unittest.TestCase):
             ),
             "connected",
         )
+
+    def test_completed_without_talk_time_is_not_analytics_connected(self):
+        self.assertEqual(
+            _analytics_bucket(
+                {
+                    "status": "Completed",
+                    "call_status": "completed",
+                    "billsec": 0,
+                    "recording_duration": 0,
+                    "duration": 90,
+                }
+            ),
+            "no_answer",
+        )
+
+    def test_completed_with_talk_time_is_analytics_connected(self):
+        self.assertEqual(_analytics_bucket({"status": "Completed", "billsec": 12}), "connected")
+        self.assertEqual(_analytics_bucket({"status": "Completed", "recording_duration": 12}), "connected")
+
+    def test_talk_time_starts_from_customer_answer_for_customer_first_calls(self):
+        self.assertEqual(
+            talk_seconds(
+                {
+                    "call_flow": "Customer First",
+                    "answer_time": "2026-07-13 10:00:00",
+                    "end_time": "2026-07-13 10:00:45",
+                    "billsec": 20,
+                    "recording_duration": 0,
+                }
+            ),
+            45,
+        )
+
+    def test_customer_answer_duration_does_not_make_call_connected(self):
+        row = {
+            "call_flow": "Customer First",
+            "status": "No Answer",
+            "answer_time": "2026-07-13 10:00:00",
+            "end_time": "2026-07-13 10:00:45",
+            "billsec": 0,
+            "recording_duration": 0,
+        }
+
+        self.assertEqual(talk_seconds(row), 45)
+        self.assertEqual(status_bucket(row), "no_answer")
+
+    def test_agent_first_talk_time_prefers_customer_leg_duration_over_billsec(self):
+        self.assertEqual(
+            talk_seconds(
+                {
+                    "call_flow": "Agent First",
+                    "duration": 124,
+                    "billsec": 180,
+                    "recording_duration": 0,
+                }
+            ),
+            124,
+        )
+
+    def test_talk_time_has_no_billsec_or_recording_fallback(self):
+        self.assertEqual(talk_seconds({"call_flow": "Customer First", "billsec": 60, "recording_duration": 30}), 0)
+        self.assertEqual(talk_seconds({"call_flow": "Agent First", "billsec": 60, "recording_duration": 30}), 0)
 
     def test_specific_failure_signals_win_over_generic_completed(self):
         self.assertEqual(_status_from_hangup("completed", "busy", previous="Agent Ringing"), "Busy")
@@ -75,6 +139,65 @@ class TestWebhookStatusMapping(unittest.TestCase):
                 }
             ),
             "Cancelled by Agent",
+        )
+
+    def test_missed_call_definition_is_inbound_customer_call_only(self):
+        self.assertFalse(
+            is_inbound_missed_call(
+                {
+                    "direction": "Outgoing",
+                    "status": "No Answer",
+                    "call_flow": "Customer First",
+                }
+            )
+        )
+        self.assertFalse(
+            is_inbound_missed_call(
+                {
+                    "direction": "Outgoing",
+                    "status": "Busy",
+                    "call_flow": "Customer First",
+                }
+            )
+        )
+        self.assertFalse(
+            is_inbound_missed_call(
+                {
+                    "direction": "Outgoing",
+                    "status": "Cancelled",
+                    "call_flow": "Customer First",
+                }
+            )
+        )
+        self.assertTrue(
+            is_inbound_missed_call(
+                {
+                    "direction": "Incoming",
+                    "status": "Busy",
+                    "dial_status": "busy",
+                    "call_flow": "Customer First",
+                }
+            )
+        )
+        self.assertTrue(
+            is_inbound_missed_call(
+                {
+                    "direction": "Incoming",
+                    "status": "No Answer",
+                    "call_status": "missed",
+                    "call_flow": "Customer First",
+                }
+            )
+        )
+        self.assertFalse(
+            is_inbound_missed_call(
+                {
+                    "direction": "Incoming",
+                    "status": "No Answer",
+                    "billsec": 45,
+                    "call_flow": "Customer First",
+                }
+            )
         )
 
     def test_static_transcription_event_endpoint_matches_provider_payload(self):

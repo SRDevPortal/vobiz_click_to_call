@@ -17,19 +17,40 @@ def call_signal(row: dict[str, Any] | None, *extra_fields: str) -> str:
 
 def talk_seconds(row: dict[str, Any] | None) -> int:
     row = row or {}
+    call_flow = str(row.get("call_flow") or "").strip()
+    if call_flow == "Customer First":
+        customer_answer_duration = _answered_duration_seconds(row)
+        if customer_answer_duration > 0:
+            return customer_answer_duration
+    if call_flow == "Agent First" and frappe.utils.cint(row.get("duration")) > 0:
+        return frappe.utils.cint(row.get("duration"))
+    return 0
+
+
+def billable_talk_seconds(row: dict[str, Any] | None) -> int:
+    row = row or {}
     recording_duration = frappe.utils.cint(row.get("recording_duration"))
     if recording_duration > 3600:
         recording_duration = round(recording_duration / 1000)
-    return recording_duration or frappe.utils.cint(row.get("billsec")) or frappe.utils.cint(row.get("duration"))
+    return recording_duration or frappe.utils.cint(row.get("billsec"))
+
+
+def _answered_duration_seconds(row: dict[str, Any]) -> int:
+    answer_time = row.get("answer_time")
+    end_time = row.get("end_time")
+    if not answer_time or not end_time:
+        return 0
+    try:
+        answer_dt = frappe.utils.get_datetime(answer_time)
+        end_dt = frappe.utils.get_datetime(end_time)
+    except Exception:
+        return 0
+    return max(0, frappe.utils.cint((end_dt - answer_dt).total_seconds()))
 
 
 def has_talk_time(row: dict[str, Any] | None) -> bool:
     row = row or {}
-    return (
-        frappe.utils.cint(row.get("billsec")) > 0
-        or frappe.utils.cint(row.get("recording_duration")) > 0
-        or frappe.utils.cint(row.get("duration")) >= 30
-    )
+    return billable_talk_seconds(row) > 0
 
 
 def status_from_provider(
@@ -56,10 +77,10 @@ def status_from_provider(
         return "Connected"
     if "completed" in signal or "hangup" in signal or "normal-clearing" in signal or "normal clearing" in signal:
         if previous in CONNECTED_STATUSES or previous == "Connected":
-            return "Completed"
+            return "No Answer"
         if previous in {"Agent Answered", "Customer Answered", "Agent Ringing", "Queued", "Ringing"}:
             return "Cancelled"
-        return previous or "Completed"
+        return previous or "No Answer"
     return previous or ""
 
 
@@ -68,13 +89,13 @@ def status_bucket(row: dict[str, Any] | None) -> str:
     status = str(row.get("status") or "").strip()
     if has_talk_time(row):
         return "connected"
-    if status in CONNECTED_STATUSES:
-        return "connected"
 
     signal = call_signal(row)
     if "busy" in signal:
         return "busy"
     if "no-answer" in signal or "no answer" in signal or "timeout" in signal or "unanswered" in signal:
+        return "no_answer"
+    if status in CONNECTED_STATUSES:
         return "no_answer"
     if "cancel" in signal or "reject" in signal or "decline" in signal:
         return "cancelled"
@@ -83,6 +104,13 @@ def status_bucket(row: dict[str, Any] | None) -> str:
     if status in MISSED_STATUSES:
         return "missed"
     return "other"
+
+
+def is_inbound_missed_call(row: dict[str, Any] | None) -> bool:
+    row = row or {}
+    if str(row.get("direction") or "").strip() != "Incoming":
+        return False
+    return status_bucket(row) in {"missed", "busy", "no_answer", "failed", "cancelled"}
 
 
 def normalize_status_values(current_status: str, values: dict[str, Any]) -> dict[str, Any]:

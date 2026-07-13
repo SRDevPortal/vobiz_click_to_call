@@ -8,6 +8,8 @@ import unittest
 APP_ROOT = Path(__file__).resolve().parents[1]
 INBOUND_API = APP_ROOT / "api" / "inbound.py"
 PATCHES = APP_ROOT / "patches.txt"
+HOOKS = APP_ROOT / "hooks.py"
+CDR_SERVICE = APP_ROOT / "services" / "cdr.py"
 INCOMING_MAPPING_JSON = (
     APP_ROOT
     / "vobiz_click_to_call"
@@ -116,6 +118,27 @@ class TestIncomingMappingSource(unittest.TestCase):
             "vobiz_click_to_call.patches.v1_0.add_select_option_crm_lead_status",
             PATCHES.read_text(encoding="utf-8"),
         )
+
+    def test_inbound_busy_dial_result_keeps_busy_status(self):
+        source = self.inbound_source
+        start = source.index("def dial_action(")
+        end = source.index("def find_last_customer_agent", start)
+        dial_action_source = source[start:end]
+
+        self.assertIn('status == "busy"', dial_action_source)
+        self.assertIn('doc.status = "Busy"', dial_action_source)
+        self.assertIn('doc.status = "No Answer"', dial_action_source)
+
+    def test_missing_inbound_cdr_recovery_is_scheduled(self):
+        hooks = HOOKS.read_text(encoding="utf-8")
+        cdr = CDR_SERVICE.read_text(encoding="utf-8")
+
+        self.assertIn("vobiz_click_to_call.services.cdr.enqueue_missing_inbound_cdr_sync", hooks)
+        self.assertIn("def sync_missing_inbound_cdrs", cdr)
+        self.assertIn("def create_missing_inbound_call_log_from_cdr", cdr)
+        self.assertIn('"direction": "Incoming"', cdr)
+        self.assertIn('status_from_cdr(cdr, "No Answer")', cdr)
+        self.assertIn("def _normalize_cdr_phone", cdr)
 
 
 if __name__ == "__main__":

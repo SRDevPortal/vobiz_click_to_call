@@ -6,10 +6,11 @@ from typing import Any
 import frappe
 from frappe import _
 
-from vobiz_ai.api.call_log import sync_linked_summaries
+from vobiz_ai.api.call_log import make_outbound_call_key, sync_linked_summaries, sync_reference_links
 from vobiz_click_to_call.services.client import VobizClient
 from vobiz_click_to_call.services.call_status import status_from_provider
 from vobiz_click_to_call.services.disposition import update_reference_call_metrics
+from vobiz_click_to_call.services.numbers import normalize_phone_number, phone_key
 from vobiz_click_to_call.services.settings import get_settings
 
 CDR_BATCH_SIZE = 10
@@ -68,8 +69,55 @@ def enqueue_recent_cdr_sync(limit: int = 50, batch_size: int = CDR_BATCH_SIZE) -
     return {"queued": len(names), "batch_size": batch_size}
 
 
+def enqueue_missing_inbound_cdr_sync(days: int = 2) -> dict:
+    settings = get_settings()
+    if not settings.enabled or not settings.enable_cdr_sync:
+        return {"queued": 0, "disabled": True}
+
+    days = max(1, min(int(days or 2), 7))
+    dates = [str(frappe.utils.add_days(frappe.utils.today(), -offset)) for offset in range(days)]
+    for date in dates:
+        frappe.enqueue(
+            "vobiz_click_to_call.services.cdr.sync_missing_inbound_cdrs",
+            queue="short",
+            timeout=300,
+            date=date,
+        )
+    return {"queued": len(dates), "dates": dates}
+
+
 def sync_recent_cdrs(limit: int = 50) -> dict:
-    return enqueue_recent_cdr_sync(limit=limit)
+    result = enqueue_recent_cdr_sync(limit=limit)
+    result["missing_inbound"] = enqueue_missing_inbound_cdr_sync()
+    return result
+
+
+def sync_missing_inbound_cdrs(date: str | None = None, limit: int = 100) -> dict:
+    settings = get_settings()
+    if not settings.enabled or not settings.enable_cdr_sync:
+        return {"created": 0, "skipped": 0, "disabled": True}
+
+    date = str(date or frappe.utils.today())
+    response = VobizClient(settings).search_cdrs({"date": date})
+    rows = extract_cdr_rows(response)
+    created = 0
+    skipped = 0
+    names = []
+    for cdr in rows[: max(1, int(limit or 100))]:
+        if not _is_inbound_cdr(cdr):
+            continue
+        if _existing_call_log_for_cdr(cdr):
+            skipped += 1
+            continue
+        doc = create_missing_inbound_call_log_from_cdr(cdr, response)
+        if doc:
+            created += 1
+            names.append(doc.name)
+        else:
+            skipped += 1
+
+    frappe.db.commit()
+    return {"created": created, "skipped": skipped, "call_logs": names}
 
 
 def process_cdr_batch(call_logs: list[str] | tuple[str, ...]) -> dict:
@@ -87,6 +135,162 @@ def process_cdr_batch(call_logs: list[str] | tuple[str, ...]) -> dict:
             frappe.log_error(frappe.get_traceback(), "Vobiz CDR sync failed")
 
     return result
+
+
+def create_missing_inbound_call_log_from_cdr(cdr: dict, raw_response: dict | None = None):
+    uuid = str(cdr.get("uuid") or cdr.get("call_uuid") or "").strip()
+    sip_call_id = str(cdr.get("sip_call_id") or "").strip()
+    if not uuid and not sip_call_id:
+        return None
+
+    customer_number = _normalize_cdr_phone(
+        cdr.get("caller_id_number") or cdr.get("from") or cdr.get("source_number"),
+    )
+    did_number = _normalize_cdr_phone(
+        cdr.get("destination_number") or cdr.get("to") or cdr.get("callee_id_number"),
+    )
+    if not customer_number:
+        return None
+
+    previous = _last_outbound_for_customer(customer_number)
+    if not previous:
+        return None
+
+    doc = frappe.get_doc(
+        {
+            "doctype": "Vobiz Call Log",
+            "call_key": make_outbound_call_key(),
+            "source_app": "vobiz_click_to_call",
+            "reference_doctype": previous.reference_doctype,
+            "reference_name": previous.reference_name,
+            "phone_field": previous.phone_field,
+            "user": previous.user,
+            "user_mobile": previous.user_mobile,
+            "agent_number": previous.user_mobile or previous.agent_number,
+            "customer_number": customer_number,
+            "normalized_customer_number": customer_number,
+            "caller_id": did_number or previous.caller_id,
+            "did_number": did_number or previous.did_number or previous.caller_id,
+            "normalized_did": normalize_phone_number(did_number or previous.did_number or previous.caller_id, default_country_code=_default_country_code()),
+            "call_flow": "Customer First",
+            "direction": "Incoming",
+            "status": status_from_cdr(cdr, "No Answer"),
+            "call_status": cdr.get("status") or cdr.get("call_status") or cdr.get("hangup_cause"),
+            "hangup_cause": cdr.get("hangup_cause") or cdr.get("hangup_cause_name"),
+            "from_number": customer_number,
+            "to_number": did_number,
+            "start_time": _cdr_datetime(cdr.get("start_time") or cdr.get("created_at")),
+            "answer_time": _cdr_datetime(cdr.get("answer_time")),
+            "end_time": _cdr_datetime(cdr.get("end_time") or cdr.get("updated_at")),
+            "creation": _cdr_datetime(cdr.get("created_at") or cdr.get("start_time")),
+            "modified": _cdr_datetime(cdr.get("updated_at") or cdr.get("end_time")),
+            "duration": first_int(cdr, "duration", "call_duration"),
+            "billsec": first_int(cdr, "billsec", "bill_seconds", "billed_duration"),
+            "ring_time": first_int(cdr, "ring_time"),
+            "cost": first_float(cdr, "cost", "total_cost", "total_amount", "charge"),
+            "currency": cdr.get("currency") or "INR",
+            "call_uuid": uuid,
+            "sip_call_id": sip_call_id,
+            "cdr_sync_status": "Synced",
+            "cdr_synced_at": frappe.utils.now(),
+            "cdr_json": json.dumps({"matched_cdr": cdr, "raw_response": raw_response or {}}, indent=2, default=str),
+            "request_json": json.dumps({"source": "missing_inbound_cdr_import", "cdr": cdr}, indent=2, default=str),
+            "recording_status": "Not Started",
+            "transcript_status": "Not Requested",
+            "ai_status": "Pending",
+            "ai_disposition_status": "Not Requested",
+            "error_message": "Recovered from Vobiz inbound CDR because inbound webhook did not create an ERP call log.",
+        }
+    )
+    doc.crm_lead = previous.crm_lead
+    doc.patient = previous.patient
+    sync_reference_links(doc)
+    doc.insert(ignore_permissions=True)
+    update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
+    sync_linked_summaries(doc)
+    return doc
+
+
+def _is_inbound_cdr(cdr: dict) -> bool:
+    direction = str(cdr.get("call_direction") or cdr.get("direction") or "").strip().lower()
+    return direction == "inbound"
+
+
+def _existing_call_log_for_cdr(cdr: dict) -> str:
+    meta = frappe.get_meta("Vobiz Call Log")
+    for fieldname, value in (
+        ("call_uuid", cdr.get("uuid") or cdr.get("call_uuid")),
+        ("sip_call_id", cdr.get("sip_call_id")),
+    ):
+        if not value or not meta.has_field(fieldname):
+            continue
+        name = frappe.db.get_value("Vobiz Call Log", {fieldname: value}, "name")
+        if name:
+            return name
+    return ""
+
+
+def _last_outbound_for_customer(customer_number: str):
+    last10 = phone_key(customer_number)
+    filters = {
+        "source_app": "vobiz_click_to_call",
+        "direction": "Outgoing",
+        "user": ["is", "set"],
+        "user_mobile": ["is", "set"],
+    }
+    fields = [
+        "name",
+        "user",
+        "user_mobile",
+        "agent_number",
+        "caller_id",
+        "did_number",
+        "reference_doctype",
+        "reference_name",
+        "phone_field",
+        "crm_lead",
+        "patient",
+    ]
+    for fieldname, value in (("normalized_customer_number", customer_number), ("customer_number", customer_number)):
+        if not value:
+            continue
+        rows = frappe.get_all("Vobiz Call Log", filters={**filters, fieldname: value}, fields=fields, order_by="creation desc", limit=1)
+        if rows:
+            return rows[0]
+    if not last10:
+        return None
+    rows = frappe.get_all(
+        "Vobiz Call Log",
+        filters={**filters, "customer_number": ["like", f"%{last10}%"]},
+        fields=fields,
+        order_by="creation desc",
+        limit=1,
+    )
+    return rows[0] if rows else None
+
+
+def _cdr_datetime(value):
+    if not value:
+        return None
+    try:
+        parsed = frappe.utils.get_datetime(value)
+        return parsed.replace(tzinfo=None) if getattr(parsed, "tzinfo", None) else parsed
+    except Exception:
+        return value
+
+
+def _default_country_code() -> str:
+    return str(getattr(get_settings(), "default_country_code", None) or "+91")
+
+
+def _normalize_cdr_phone(value: str | None) -> str:
+    text = str(value or "").strip()
+    digits = "".join(ch for ch in text if ch.isdigit())
+    default_country = _default_country_code()
+    default_digits = "".join(ch for ch in default_country if ch.isdigit())
+    if text.startswith("0") and default_digits and len(digits) == 11:
+        return normalize_phone_number(digits[1:], default_country_code=default_country)
+    return normalize_phone_number(text, default_country_code=default_country)
 
 
 def build_cdr_search_params(doc) -> dict[str, Any]:
