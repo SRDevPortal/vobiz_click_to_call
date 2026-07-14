@@ -163,6 +163,23 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("def get_reference_missed_calls", console)
         self.assertIn("def _reference_missed_call_rows", console)
 
+    def test_only_new_missed_call_bubbles_are_prioritized(self):
+        filtered_source = self.method_source("filtered_queue_rows", "paginated_queue_rows")
+        console = CONSOLE_API.read_text(encoding="utf-8")
+        start = console.index("\ndef _attach_queue_missed_calls(")
+        end = console.index("\ndef _sort_queue_by_missed_calls(", start)
+        missed_source = console[start:end]
+
+        self.assertIn("new_missed_calls_first(rows)", filtered_source)
+        self.assertIn("this.is_new_missed_call(a)", filtered_source)
+        self.assertIn("return aNew ? -1 : 1", filtered_source)
+        self.assertIn("queue_sort_by: 'creation_desc'", self.source)
+        self.assertIn('option value="creation_desc" selected', self.source)
+        self.assertIn("this.state.queue_sort_by || this.page.main.find", self.source)
+        self.assertIn('options.get(sort_key, options["creation_desc"])', console)
+        self.assertIn("return rows", missed_source)
+        self.assertNotIn("return _sort_queue_by_missed_calls(rows)", missed_source)
+
     def test_agent_analytics_missed_filter_is_inbound_only(self):
         source = CONSOLE_API.read_text(encoding="utf-8")
         start = source.index("\ndef _analytics_bucket_filter_sql(")

@@ -54,7 +54,7 @@ class VobizAgentConsole {
 			navigating_from_workdesk: false,
 			last_callback_call_log: null,
 			queue_filters: [],
-			queue_sort_by: 'modified_desc',
+			queue_sort_by: 'creation_desc',
 			queue_page: 1,
 			queue_page_size: 25,
 			missed_call_seen: this.load_missed_call_seen(),
@@ -76,6 +76,8 @@ class VobizAgentConsole {
 		this.poller = null;
 		this.search_timer = null;
 		this.heartbeat_timer = null;
+		this.heartbeat_in_flight = false;
+		this.last_heartbeat_at = 0;
 		this.idle_timer = null;
 		this.is_idle_offline = false;
 		this.attendance_tab_id = this.get_attendance_tab_id();
@@ -146,7 +148,7 @@ class VobizAgentConsole {
 								<select class="form-control input-sm" data-role="queue-sort">
 									<option value="modified_desc">${__('Recently Updated')}</option>
 									<option value="modified_asc">${__('Oldest Updated')}</option>
-									<option value="creation_desc">${__('Newest Created')}</option>
+									<option value="creation_desc" selected>${__('Newest Created')}</option>
 									<option value="creation_asc">${__('Oldest Created')}</option>
 									<option value="name_asc">${__('Name A-Z')}</option>
 									<option value="name_desc">${__('Name Z-A')}</option>
@@ -494,7 +496,7 @@ class VobizAgentConsole {
 			this.load();
 		});
 		$main.on('change', '[data-role="queue-sort"]', () => {
-			this.state.queue_sort_by = (this.page.main.find('[data-role="queue-sort"]').val() || 'modified_desc').trim();
+			this.state.queue_sort_by = (this.page.main.find('[data-role="queue-sort"]').val() || 'creation_desc').trim();
 			this.state.queue_page = 1;
 			this.state.selected_queue_keys.clear();
 			this.load();
@@ -531,7 +533,7 @@ class VobizAgentConsole {
 		}
 		const search = (this.page.main.find('[data-role="search"]').val() || '').trim();
 		const queue_source_filter = (this.page.main.find('[data-role="queue-source-filter"]').val() || '').trim();
-		const sort_by = (this.page.main.find('[data-role="queue-sort"]').val() || this.state.queue_sort_by || 'modified_desc').trim();
+		const sort_by = (this.state.queue_sort_by || this.page.main.find('[data-role="queue-sort"]').val() || 'creation_desc').trim();
 		this.state.queue_sort_by = sort_by;
 		frappe.call('vobiz_click_to_call.api.console.get_agent_console_data', {
 			limit: 500,
@@ -612,7 +614,7 @@ class VobizAgentConsole {
 			if (this.is_console_visible() && !this.is_idle_offline) {
 				this.send_console_heartbeat();
 			}
-		}, 5000);
+		}, 25000);
 	}
 
 	stop_console_heartbeat() {
@@ -621,12 +623,27 @@ class VobizAgentConsole {
 	}
 
 	send_console_heartbeat() {
-		frappe.call({
+		if (this.heartbeat_in_flight) return;
+		const now = Date.now();
+		if (now - this.last_heartbeat_at < 20000) return;
+		this.heartbeat_in_flight = true;
+		this.last_heartbeat_at = now;
+		const done = () => {
+			this.heartbeat_in_flight = false;
+		};
+		const request = frappe.call({
 			method: 'vobiz_click_to_call.api.console.heartbeat_agent_console',
 			type: 'POST',
 			freeze: false,
-			args: { tab_id: this.attendance_tab_id }
+			args: { tab_id: this.attendance_tab_id },
+			callback: done,
+			error: done
 		});
+		if (request && typeof request.finally === 'function') {
+			request.finally(done);
+		} else if (request && typeof request.always === 'function') {
+			request.always(done);
+		}
 	}
 
 	mark_console_offline(useKeepalive) {
@@ -871,9 +888,24 @@ class VobizAgentConsole {
 
 	filtered_queue_rows() {
 		const query = (this.page.main.find('[data-role="search"]').val() || '').toLowerCase();
-		return this.state.queue
+		const rows = this.state.queue
 			.map((row, index) => ({ ...row, index }))
 			.filter(row => !query || [row.name, row.title, row.company, row.phone, row.owner, row.status, row.next_action, row.team, row.sr_medical_department, row.sr_followup_id, row.sr_followup_day, row.missed_call_status, row.missed_call_time, row.whatsapp_last_message_preview].join(' ').toLowerCase().includes(query));
+		return this.new_missed_calls_first(rows);
+	}
+
+	new_missed_calls_first(rows) {
+		return (rows || []).slice().sort((a, b) => {
+			const aNew = this.is_new_missed_call(a);
+			const bNew = this.is_new_missed_call(b);
+			if (aNew !== bNew) {
+				return aNew ? -1 : 1;
+			}
+			if (aNew && bNew) {
+				return String(b.missed_call_time || '').localeCompare(String(a.missed_call_time || ''));
+			}
+			return (a.index || 0) - (b.index || 0);
+		});
 	}
 
 	paginated_queue_rows(rows) {
@@ -995,13 +1027,13 @@ class VobizAgentConsole {
 
 	render_queue_sort(meta) {
 		const $sort = this.page.main.find('[data-role="queue-sort"]');
-		const current = this.state.queue_sort_by || $sort.val() || 'modified_desc';
+		const current = this.state.queue_sort_by || $sort.val() || 'creation_desc';
 		$sort.val(current);
 		const isPatient = (meta.doctype || '') === 'Patient';
 		$sort.find('option[value="next_follow_up_asc"]').toggleClass('hidden', isPatient);
 		if (isPatient && $sort.val() === 'next_follow_up_asc') {
-			this.state.queue_sort_by = 'modified_desc';
-			$sort.val('modified_desc');
+			this.state.queue_sort_by = 'creation_desc';
+			$sort.val('creation_desc');
 		}
 	}
 
@@ -1919,7 +1951,7 @@ class VobizAgentConsole {
 					<div class="vobiz-workdesk-card">
 						<h4>${frappe.utils.escape_html(this.queue_meta_value('data_label'))}</h4>
 						<div class="vobiz-field-grid">
-							${fields.map(field => this.workdesk_field_html(field.label, field.value)).join('') || `<div class="vobiz-empty">${__('No fields found for this record.')}</div>`}
+								${fields.map(field => this.workdesk_field_html(field.label, field.value, field.fieldtype)).join('') || `<div class="vobiz-empty">${__('No fields found for this record.')}</div>`}
 						</div>
 					</div>
 					${this.workdesk_lead_disposition_html(row, workdesk)}
@@ -2197,13 +2229,27 @@ class VobizAgentConsole {
 		`;
 	}
 
-	workdesk_field_html(label, value) {
+	workdesk_field_html(label, value, fieldtype) {
 		return `
 			<div class="vobiz-field">
 				<div class="vobiz-field-label">${frappe.utils.escape_html(label || '')}</div>
-				<div class="vobiz-field-value">${frappe.utils.escape_html(value === undefined || value === null || value === '' ? '-' : String(value))}</div>
+				<div class="vobiz-field-value">${this.workdesk_field_value_html(value, fieldtype)}</div>
 			</div>
 		`;
+	}
+
+	workdesk_field_value_html(value, fieldtype) {
+		if (value === undefined || value === null || value === '') {
+			return '-';
+		}
+		const text = String(value);
+		if (['HTML', 'Text Editor'].includes(fieldtype || '')) {
+			if (frappe.utils.sanitize_html) {
+				return frappe.utils.sanitize_html(text);
+			}
+			return frappe.utils.escape_html(this.strip_html(text));
+		}
+		return frappe.utils.escape_html(text);
 	}
 
 	strip_html(value) {

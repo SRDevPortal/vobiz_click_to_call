@@ -23,11 +23,15 @@ QUEUE_SOURCE_DOCTYPES = {
     "CRM Lead": "CRM Lead",
     "Patient": "Patient",
     "CRM Lead and Patient": "",
+    "Patient Encounter": "Patient Encounter",
+    "Issue": "Issue",
     "Discontinued": "CRM Lead",
 }
 COMBINED_QUEUE_SOURCE = "CRM Lead and Patient"
 HTML_TAG_RE = re.compile(r"<[^>]*>")
 CONSOLE_SESSION_TTL_SECONDS = 75
+CONSOLE_HEARTBEAT_DB_TOUCH_SECONDS = 60
+CONSOLE_AVAILABILITY_TOUCH_SECONDS = 60
 CONSOLE_STATIC_CONTEXT_TTL_SECONDS = 60
 CONSOLE_QUEUE_LIMIT_MAX = 100
 ANALYTICS_STATUS_OPTIONS = ("total", "connected", "missed", "busy", "no_answer", "failed", "cancelled")
@@ -53,6 +57,14 @@ def _console_tabs_key(user: str) -> str:
 
 def _console_attendance_key(user: str, shift_date: str) -> str:
     return f"vobiz_agent_console:attendance:{shift_date}:{user}"
+
+
+def _console_heartbeat_db_touch_key(user: str, tab_id: str) -> str:
+    return f"vobiz_agent_console:heartbeat_db_touch:{user}:{tab_id}"
+
+
+def _console_availability_touch_key(user: str) -> str:
+    return f"vobiz_agent_console:availability_touch:{user}"
 
 
 def _console_static_context_key(user: str, queue_source: str, queue_doctype: str, agent_queue_source: str) -> str:
@@ -85,8 +97,9 @@ def heartbeat_agent_console(tab_id: str | None = None) -> dict[str, Any]:
     tab_id = _clean_tab_id(tab_id)
     now = _now_ist()
     _set_attendance_state(user, True, now)
-    _open_or_touch_attendance_session(user, tab_id, now)
-    _mark_console_user_available()
+    if _should_touch_heartbeat_db(user, tab_id):
+        _open_or_touch_attendance_session(user, tab_id, now)
+    _mark_console_user_available(throttled=True)
     _remember_console_tab(user, tab_id)
     frappe.cache().set_value(
         _console_tab_key(user, tab_id),
@@ -257,7 +270,7 @@ def _get_console_static_context(queue_source: str, queue_doctype: str, agent_que
     return context
 
 
-def _mark_console_user_available() -> None:
+def _mark_console_user_available(throttled: bool = False) -> None:
     mapping_name = frappe.db.get_value("Vobiz User Mapping", {"user": frappe.session.user, "enabled": 1}, "name")
     if not mapping_name:
         return
@@ -269,6 +282,14 @@ def _mark_console_user_available() -> None:
     )
     current_call_log = mapping.get("current_call_log")
     if current_call_log and frappe.db.exists("Vobiz Call Log", current_call_log) and is_active_call_log(current_call_log):
+        return
+    if (
+        mapping.get("availability_status") == "Available"
+        and frappe.utils.cint(mapping.get("accept_calls"))
+        and not current_call_log
+    ):
+        return
+    if throttled and not _should_touch_availability(frappe.session.user):
         return
     updates = {
         "availability_status": "Available",
@@ -1362,6 +1383,28 @@ def _clean_tab_id(tab_id: str | None) -> str:
     return tab_id or "default"
 
 
+def _should_touch_heartbeat_db(user: str, tab_id: str) -> bool:
+    key = _console_heartbeat_db_touch_key(user, tab_id)
+    try:
+        if frappe.cache().get_value(key):
+            return False
+        frappe.cache().set_value(key, frappe.utils.now(), expires_in_sec=CONSOLE_HEARTBEAT_DB_TOUCH_SECONDS)
+        return True
+    except Exception:
+        return True
+
+
+def _should_touch_availability(user: str) -> bool:
+    key = _console_availability_touch_key(user)
+    try:
+        if frappe.cache().get_value(key):
+            return False
+        frappe.cache().set_value(key, frappe.utils.now(), expires_in_sec=CONSOLE_AVAILABILITY_TOUCH_SECONDS)
+        return True
+    except Exception:
+        return True
+
+
 def _remember_console_tab(user: str, tab_id: str) -> None:
     tabs = _console_tab_ids(user)
     if tab_id not in tabs:
@@ -2276,6 +2319,32 @@ def _queue_meta(queue_source: str, doctype: str, agent_queue_source: str | None 
             "data_label": _("CRM Lead Data"),
             "empty_message": _("No missed or discontinued CRM leads found"),
         }
+    if doctype == "Patient Encounter":
+        return {
+            "source": queue_source,
+            "agent_source": agent_queue_source,
+            "source_options": source_options,
+            "doctype": doctype,
+            "title": _("Patient Encounter Queue"),
+            "id_label": _("Encounter ID"),
+            "selected_label": _("encounters"),
+            "summary_tab_label": _("Patient Encounter"),
+            "data_label": _("Patient Encounter Data"),
+            "empty_message": _("No patient encounters found"),
+        }
+    if doctype == "Issue":
+        return {
+            "source": queue_source,
+            "agent_source": agent_queue_source,
+            "source_options": source_options,
+            "doctype": doctype,
+            "title": _("Issue Queue"),
+            "id_label": _("Issue ID"),
+            "selected_label": _("issues"),
+            "summary_tab_label": _("Issue"),
+            "data_label": _("Issue Data"),
+            "empty_message": _("No issues found"),
+        }
     return {
         "source": queue_source,
         "agent_source": agent_queue_source,
@@ -2352,7 +2421,14 @@ def _queue_for_doctype(
             "patient_name",
             "customer_name",
             "company_name",
+            "subject",
+            "customer",
+            "patient",
+            "practitioner",
+            "encounter_date",
+            "raised_by",
             "organization",
+            "sr_pe_mobile",
             "mobile_no",
             "mobile",
             "phone",
@@ -2409,9 +2485,9 @@ def _queue_order_by(meta, sort_by: str | None = None) -> str:
         "next_follow_up_asc": ("vobiz_next_follow_up", "asc"),
         "whatsapp_unread_desc": ("modified", "desc"),
     }
-    fieldname, direction = options.get(sort_key, options["modified_desc"])
+    fieldname, direction = options.get(sort_key, options["creation_desc"])
     if fieldname not in standard_fields and not meta.has_field(fieldname):
-        fieldname, direction = options["modified_desc"]
+        fieldname, direction = options["creation_desc"]
     return f"{fieldname} {direction}"
 
 
@@ -2516,7 +2592,14 @@ def _queue_search_fields(meta, loaded_fields: list[str]) -> list[str]:
         "patient_name",
         "customer_name",
         "company_name",
+        "subject",
+        "customer",
+        "patient",
+        "practitioner",
+        "encounter_date",
+        "raised_by",
         "organization",
+        "sr_pe_mobile",
         "mobile_no",
         "mobile",
         "phone",
@@ -2559,15 +2642,19 @@ def _reference_row(doctype: str, doc) -> dict[str, Any]:
         or data.get("customer_name")
         or data.get("first_name")
         or data.get("company_name")
+        or data.get("subject")
+        or data.get("patient")
         or data.get("name")
     )
-    company = data.get("company_name") or data.get("organization") or doctype
-    phone_field = _first_value(data, ("mobile_no", "mobile", "phone", "phone_no"))
+    company = data.get("company_name") or data.get("organization") or data.get("practitioner") or data.get("raised_by") or doctype
+    phone_field = _first_value(data, _phone_field_candidates())
+    if not phone_field.get("value"):
+        phone_field = _linked_customer_phone(data.get("customer"))
     if doctype == "Patient":
         status = data.get("sr_followup_status") or _first_value(data, ("status",)).get("value") or "New"
     else:
         status = _first_value(data, ("status", "lead_status", "sr_lead_status", "qualification_status")).get("value") or "New"
-    next_action = data.get("vobiz_last_call_status") or data.get("vobiz_next_follow_up") or "Initial contact"
+    next_action = data.get("vobiz_last_call_status") or data.get("vobiz_next_follow_up") or data.get("encounter_date") or "Initial contact"
 
     return {
         "doctype": doctype,
@@ -2785,7 +2872,7 @@ def _attach_queue_missed_calls(rows: list[dict[str, Any]]) -> list[dict[str, Any
         ):
             apply(call, (doctype, call.get(link_field)))
 
-    return _sort_queue_by_missed_calls(rows)
+    return rows
 
 
 def _sort_queue_by_missed_calls(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -3016,6 +3103,12 @@ def _lead_details(
             "last_name",
             "sex",
             "gender",
+            "subject",
+            "customer",
+            "priority",
+            "issue_type",
+            "description",
+            "raised_by",
             "mobile",
             "mobile_no",
             "phone",
@@ -3113,7 +3206,7 @@ def _resolve_patient(
     if not allow_phone_lookup:
         return None
 
-    phone = _first_value(doc.as_dict(), ("mobile_no", "mobile", "phone", "phone_no")).get("value")
+    phone = _first_value(doc.as_dict(), _phone_field_candidates()).get("value")
     if not phone or not frappe.db.exists("DocType", "Patient"):
         return None
 
@@ -3392,7 +3485,7 @@ def _ensure_whatsapp_conversation_read(conversation: str) -> None:
 
 
 def _create_defaults(reference_doctype: str, reference_name: str, doc, patient: str | None) -> dict[str, Any]:
-    phone = _first_value(doc.as_dict(), ("mobile_no", "mobile", "phone", "phone_no")).get("value")
+    phone = _first_value(doc.as_dict(), _phone_field_candidates()).get("value")
     customer = doc.get("customer") if callable(getattr(doc, "get", None)) else None
     patient_id = None
     if not customer and patient and frappe.db.exists("DocType", "Patient"):
@@ -3517,6 +3610,60 @@ def _first_value(data: dict[str, Any], candidates: tuple[str, ...]) -> dict[str,
         if value:
             return {"fieldname": fieldname, "value": value}
     return {"fieldname": None, "value": None}
+
+
+def _phone_field_candidates() -> tuple[str, ...]:
+    return (
+        "sr_pe_mobile",
+        "mobile_no",
+        "mobile",
+        "phone",
+        "phone_no",
+        "contact_mobile",
+        "contact_phone",
+        "whatsapp_no",
+        "sr_mobile_no",
+        "sr_whatsapp_no",
+        "alternate_phone",
+    )
+
+
+def _linked_customer_phone(customer: str | None) -> dict[str, Any]:
+    if not customer or not frappe.db.exists("DocType", "Customer") or not frappe.db.exists("Customer", customer):
+        return {"fieldname": None, "value": None}
+    meta = frappe.get_meta("Customer")
+    fields = [fieldname for fieldname in _phone_field_candidates() if meta.has_field(fieldname)]
+    if fields:
+        row = frappe.db.get_value("Customer", customer, fields, as_dict=True) or {}
+        for fieldname in fields:
+            if row.get(fieldname):
+                return {"fieldname": None, "value": row.get(fieldname)}
+    contact_phone = _linked_customer_contact_phone(customer)
+    if contact_phone:
+        return {"fieldname": None, "value": contact_phone}
+    return {"fieldname": None, "value": None}
+
+
+def _linked_customer_contact_phone(customer: str) -> str | None:
+    if not frappe.db.exists("DocType", "Contact") or not frappe.db.exists("DocType", "Dynamic Link"):
+        return None
+    contact_meta = frappe.get_meta("Contact")
+    fields = [fieldname for fieldname in _phone_field_candidates() if contact_meta.has_field(fieldname)]
+    if not fields:
+        return None
+    rows = frappe.get_all(
+        "Dynamic Link",
+        filters={"link_doctype": "Customer", "link_name": customer, "parenttype": "Contact"},
+        fields=["parent"],
+        order_by="modified desc",
+        limit_page_length=20,
+    )
+    for row in rows:
+        contact = frappe.db.get_value("Contact", row.parent, fields, as_dict=True) or {}
+        for fieldname in fields:
+            if contact.get(fieldname):
+                return contact.get(fieldname)
+    return None
 
 
 def _analytics_filter_values(value) -> list[str]:

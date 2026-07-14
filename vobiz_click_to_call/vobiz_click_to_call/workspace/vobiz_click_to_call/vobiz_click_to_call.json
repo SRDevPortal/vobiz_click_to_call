@@ -1,6 +1,6 @@
 {
  "charts": [],
- "content": "[{\"id\": \"vctc_header\", \"type\": \"header\", \"data\": {\"text\": \"Vobiz Click To Call\", \"level\": 4, \"col\": 12}}, {\"id\": \"vctc_agent_console\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Agent Console\", \"col\": 3}}, {\"id\": \"vctc_analytics\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Analytics\", \"col\": 3}}, {\"id\": \"vctc_settings\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Settings\", \"col\": 3}}, {\"id\": \"vctc_user_mapping\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"User Mapping\", \"col\": 3}}, {\"id\": \"vctc_blocked_numbers\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Blocked Numbers\", \"col\": 3}}]",
+ "content": "[{\"id\": \"vctc_header\", \"type\": \"header\", \"data\": {\"text\": \"Vobiz Click To Call\", \"level\": 4, \"col\": 12}}, {\"id\": \"vctc_agent_console\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Agent Console\", \"col\": 3}}, {\"id\": \"vctc_analytics\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Analytics\", \"col\": 3}}, {\"id\": \"vctc_settings\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Settings\", \"col\": 3}}, {\"id\": \"vctc_user_mapping\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"User Mapping\", \"col\": 3}}, {\"id\": \"vctc_incoming_mapping\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Incoming Mapping\", \"col\": 3}}, {\"id\": \"vctc_blocked_numbers\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Blocked Numbers\", \"col\": 3}}]",
  "creation": "2026-05-28 11:10:35.585574",
  "custom_blocks": [],
  "docstatus": 0,
@@ -62,9 +62,19 @@
    "link_type": "DocType",
    "onboard": 0,
    "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Incoming Mapping",
+   "link_count": 0,
+   "link_to": "Vobiz Incoming Mapping",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
   }
  ],
- "modified": "2026-06-01 13:21:03.086362",
+ "modified": "2026-07-14 17:36:01.534716",
  "modified_by": "Administrator",
  "module": "Vobiz Click To Call",
  "name": "Vobiz Click To Call",
@@ -109,6 +119,13 @@
    "icon": "slash",
    "label": "Blocked Numbers",
    "link_to": "Vobiz Blocked Number",
+   "type": "DocType"
+  },
+  {
+   "doc_view": "List",
+   "icon": "branch",
+   "label": "Incoming Mapping",
+   "link_to": "Vobiz Incoming Mapping",
    "type": "DocType"
   }
  ],

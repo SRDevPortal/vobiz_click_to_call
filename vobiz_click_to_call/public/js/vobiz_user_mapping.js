@@ -124,6 +124,7 @@ function setup_multi_value_field(frm, opts, show) {
 				return;
 			}
 			add_multi_value(frm, opts.store_fieldname, value);
+			frm.set_value(opts.fieldname, '');
 			render_multi_values(frm, opts);
 		});
 	}
@@ -149,8 +150,10 @@ function render_multi_values(frm, opts) {
 		</span>
 	`).join('') : `<div class="text-muted small">${frappe.utils.escape_html(opts.empty_text)}</div>`);
 	$list.find('[data-remove-value]').on('click', (event) => {
-		const value = $(event.currentTarget).data('remove-value');
-		remove_multi_value(frm, opts.store_fieldname, value);
+		event.preventDefault();
+		event.stopPropagation();
+		const value = ($(event.currentTarget).attr('data-remove-value') || '').toString().trim();
+		remove_multi_value(frm, opts, value);
 		render_multi_values(frm, opts);
 	});
 }
@@ -176,7 +179,11 @@ function add_multi_value(frm, fieldname, value) {
 	}
 }
 
-function remove_multi_value(frm, fieldname, value) {
-	const values = get_multi_values(frm.doc[fieldname]).filter(row => row !== value);
-	frm.set_value(fieldname, values.join('\n'));
+function remove_multi_value(frm, opts, value) {
+	value = (value || '').toString().trim();
+	const values = get_multi_values(frm.doc[opts.store_fieldname]).filter(row => row.toString().trim() !== value);
+	frm.set_value(opts.store_fieldname, values.join('\n'));
+	if ((frm.doc[opts.fieldname] || '').toString().trim() === value) {
+		frm.set_value(opts.fieldname, '');
+	}
 }

@@ -8,6 +8,7 @@ from frappe import _
 
 from vobiz_ai.api.call_log import create_outbound_call_log, sync_linked_summaries
 from vobiz_click_to_call.api.recording import recording_proxy_url
+from vobiz_click_to_call.services.call_log_update import save_doc_latest, snapshot_doc
 from vobiz_click_to_call.services.client import VobizClient, extract_provider_id
 from vobiz_click_to_call.services.call_status import status_from_provider
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
@@ -30,6 +31,7 @@ PHONE_FIELD_HINTS = (
 )
 
 PREFERRED_PHONE_FIELDS = (
+    "sr_pe_mobile",
     "mobile_no",
     "mobile",
     "phone",
@@ -207,8 +209,9 @@ def start_call(
     if settings.max_call_duration:
         payload["time_limit"] = int(settings.max_call_duration)
 
+    before = snapshot_doc(call_log)
     call_log.request_json = json.dumps(redact_callback_tokens(payload), indent=2)
-    call_log.save(ignore_permissions=True)
+    call_log = save_doc_latest(call_log, before)
     log_vobiz_event("Provider make_call payload prepared", call_log=call_log.name, payload=redact_callback_tokens(payload))
     frappe.db.commit()
 
@@ -218,12 +221,13 @@ def start_call(
         if _is_unowned_from_number_error(exc) and default_caller_id and caller_id != default_caller_id:
             caller_id = default_caller_id
             payload["from"] = caller_id
+            before = snapshot_doc(call_log)
             call_log.caller_id = caller_id
             call_log.did_number = caller_id
             call_log.normalized_did = caller_id
             call_log.request_json = json.dumps(redact_callback_tokens(payload), indent=2)
             call_log.error_message = ""
-            call_log.save(ignore_permissions=True)
+            call_log = save_doc_latest(call_log, before)
             log_vobiz_event(
                 "Provider rejected mapped caller ID; retrying with default caller ID",
                 call_log=call_log.name,
@@ -240,10 +244,11 @@ def start_call(
             _fail_provider_call(call_log, exc)
             raise
 
+    before = snapshot_doc(call_log)
     call_log.response_json = json.dumps(response, indent=2, default=str)
     call_log.request_uuid = extract_provider_id(response, "request_uuid", "requestUUID", "request_id", "requestId")
     call_log.call_uuid = extract_provider_id(response, "call_uuid", "callUUID", "uuid", "CallUUID")
-    call_log.save(ignore_permissions=True)
+    call_log = save_doc_latest(call_log, before)
     update_reference_call_metrics(reference_doctype, reference_name)
     sync_linked_summaries(call_log)
     log_vobiz_event("Provider make_call response received", call_log=call_log.name, payload=response)
@@ -264,9 +269,10 @@ def _is_unowned_from_number_error(exc: Exception) -> bool:
 
 
 def _fail_provider_call(call_log, exc: Exception) -> None:
+    before = snapshot_doc(call_log)
     call_log.status = "Failed"
     call_log.error_message = str(exc)
-    call_log.save(ignore_permissions=True)
+    call_log = save_doc_latest(call_log, before)
     restore_mapping_after_call(call_log.name)
     frappe.db.commit()
     log_vobiz_event(
@@ -338,6 +344,7 @@ def sync_live_call_if_finished(doc) -> None:
         message = str(exc).lower()
         if "not found" not in message and "call not found" not in message:
             return
+        before = snapshot_doc(doc)
         doc.status = status_from_provider(
             {"status": "completed", "call_status": "not found", "duration": doc.duration, "billsec": doc.billsec},
             previous=doc.status,
@@ -346,7 +353,7 @@ def sync_live_call_if_finished(doc) -> None:
         doc.hangup_cause = doc.hangup_cause or "LIVE_CALL_NOT_FOUND"
         doc.end_time = doc.end_time or frappe.utils.now()
         doc.response_json = merge_json(doc.response_json, {"live_status_warning": str(exc)})
-        doc.save(ignore_permissions=True)
+        doc = save_doc_latest(doc, before)
         restore_mapping_after_call(doc.name)
         update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
         frappe.db.commit()
@@ -354,11 +361,12 @@ def sync_live_call_if_finished(doc) -> None:
 
     provider_status = _provider_live_status(response)
     if provider_status in {"completed", "hangup", "ended", "failed", "busy", "no-answer", "no answer", "cancelled", "canceled"}:
+        before = snapshot_doc(doc)
         doc.status = _terminal_status_from_provider(provider_status, doc.status, doc)
         doc.call_status = provider_status
         doc.end_time = doc.end_time or frappe.utils.now()
         doc.response_json = merge_json(doc.response_json, {"live_status_response": response})
-        doc.save(ignore_permissions=True)
+        doc = save_doc_latest(doc, before)
         restore_mapping_after_call(doc.name)
         update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
         frappe.db.commit()
@@ -445,11 +453,12 @@ def cancel_call(call_log: str) -> dict[str, Any]:
         message = _("Queued call cleared locally.")
         log_vobiz_event("Cancel skipped provider hangup; no UUID", call_log=doc.name, severity="Warning", payload=response)
 
+    before = snapshot_doc(doc)
     doc.status = "Cancelled"
     doc.error_message = "Call cancelled by user."
     doc.end_time = doc.end_time or frappe.utils.now()
     doc.response_json = merge_json(doc.response_json, {"cancel_response": response})
-    doc.save(ignore_permissions=True)
+    doc = save_doc_latest(doc, before)
     restore_mapping_after_call(doc.name)
     update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
     frappe.db.commit()
@@ -725,7 +734,7 @@ def resolve_target_number(doc, phone_field: str | None = None, phone_number: str
         return value, phone_field
 
     if phone_number:
-        for fieldname, value in collect_phone_candidates(doc):
+        for fieldname, value in collect_phone_candidates(doc) + collect_linked_customer_phone_candidates(doc):
             if numbers_match(value, phone_number):
                 return phone_number, fieldname
         frappe.throw(_("Selected phone number was not found on this document."))
@@ -736,6 +745,10 @@ def resolve_target_number(doc, phone_field: str | None = None, phone_number: str
             return doc.get(fieldname), fieldname
 
     for fieldname, value in collect_phone_candidates(doc):
+        if value:
+            return value, fieldname
+
+    for fieldname, value in collect_linked_customer_phone_candidates(doc):
         if value:
             return value, fieldname
 
@@ -760,6 +773,46 @@ def collect_phone_candidates(doc) -> list[tuple[str, str]]:
             if value:
                 candidates.append((df.fieldname, value))
 
+    return candidates
+
+
+def collect_linked_customer_phone_candidates(doc) -> list[tuple[str, str]]:
+    customer = doc.get("customer") if doc.meta.has_field("customer") else ""
+    if not customer or not frappe.db.exists("DocType", "Customer") or not frappe.db.exists("Customer", customer):
+        return []
+    customer_doc = frappe.get_doc("Customer", customer)
+    candidates = []
+    for fieldname in PREFERRED_PHONE_FIELDS:
+        df = customer_doc.meta.get_field(fieldname)
+        if df and customer_doc.get(fieldname):
+            candidates.append((f"customer.{fieldname}", customer_doc.get(fieldname)))
+    for fieldname, value in collect_phone_candidates(customer_doc):
+        key = f"customer.{fieldname}"
+        if value and all(existing_key != key for existing_key, _existing_value in candidates):
+            candidates.append((key, value))
+    for fieldname, value in collect_linked_customer_contact_phone_candidates(customer):
+        key = f"customer.contact.{fieldname}"
+        if value and all(existing_key != key for existing_key, _existing_value in candidates):
+            candidates.append((key, value))
+    return candidates
+
+
+def collect_linked_customer_contact_phone_candidates(customer: str) -> list[tuple[str, str]]:
+    if not frappe.db.exists("DocType", "Contact") or not frappe.db.exists("DocType", "Dynamic Link"):
+        return []
+    rows = frappe.get_all(
+        "Dynamic Link",
+        filters={"link_doctype": "Customer", "link_name": customer, "parenttype": "Contact"},
+        fields=["parent"],
+        order_by="modified desc",
+        limit_page_length=20,
+    )
+    candidates = []
+    for row in rows:
+        contact = frappe.get_doc("Contact", row.parent)
+        for fieldname, value in collect_phone_candidates(contact):
+            if value and all(existing_key != fieldname for existing_key, _existing_value in candidates):
+                candidates.append((fieldname, value))
     return candidates
 
 

@@ -42,9 +42,49 @@ class TestIncomingMappingSource(unittest.TestCase):
         source = self.inbound_source
 
         self.assertIn("existing = find_existing_reference(customer_number)", source)
+        self.assertIn('existing.get("doctype") == "Patient"', source)
+        self.assertIn("route_existing_patient_inbound(existing[\"name\"], customer_number, did_number, payload, settings)", source)
+        self.assertIn('existing.get("doctype") == "CRM Lead"', source)
+        self.assertIn("route_existing_crm_lead_inbound(existing[\"name\"], customer_number, did_number, payload, settings)", source)
         self.assertIn("return None", source[source.index("def find_existing_reference"): source.index("def find_incoming_mapping")])
         self.assertIn('find_by_phone("Patient"', source)
         self.assertIn('find_by_phone("CRM Lead"', source)
+
+    def test_existing_patient_overrides_lead_owner_and_routes_by_department_followup(self):
+        source = self.inbound_source
+        existing_start = source.index("existing = find_existing_reference(customer_number)")
+        patient_index = source.index('existing.get("doctype") == "Patient"', existing_start)
+        lead_index = source.index('existing.get("doctype") == "CRM Lead"', existing_start)
+        start = source.index("def resolve_patient_inbound_target")
+        end = source.index("def resolve_lead_owner_inbound_target", start)
+        patient_source = source[start:end]
+
+        self.assertLess(patient_index, lead_index)
+        self.assertIn("patient_route_mappings(patient)", patient_source)
+        self.assertIn('"route_type": "patient_mapping"', patient_source)
+        self.assertIn('"route_type": "patient_mapping_fallback_user"', patient_source)
+        self.assertIn('"route_type": "patient_end_fallback_mobile"', patient_source)
+        self.assertIn("_patient_mapping_matches(row, patient_department, patient_followup_id)", patient_source)
+        self.assertIn('mapping.get("sr_medical_departments")', patient_source)
+        self.assertIn('mapping.get("sr_followup_ids")', patient_source)
+
+    def test_existing_crm_lead_routes_to_lead_owner_fallback_then_end_fallback(self):
+        source = self.inbound_source
+        start = source.index("def resolve_lead_owner_inbound_target")
+        end = source.index("def create_unknown_inbound_lead", start)
+        owner_source = source[start:end]
+        fallback_start = source.index("def _next_inbound_fallback")
+        fallback_end = source.index("def _active_agent_mobile", fallback_start)
+        fallback_source = source[fallback_start:fallback_end]
+
+        self.assertIn('owner = (lead.get("lead_owner") or "").strip()', owner_source)
+        self.assertIn('"route_type": "lead_owner"', owner_source)
+        self.assertIn("_fallback_users(mapping)", owner_source)
+        self.assertIn('"route_type": "lead_owner_fallback_user"', owner_source)
+        self.assertIn("_end_fallback_mobile(settings)", owner_source)
+        self.assertIn('"route_type": "lead_owner_end_fallback_mobile"', owner_source)
+        self.assertIn('"skip_busy_callback_ai_fallback": True', owner_source)
+        self.assertIn('"" if _request_flag(doc, "skip_busy_callback_ai_fallback") else _busy_callback_ai_fallback_mobile()', fallback_source)
 
     def test_unknown_route_uses_current_console_availability_contract(self):
         source = self.inbound_source

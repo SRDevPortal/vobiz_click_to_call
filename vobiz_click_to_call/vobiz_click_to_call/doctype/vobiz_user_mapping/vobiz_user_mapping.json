@@ -61,7 +61,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Queue Source",
-   "options": "CRM Lead\nPatient\nCRM Lead and Patient\nDiscontinued"
+   "options": "CRM Lead\nPatient\nCRM Lead and Patient\nPatient Encounter\nIssue\nDiscontinued"
   },
   {
    "description": "The phone number Vobiz will dial after the customer answers.",

@@ -1,14 +1,62 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from vobiz_click_to_call.api.webhook import _status_from_dial_status, _status_from_hangup
 from vobiz_click_to_call.api.console import _analytics_bucket
+from vobiz_click_to_call.services.call_log_update import save_doc_latest
+from vobiz_click_to_call.services import call_log_update
 from vobiz_click_to_call.services.call_status import is_inbound_missed_call, status_bucket, talk_seconds
 from vobiz_click_to_call.services.disposition import call_next_action_label
 
 
 class TestWebhookStatusMapping(unittest.TestCase):
+    def test_timestamp_retry_reapplies_only_changed_fields(self):
+        class Field:
+            def __init__(self, fieldname):
+                self.fieldname = fieldname
+                self.fieldtype = "Data"
+
+        class Meta:
+            fields = [Field("status"), Field("recording_url")]
+
+        class FakeDoc:
+            doctype = "Vobiz Call Log"
+            name = "CALL-1"
+            meta = Meta()
+
+            def __init__(self, status, recording_url="", fail_once=False):
+                self.status = status
+                self.recording_url = recording_url
+                self.fail_once = fail_once
+                self.saved = False
+
+            def get(self, fieldname):
+                return getattr(self, fieldname)
+
+            def set(self, fieldname, value):
+                setattr(self, fieldname, value)
+
+            def save(self, ignore_permissions=True):
+                if self.fail_once:
+                    self.fail_once = False
+                    raise call_log_update.frappe.TimestampMismatchError()
+                self.saved = True
+
+        stale = FakeDoc("Queued", fail_once=True)
+        before = {"status": "Queued", "recording_url": ""}
+        stale.status = "Completed"
+        latest = FakeDoc("Connected", recording_url="https://recording.example/file.mp3")
+
+        with patch.object(call_log_update.frappe, "get_doc", return_value=latest):
+            saved = save_doc_latest(stale, before)
+
+        self.assertIs(saved, latest)
+        self.assertTrue(latest.saved)
+        self.assertEqual(latest.status, "Completed")
+        self.assertEqual(latest.recording_url, "https://recording.example/file.mp3")
+
     def test_pre_bridge_hangup_is_terminal_cancelled(self):
         for previous in ("Queued", "Ringing", "Customer Answered", "Agent Answered", "Agent Ringing"):
             with self.subTest(previous=previous):

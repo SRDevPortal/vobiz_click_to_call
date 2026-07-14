@@ -10,6 +10,7 @@ from werkzeug.wrappers import Response
 from vobiz_ai.api.call_log import sync_linked_summaries
 from vobiz_click_to_call.api.call import restore_mapping_after_call
 from vobiz_click_to_call.services.ai import enqueue_ai_disposition
+from vobiz_click_to_call.services.call_log_update import save_doc_latest, snapshot_doc
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
 from vobiz_click_to_call.services.disposition import update_reference_call_metrics
 from vobiz_click_to_call.services.numbers import provider_phone_number
@@ -24,18 +25,20 @@ def answer(call_log: str | None = None, token: str | None = None):
         return _xml_response(_hangup_xml())
 
     _log_webhook_event("answer received", doc, payload)
+    before = snapshot_doc(doc)
     _apply_common_payload(doc, payload)
     doc.status = "Agent Answered" if doc.call_flow == "Agent First" else "Customer Answered"
     if not doc.answer_time:
         doc.answer_time = frappe.utils.now()
-    doc.save(ignore_permissions=True)
+    doc = save_doc_latest(doc, before)
     _append_callback_if_enabled(doc.name, "answer", payload)
     frappe.db.commit()
 
     if not doc.user_mobile:
+        before = snapshot_doc(doc)
         doc.status = "Failed"
         doc.error_message = "Mapped user mobile number is missing."
-        doc.save(ignore_permissions=True)
+        doc = save_doc_latest(doc, before)
         frappe.db.commit()
         _log_webhook_event("answer failed: mapped user mobile missing", doc, payload, severity="Error")
         return _xml_response(_hangup_xml())
@@ -53,12 +56,13 @@ def ring(call_log: str | None = None, token: str | None = None):
         return _plain_response("IGNORED")
 
     _log_webhook_event("ring received", doc, payload)
+    before = snapshot_doc(doc)
     _apply_common_payload(doc, payload)
     if doc.status == "Queued":
         doc.status = "Ringing"
     if not doc.start_time:
         doc.start_time = frappe.utils.now()
-    doc.save(ignore_permissions=True)
+    doc = save_doc_latest(doc, before)
     _append_callback_if_enabled(doc.name, "ring", payload)
     frappe.db.commit()
     return _plain_response("OK")
@@ -72,6 +76,7 @@ def dial_callback(call_log: str | None = None, token: str | None = None):
         return _plain_response("IGNORED")
 
     _log_webhook_event("dial_callback received", doc, payload)
+    before = snapshot_doc(doc)
     _apply_common_payload(doc, payload)
     dial_status = _first_value(
         payload,
@@ -89,7 +94,7 @@ def dial_callback(call_log: str | None = None, token: str | None = None):
     if doc.status == "Connected" and not doc.answer_time:
         doc.answer_time = frappe.utils.now()
 
-    doc.save(ignore_permissions=True)
+    doc = save_doc_latest(doc, before)
     _append_callback_if_enabled(doc.name, "dial_callback", payload)
     frappe.db.commit()
     if doc.status == "Connected":
@@ -105,6 +110,7 @@ def dial_action(call_log: str | None = None, token: str | None = None):
         return _xml_response(_hangup_xml())
 
     _log_webhook_event("dial_action received", doc, payload)
+    before = snapshot_doc(doc)
     _apply_common_payload(doc, payload)
     dial_status = _first_value(
         payload,
@@ -129,7 +135,7 @@ def dial_action(call_log: str | None = None, token: str | None = None):
             if not doc.end_time:
                 doc.end_time = frappe.utils.now()
 
-    doc.save(ignore_permissions=True)
+    doc = save_doc_latest(doc, before)
     _append_callback_if_enabled(doc.name, "dial_action", payload)
     if doc.status in {"Completed", "Failed", "Busy", "No Answer", "Cancelled"}:
         update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
@@ -154,6 +160,7 @@ def hangup(call_log: str | None = None, token: str | None = None):
         return _plain_response("IGNORED")
 
     _log_webhook_event("hangup received", doc, payload)
+    before = snapshot_doc(doc)
     _apply_common_payload(doc, payload)
     status = _first_value(payload, "CallStatus", "call_status", "Status", "status")
     hangup_cause = _first_value(payload, "HangupCause", "hangup_cause", "Cause", "cause")
@@ -173,7 +180,7 @@ def hangup(call_log: str | None = None, token: str | None = None):
     if not doc.end_time:
         doc.end_time = frappe.utils.now()
 
-    doc.save(ignore_permissions=True)
+    doc = save_doc_latest(doc, before)
     _append_callback_if_enabled(doc.name, "hangup", payload)
     restore_mapping_after_call(doc.name)
     update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
@@ -191,12 +198,13 @@ def fallback(call_log: str | None = None, token: str | None = None):
         return _plain_response("IGNORED")
 
     _log_webhook_event("fallback received", doc, payload, severity="Error")
+    before = snapshot_doc(doc)
     _apply_common_payload(doc, payload)
     doc.status = "Failed"
     doc.error_message = _first_value(payload, "error", "Error", "message", "Message") or "Vobiz fallback callback received."
     if not doc.end_time:
         doc.end_time = frappe.utils.now()
-    doc.save(ignore_permissions=True)
+    doc = save_doc_latest(doc, before)
     _append_callback_if_enabled(doc.name, "fallback", payload)
     restore_mapping_after_call(doc.name)
     update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
@@ -213,6 +221,7 @@ def recording_callback(call_log: str | None = None, token: str | None = None):
         return _plain_response("IGNORED")
 
     data = _with_nested_response(payload)
+    before = snapshot_doc(doc)
     _apply_common_payload(doc, data)
     doc.recording_id = doc.recording_id or _first_value(data, "recording_id", "RecordingID", "id")
     doc.recording_url = _first_value(data, "record_url", "RecordUrl", "RecordingUrl", "RecordFile", "url") or doc.recording_url
@@ -225,7 +234,7 @@ def recording_callback(call_log: str | None = None, token: str | None = None):
     )
     doc.recording_status = "Completed"
     doc.recording_response_json = _json_dumps(data)
-    doc.save(ignore_permissions=True)
+    doc = save_doc_latest(doc, before)
     _append_callback_if_enabled(doc.name, "recording_callback", payload)
     frappe.db.commit()
     return _plain_response("OK")
@@ -262,6 +271,7 @@ def transcription_event():
 def _apply_transcription_payload(doc, data: dict, original_payload: dict | None = None) -> None:
     error = _first_value(data, "error", "Error")
     transcript = _first_value(data, "transcription", "transcript", "text", "transcription_text", "Transcript")
+    before = snapshot_doc(doc)
     _apply_common_payload(doc, data)
     doc.recording_id = doc.recording_id or _first_value(data, "recording_id", "RecordingID")
     doc.transcription_id = doc.transcription_id or _first_value(data, "transcription_id", "TranscriptionID", "id")
@@ -279,7 +289,7 @@ def _apply_transcription_payload(doc, data: dict, original_payload: dict | None 
         doc.transcript_status = "Failed"
         doc.transcript_error = "Vobiz transcription callback did not include transcript text."
 
-    doc.save(ignore_permissions=True)
+    doc = save_doc_latest(doc, before)
     _append_callback_if_enabled(doc.name, "transcription_callback", original_payload or data)
     frappe.db.commit()
 
