@@ -1821,6 +1821,7 @@ class VobizAgentConsole {
 			this.load_workdesk_tab(row, context, tab, $body, render);
 		});
 		$body.on('click', '[data-workdesk-action]', (e) => this.handle_workdesk_action($(e.currentTarget).data('workdesk-action'), row, context, $body));
+		$body.on('change', '[data-workdesk-status]', (e) => this.save_workdesk_status(row, context, $(e.currentTarget)));
 		$body.on('scroll', '[data-wa-chat-list]', (e) => {
 			const el = e.currentTarget;
 			if (el.scrollTop <= 80) {
@@ -1951,7 +1952,7 @@ class VobizAgentConsole {
 					<div class="vobiz-workdesk-card">
 						<h4>${frappe.utils.escape_html(this.queue_meta_value('data_label'))}</h4>
 						<div class="vobiz-field-grid">
-								${fields.map(field => this.workdesk_field_html(field.label, field.value, field.fieldtype)).join('') || `<div class="vobiz-empty">${__('No fields found for this record.')}</div>`}
+								${fields.map(field => this.workdesk_field_html(field.label, field.value, field.fieldtype, field, row)).join('') || `<div class="vobiz-empty">${__('No fields found for this record.')}</div>`}
 						</div>
 					</div>
 					${this.workdesk_lead_disposition_html(row, workdesk)}
@@ -2229,11 +2230,37 @@ class VobizAgentConsole {
 		`;
 	}
 
-	workdesk_field_html(label, value, fieldtype) {
+	workdesk_field_html(label, value, fieldtype, field, row) {
+		if (this.is_editable_workdesk_status(field, row)) {
+			return this.workdesk_status_field_html(field, row);
+		}
 		return `
 			<div class="vobiz-field">
 				<div class="vobiz-field-label">${frappe.utils.escape_html(label || '')}</div>
 				<div class="vobiz-field-value">${this.workdesk_field_value_html(value, fieldtype)}</div>
+			</div>
+		`;
+	}
+
+	is_editable_workdesk_status(field, row) {
+		return row
+			&& ['Patient Encounter', 'Issue'].includes(row.doctype)
+			&& field
+			&& field.fieldname === 'status'
+			&& Array.isArray(field.options)
+			&& field.options.length;
+	}
+
+	workdesk_status_field_html(field, row) {
+		const current = field.value || '';
+		return `
+			<div class="vobiz-field">
+				<div class="vobiz-field-label">${frappe.utils.escape_html(field.label || __('Status'))}</div>
+				<select class="form-control input-sm" data-workdesk-status data-reference-doctype="${frappe.utils.escape_html(row.doctype || '')}" data-reference-name="${frappe.utils.escape_html(row.name || '')}">
+					${field.options.map(option => `
+						<option value="${frappe.utils.escape_html(option)}" ${option === current ? 'selected' : ''}>${frappe.utils.escape_html(option)}</option>
+					`).join('')}
+				</select>
 			</div>
 		`;
 	}
@@ -2649,6 +2676,35 @@ class VobizAgentConsole {
 			}
 			setTimeout(() => this.open_whatsapp(row, $body), 60);
 		}
+	}
+
+	save_workdesk_status(row, context, $select) {
+		const status = ($select.val() || '').trim();
+		if (!row || !row.doctype || !row.name || !status) {
+			return;
+		}
+
+		$select.prop('disabled', true);
+		frappe.call({
+			method: 'vobiz_click_to_call.api.console.update_reference_status',
+			type: 'POST',
+			args: {
+				reference_doctype: row.doctype,
+				reference_name: row.name,
+				status
+			}
+		}).then(() => {
+			row.status = status;
+			const fields = (((context || {}).workdesk || {}).lead || {}).fields || [];
+			const field = fields.find(item => item.fieldname === 'status');
+			if (field) {
+				field.value = status;
+			}
+			frappe.show_alert({ message: __('Status updated'), indicator: 'green' });
+			this.load();
+		}).always(() => {
+			$select.prop('disabled', false);
+		});
 	}
 
 	save_workdesk_note(row, $body) {
@@ -3585,6 +3641,7 @@ class VobizAgentConsole {
 
 	maybe_prompt_workdesk_disposition(call) {
 		if (!call || !call.name || !this.is_terminal_status(call.status)) return;
+		if (this.should_skip_post_call_disposition(call, this.state.active_workdesk_row || this.state.selected || {})) return;
 		if (this.state.ai_disposition_enabled) return;
 		if (this.state.disposition_prompted_call_log === call.name) return;
 		if (this.state.active_disposition_call_log === call.name) return;
@@ -3607,6 +3664,12 @@ class VobizAgentConsole {
 	}
 
 	open_post_call_disposition_dialog(call, row, on_done, options = {}) {
+		if (this.should_skip_post_call_disposition(call, row)) {
+			this.state.active_disposition_call_log = null;
+			this.state.disposition_prompted_call_log = call && call.name ? call.name : null;
+			if (on_done) on_done();
+			return;
+		}
 		if (this.state.active_disposition_call_log === call.name) return;
 		if (!options.disposition_context_refreshed && (row.doctype || call.reference_doctype) && (row.name || call.reference_name)) {
 			frappe.call('vobiz_click_to_call.api.console.get_reference_context', {
@@ -3842,6 +3905,11 @@ class VobizAgentConsole {
 				});
 			});
 		}
+	}
+
+	should_skip_post_call_disposition(call, row = {}) {
+		const doctype = (row && row.doctype) || (call && call.reference_doctype) || '';
+		return ['Issue', 'Patient Encounter'].includes(doctype);
 	}
 
 	save_disposition() {

@@ -30,7 +30,9 @@ def get_auth_credentials(settings=None) -> tuple[str, str]:
 def get_allowed_doctypes(settings=None) -> set[str]:
     settings = settings or get_settings()
     raw = settings.allowed_doctypes or "CRM Lead\nContact\nPatient\nCustomer"
-    return {row.strip() for row in raw.replace(",", "\n").splitlines() if row.strip()}
+    doctypes = {row.strip() for row in raw.replace(",", "\n").splitlines() if row.strip()}
+    doctypes.update({"Patient Encounter", "Issue"})
+    return doctypes
 
 
 def get_default_country_code(settings=None) -> str:

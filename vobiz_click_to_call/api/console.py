@@ -358,6 +358,24 @@ def save_reference_note(reference_doctype: str, reference_name: str, note: str) 
     return {"success": True, "reference_doctype": reference_doctype, "reference_name": reference_name}
 
 
+@frappe.whitelist(methods=["POST"])
+def update_reference_status(reference_doctype: str, reference_name: str, status: str) -> dict[str, Any]:
+    if reference_doctype not in {"Patient Encounter", "Issue"}:
+        frappe.throw(_("Status update is not enabled for this DocType."))
+    doc = _get_permitted_reference(reference_doctype, reference_name)
+    if not doc.has_permission("write") and not _has_mapped_queue_access(reference_doctype):
+        frappe.throw(_("Not permitted."), frappe.PermissionError)
+
+    status = (status or "").strip()
+    options = _status_options(reference_doctype)
+    if not status or status not in options:
+        frappe.throw(_("Select a valid status."))
+
+    frappe.db.set_value(reference_doctype, reference_name, "status", status, update_modified=True)
+    frappe.db.commit()
+    return {"success": True, "status": status}
+
+
 def _get_permitted_reference(reference_doctype: str, reference_name: str):
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
@@ -368,6 +386,12 @@ def _get_permitted_reference(reference_doctype: str, reference_name: str):
     if not doc.has_permission("read") and not _has_mapped_patient_access(reference_doctype, reference_name):
         frappe.throw(_("Not permitted."), frappe.PermissionError)
     return doc
+
+
+def _has_mapped_queue_access(reference_doctype: str) -> bool:
+    agent = _agent_context()
+    queue_source = (agent.get("queue_source") or "").strip()
+    return QUEUE_SOURCE_DOCTYPES.get(queue_source) == reference_doctype
 
 
 def _has_mapped_patient_access(reference_doctype: str, reference_name: str) -> bool:
@@ -3129,6 +3153,7 @@ def _lead_details(
                     "label": df.label or fieldname,
                     "value": doc.get(fieldname),
                     "fieldtype": df.fieldtype,
+                    "options": _status_options(reference_doctype) if fieldname == "status" else [],
                 }
             )
         return {"doctype": reference_doctype, "name": reference_name, "fields": fields}
@@ -3626,6 +3651,15 @@ def _phone_field_candidates() -> tuple[str, ...]:
         "sr_whatsapp_no",
         "alternate_phone",
     )
+
+
+def _status_options(doctype: str) -> list[str]:
+    if not doctype or not frappe.db.exists("DocType", doctype):
+        return []
+    field = frappe.get_meta(doctype).get_field("status")
+    if not field:
+        return []
+    return [row.strip() for row in (field.options or "").splitlines() if row.strip()]
 
 
 def _linked_customer_phone(customer: str | None) -> dict[str, Any]:
