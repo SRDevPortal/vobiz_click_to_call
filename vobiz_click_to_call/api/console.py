@@ -11,6 +11,7 @@ from frappe import _
 
 from vobiz_click_to_call.api.call import (
     _record_availability_attendance,
+    _should_apply_idle_auto_offline,
     get_call_capability,
     get_call_status,
     is_active_call_log,
@@ -164,6 +165,8 @@ def mark_agent_activity_inactive(tab_id: str | None = None) -> dict[str, Any]:
     user = frappe.session.user
     if not _has_enabled_vobiz_user_mapping(user):
         return {"online": False, "is_mapped": False}
+    if not _should_apply_idle_auto_offline(user):
+        return {"online": is_agent_console_online(user), "is_mapped": True, "idle_auto_offline_enabled": False}
 
     tab_id = _clean_tab_id(tab_id)
     frappe.cache().delete_value(_console_tab_key(user, tab_id))

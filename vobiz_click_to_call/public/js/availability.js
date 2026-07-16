@@ -572,6 +572,7 @@
     }
 
     function canRecordActivity() {
+        const idleRuleEnabled = isIdleAutoOfflineEnabled();
         return Boolean(
             trackingActivity &&
             currentAvailability &&
@@ -579,7 +580,7 @@
             shouldLoadAvailability() &&
             document.visibilityState !== "hidden" &&
             currentAvailability.availability_status !== "Away" &&
-            globalActivityAge() < ACTIVITY_IDLE_MS &&
+            (!idleRuleEnabled || globalActivityAge() < ACTIVITY_IDLE_MS) &&
             !idleInactive
         );
     }
@@ -609,6 +610,9 @@
     }
 
     function markActivityInactive() {
+        if (!isIdleAutoOfflineEnabled()) {
+            return;
+        }
         if (currentAvailability && currentAvailability.availability_status === "Away") {
             return;
         }
@@ -667,6 +671,7 @@
     function resetActivityIdleTimer() {
         clearTimeout(activityIdleTimer);
         if (!trackingActivity || idleInactive || !shouldLoadAvailability()) return;
+        if (!isIdleAutoOfflineEnabled()) return;
         const age = globalActivityAge();
         const delay = Math.max(1000, ACTIVITY_IDLE_MS - age);
         activityIdleTimer = setTimeout(() => {
@@ -708,6 +713,10 @@
         } catch (e) {
             return 0;
         }
+    }
+
+    function isIdleAutoOfflineEnabled() {
+        return !currentAvailability || currentAvailability.idle_auto_offline_enabled !== false;
     }
 
     function handleVisibilityChange() {

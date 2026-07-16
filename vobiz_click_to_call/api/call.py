@@ -54,6 +54,15 @@ AVAILABILITY_ATTENDANCE_TAB = "__availability__"
 AGENT_ATTENDANCE_TZ = ZoneInfo("Asia/Kolkata")
 STALE_STARTUP_STATUSES = {"Queued", "Initiated", "Dialing", "Ringing", "Connecting"}
 STALE_STARTUP_CALL_SECONDS = 10 * 60
+IDLE_AUTO_OFFLINE_EXEMPT_ROLES = {
+    "System Manager",
+    "Manager",
+    "Vobiz Manager",
+    "Call Center Manager",
+    "Sales Manager",
+    "Team Manager",
+    "Team Leader",
+}
 
 
 @frappe.whitelist()
@@ -496,6 +505,7 @@ def get_my_availability() -> dict[str, Any]:
         "current_call_log": mapping.get("current_call_log"),
         "last_status_at": frappe.utils.format_datetime(last_status_at) if last_status_at else "",
         "last_status_epoch_ms": last_status_epoch_ms,
+        "idle_auto_offline_enabled": _should_apply_idle_auto_offline(frappe.session.user),
         "reason": get_mapping_unavailable_reason(mapping) or "",
     }
 
@@ -631,6 +641,37 @@ def get_user_mapping(user: str) -> dict[str, Any] | None:
         limit=1,
     )
     return rows[0] if rows else None
+
+
+def _should_apply_idle_auto_offline(user: str | None) -> bool:
+    user = (user or "").strip()
+    if not user or user == "Administrator":
+        return False
+    roles = set(frappe.get_roles(user))
+    if roles.intersection(IDLE_AUTO_OFFLINE_EXEMPT_ROLES):
+        return False
+    if _is_vobiz_team_leader(user):
+        return False
+    return True
+
+
+def _is_vobiz_team_leader(user: str) -> bool:
+    if not user:
+        return False
+    try:
+        if frappe.db.exists("DocType", "Team") and frappe.db.exists("DocType", "Team User"):
+            if frappe.db.exists("Team", {"team_lead": user, "is_active": 1}):
+                return True
+        if frappe.db.exists("DocType", "Vobiz User Mapping"):
+            return bool(
+                frappe.db.exists(
+                    "Vobiz User Mapping",
+                    {"enabled": 1, "team_leader": user},
+                )
+            )
+    except Exception:
+        return False
+    return False
 
 
 def _existing_mapping_fields(meta, fields: list[str]) -> list[str]:
