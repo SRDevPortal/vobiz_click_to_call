@@ -9,11 +9,15 @@ from vobiz_click_to_call.services.settings import get_caller_ids, get_settings
 
 
 class VobizIncomingMapping(Document):
+    def before_naming(self):
+        self._normalize_did_fields()
+        if not self.normalized_did:
+            frappe.throw(_("DID Number is required for incoming mapping."))
+
     def validate(self):
+        self._normalize_did_fields()
         settings = get_settings()
         default_country_code = settings.default_country_code or "+91"
-        self.did_number = normalize_phone_number(self.did_number, default_country_code=default_country_code)
-        self.normalized_did = self.did_number
         self.routing_strategy = self.routing_strategy or "Round Robin"
         self.default_lead_status = self.default_lead_status or "Select Option"
 
@@ -35,3 +39,9 @@ class VobizIncomingMapping(Document):
 
         if self.enabled and not self.did_number:
             frappe.throw(_("DID Number is required for an enabled incoming mapping."))
+
+    def _normalize_did_fields(self):
+        settings = get_settings()
+        default_country_code = settings.default_country_code or "+91"
+        self.did_number = normalize_phone_number(self.did_number, default_country_code=default_country_code)
+        self.normalized_did = self.did_number

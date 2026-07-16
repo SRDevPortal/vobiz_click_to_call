@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import frappe
 from frappe import _
@@ -46,6 +48,10 @@ PREFERRED_PHONE_FIELDS = (
 
 TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
 USER_SET_AVAILABILITY_STATUSES = {"Available", "Away", "Offline"}
+AGENT_ATTENDANCE_DOCTYPE = "Vobiz Agent Attendance Log"
+AVAILABILITY_ATTENDANCE_SOURCE = "Availability"
+AVAILABILITY_ATTENDANCE_TAB = "__availability__"
+AGENT_ATTENDANCE_TZ = ZoneInfo("Asia/Kolkata")
 STALE_STARTUP_STATUSES = {"Queued", "Initiated", "Dialing", "Ringing", "Connecting"}
 STALE_STARTUP_CALL_SECONDS = 10 * 60
 
@@ -474,12 +480,22 @@ def get_my_availability() -> dict[str, Any]:
     if not mapping:
         return {"is_mapped": False, "reason": _("No active Vobiz user mapping found.")}
 
+    last_status_at = mapping.get("last_status_at")
+    last_status_epoch_ms = 0
+    if last_status_at:
+        last_status_dt = frappe.utils.get_datetime(last_status_at)
+        if last_status_dt.tzinfo is None:
+            last_status_dt = last_status_dt.replace(tzinfo=AGENT_ATTENDANCE_TZ)
+        last_status_epoch_ms = int(last_status_dt.timestamp() * 1000)
+
     return {
         "is_mapped": True,
         "accept_calls": bool(frappe.utils.cint(mapping.get("accept_calls"))),
         "availability_status": mapping.get("availability_status") or "Available",
         "agent_mobile_display": mask_phone(mapping.get("agent_mobile")),
         "current_call_log": mapping.get("current_call_log"),
+        "last_status_at": frappe.utils.format_datetime(last_status_at) if last_status_at else "",
+        "last_status_epoch_ms": last_status_epoch_ms,
         "reason": get_mapping_unavailable_reason(mapping) or "",
     }
 
@@ -513,9 +529,71 @@ def set_my_availability(status: str) -> dict[str, Any]:
         },
         update_modified=True,
     )
+    _record_availability_attendance(frappe.session.user, status)
     frappe.db.commit()
 
     return get_my_availability()
+
+
+def _record_availability_attendance(user: str, status: str) -> None:
+    if not user or not frappe.db.exists("DocType", AGENT_ATTENDANCE_DOCTYPE):
+        return
+
+    meta = frappe.get_meta(AGENT_ATTENDANCE_DOCTYPE)
+    if not meta.has_field("availability_status"):
+        return
+
+    now = datetime.now(AGENT_ATTENDANCE_TZ).replace(tzinfo=None)
+    shift_date = str(now.date())
+    rows = frappe.get_all(
+        AGENT_ATTENDANCE_DOCTYPE,
+        filters={
+            "agent_user": user,
+            "tab_id": AVAILABILITY_ATTENDANCE_TAB,
+            "shift_date": shift_date,
+            "status": "Open",
+            "source": AVAILABILITY_ATTENDANCE_SOURCE,
+        },
+        fields=["name", "online_from", "availability_status"],
+        order_by="creation desc",
+        limit_page_length=20,
+    )
+    for row in rows:
+        if row.availability_status == status:
+            frappe.db.set_value(
+                AGENT_ATTENDANCE_DOCTYPE,
+                row.name,
+                {"last_seen_at": now},
+                update_modified=False,
+            )
+            return
+        started_at = frappe.utils.get_datetime(row.online_from)
+        frappe.db.set_value(
+            AGENT_ATTENDANCE_DOCTYPE,
+            row.name,
+            {
+                "status": "Closed",
+                "last_seen_at": now,
+                "offline_at": now,
+                "duration_seconds": max(0, int((now - started_at).total_seconds())),
+            },
+            update_modified=False,
+        )
+
+    frappe.get_doc(
+        {
+            "doctype": AGENT_ATTENDANCE_DOCTYPE,
+            "agent_user": user,
+            "tab_id": AVAILABILITY_ATTENDANCE_TAB,
+            "status": "Open",
+            "shift_date": shift_date,
+            "online_from": now,
+            "last_seen_at": now,
+            "duration_seconds": 0,
+            "availability_status": status,
+            "source": AVAILABILITY_ATTENDANCE_SOURCE,
+        }
+    ).insert(ignore_permissions=True)
 
 
 def get_user_mapping(user: str) -> dict[str, Any] | None:

@@ -811,6 +811,10 @@ def create_unknown_inbound_lead(customer_number: str, did_number: str, mapping, 
         lead.sr_lead_pipeline = defaults["pipeline"]
     if "sr_lead_platform" in fields and defaults.get("platform"):
         lead.sr_lead_platform = defaults["platform"]
+    for source_field in ("sr_lead_source", "lead_source", "source"):
+        if source_field in fields and defaults.get("source"):
+            lead.set(source_field, defaults["source"])
+            break
     previous_bypass = getattr(frappe.flags, "sr_bypass_field_guard", False)
     frappe.flags.sr_bypass_field_guard = True
     try:
@@ -832,8 +836,9 @@ def unknown_inbound_lead_defaults(mapping) -> dict[str, str]:
 
     return {
         "status": mapping.get("default_lead_status") or "Select Option",
-        "pipeline": getattr(ai_settings, "default_pipeline", None) or _first_doc("SR Lead Pipeline"),
-        "platform": getattr(ai_settings, "default_platform", None) or _first_doc("SR Lead Platform"),
+        "pipeline": mapping.get("default_pipeline") or getattr(ai_settings, "default_pipeline", None) or _first_doc("SR Lead Pipeline"),
+        "platform": mapping.get("default_platform") or getattr(ai_settings, "default_platform", None) or _first_doc("SR Lead Platform"),
+        "source": mapping.get("default_source") or "",
     }
 
 

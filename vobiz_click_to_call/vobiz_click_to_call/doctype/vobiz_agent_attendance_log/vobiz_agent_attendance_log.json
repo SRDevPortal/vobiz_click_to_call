@@ -14,6 +14,7 @@
   "last_seen_at",
   "offline_at",
   "duration_seconds",
+  "availability_status",
   "source"
  ],
  "fields": [
@@ -71,6 +72,13 @@
    "fieldtype": "Int",
    "in_list_view": 1,
    "label": "Duration Seconds"
+  },
+  {
+   "fieldname": "availability_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Availability Status",
+   "options": "Available\nAway\nOffline\nBusy"
   },
   {
    "default": "Agent Console",

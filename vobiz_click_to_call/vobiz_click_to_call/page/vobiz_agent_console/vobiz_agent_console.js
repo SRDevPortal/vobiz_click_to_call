@@ -511,17 +511,18 @@ class VobizAgentConsole {
 				this.start_console_heartbeat();
 			}
 		});
+		$(document).on('vobiz_availability_changed.vobiz-agent-console', (event, data) => {
+			this.render_availability(data || {}, this.state.active_call || {});
+		});
 		$(document).on('page-change.vobiz-agent-console route-change.vobiz-agent-console', () => {
 			setTimeout(() => {
 				if (!this.is_console_visible()) {
 					this.stop_console_heartbeat();
-					this.mark_console_offline();
 				}
 			}, 0);
 		});
 		window.addEventListener('pagehide', () => {
 			this.stop_console_heartbeat();
-			this.mark_console_offline(true);
 		});
 		this.bind_activity_tracking();
 	}
@@ -588,7 +589,6 @@ class VobizAgentConsole {
 
 	on_page_hide() {
 		this.stop_console_heartbeat();
-		this.mark_console_offline();
 	}
 
 	start_polling() {
@@ -600,9 +600,8 @@ class VobizAgentConsole {
 			clearTimeout(this.search_timer);
 			clearTimeout(this.idle_timer);
 			this.stop_console_heartbeat();
-			this.mark_console_offline(true);
 			this.unbind_realtime();
-			$(document).off('visibilitychange.vobiz-agent-console page-change.vobiz-agent-console route-change.vobiz-agent-console mousemove.vobiz-agent-console keydown.vobiz-agent-console click.vobiz-agent-console scroll.vobiz-agent-console touchstart.vobiz-agent-console');
+			$(document).off('visibilitychange.vobiz-agent-console vobiz_availability_changed.vobiz-agent-console page-change.vobiz-agent-console route-change.vobiz-agent-console mousemove.vobiz-agent-console keydown.vobiz-agent-console click.vobiz-agent-console scroll.vobiz-agent-console touchstart.vobiz-agent-console');
 		});
 	}
 
@@ -864,9 +863,18 @@ class VobizAgentConsole {
 	}
 
 	render_availability(capability, active_call) {
-		const status = active_call && active_call.name ? 'Busy' : 'Console Online';
-		this.page.main.find('[data-role="availability"]').text(status);
-		this.page.main.find('.vobiz-state-dot').css('background', status === 'Busy' ? '#f97316' : '#16a34a');
+		const status = active_call && active_call.name
+			? 'Busy'
+			: (capability.availability_status || (capability.can_call ? 'Available' : 'Offline'));
+		const colors = {
+			Available: '#16a34a',
+			Busy: '#f97316',
+			Away: '#d6a000',
+			Offline: '#8d99a6'
+		};
+		const labels = { Away: __('Break') };
+		this.page.main.find('[data-role="availability"]').text(labels[status] || __(status));
+		this.page.main.find('.vobiz-state-dot').css('background', colors[status] || '#8d99a6');
 	}
 
 	render_queue() {
@@ -2774,6 +2782,7 @@ class VobizAgentConsole {
 			} else {
 				$body.find('.vobiz-empty').last().replaceWith($chat);
 			}
+			$body.find('[data-workdesk-action="whatsapp"]').closest('div').remove();
 			if (!$body.find('[data-wa-reply]').length) {
 				$body.find('.vobiz-workdesk-card').append(this.workdesk_whatsapp_composer_html());
 			}

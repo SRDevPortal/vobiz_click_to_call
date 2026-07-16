@@ -78,6 +78,7 @@ def ensure_defaults():
         settings.save(ignore_permissions=True)
 
     ensure_crm_lead_fields()
+    ensure_issue_department_fields()
     ensure_crm_lead_disposition_optional()
     ensure_vobiz_call_log_disposition_field()
 
@@ -252,3 +253,51 @@ def ensure_crm_lead_fields():
         },
         update=True,
     )
+
+
+def ensure_issue_department_fields():
+    if not frappe.db.exists("DocType", "Issue"):
+        return
+
+    _delete_custom_field_if_type_mismatch("Issue", "sr_department", "Link")
+
+    create_custom_fields(
+        {
+            "Issue": [
+                {
+                    "fieldname": "sr_department",
+                    "label": "Department",
+                    "fieldtype": "Link",
+                    "options": "Department",
+                    "insert_after": "customer",
+                    "in_list_view": 1,
+                    "in_standard_filter": 1,
+                },
+                {
+                    "fieldname": "sr_medical_department",
+                    "label": "Medical Department",
+                    "fieldtype": "Link",
+                    "options": "Medical Department",
+                    "insert_after": "sr_department",
+                    "depends_on": "eval:(doc.sr_department || '').toLowerCase().includes('medical department')",
+                    "mandatory_depends_on": "eval:(doc.sr_department || '').toLowerCase().includes('medical department')",
+                    "in_list_view": 1,
+                    "in_standard_filter": 1,
+                },
+            ]
+        },
+        update=True,
+    )
+    frappe.clear_cache(doctype="Issue")
+
+
+def _delete_custom_field_if_type_mismatch(dt: str, fieldname: str, expected_fieldtype: str):
+    custom_field = frappe.db.get_value(
+        "Custom Field",
+        {"dt": dt, "fieldname": fieldname},
+        ["name", "fieldtype"],
+        as_dict=True,
+    )
+    if custom_field and custom_field.fieldtype != expected_fieldtype:
+        frappe.delete_doc("Custom Field", custom_field.name, ignore_permissions=True, force=True)
+        frappe.clear_cache(doctype=dt)

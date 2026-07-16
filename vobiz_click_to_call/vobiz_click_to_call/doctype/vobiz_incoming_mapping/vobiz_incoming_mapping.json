@@ -11,6 +11,9 @@
   "normalized_did",
   "routing_strategy",
   "default_lead_status",
+  "default_pipeline",
+  "default_platform",
+  "default_source",
   "last_assigned_agent",
   "agents_section",
   "agents",
@@ -57,6 +60,24 @@
    "fieldtype": "Link",
    "label": "Default Lead Status",
    "options": "CRM Lead Status"
+  },
+  {
+   "fieldname": "default_pipeline",
+   "fieldtype": "Link",
+   "label": "Default Pipeline",
+   "options": "SR Lead Pipeline"
+  },
+  {
+   "fieldname": "default_platform",
+   "fieldtype": "Link",
+   "label": "Default Platform",
+   "options": "SR Lead Platform"
+  },
+  {
+   "fieldname": "default_source",
+   "fieldtype": "Link",
+   "label": "Default Source",
+   "options": "SR Lead Source"
   },
   {
    "fieldname": "last_assigned_agent",
