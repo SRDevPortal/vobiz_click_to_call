@@ -19,6 +19,7 @@ from vobiz_click_to_call.api.call import (
 )
 from vobiz_click_to_call.api.recording import recording_proxy_url
 from vobiz_click_to_call.api.disposition import get_disposition_options_api, get_patient_followup_status_options_api
+from vobiz_click_to_call.services.attendance import agent_attendance_enabled
 from vobiz_click_to_call.services.call_status import MISSED_STATUSES, is_inbound_missed_call, status_bucket, talk_seconds
 from vobiz_click_to_call.services.lead_disposition import get_lead_disposition_context
 from vobiz_click_to_call.services.settings import get_settings
@@ -713,6 +714,9 @@ def get_analytics(
     call_offset: int | str = 0,
     unique_only: int | str = 0,
 ) -> dict[str, Any]:
+    if frappe.conf.get("disable_vobiz_analytics_api"):
+        frappe.throw(_("Vobiz analytics API is temporarily disabled."), frappe.PermissionError)
+
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
 
@@ -1900,7 +1904,9 @@ def _attendance_snapshot(user: str, now, is_online: bool) -> dict[str, Any]:
 
 
 def _agent_attendance_log_enabled() -> bool:
-    return bool(frappe.db.exists("DocType", AGENT_ATTENDANCE_DOCTYPE))
+    return agent_attendance_enabled() and bool(
+        frappe.db.exists("DocType", AGENT_ATTENDANCE_DOCTYPE)
+    )
 
 
 def _has_enabled_vobiz_user_mapping(user: str | None) -> bool:

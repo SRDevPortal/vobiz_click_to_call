@@ -10,6 +10,7 @@ from frappe import _
 
 from vobiz_ai.api.call_log import create_outbound_call_log, sync_linked_summaries
 from vobiz_click_to_call.api.recording import recording_proxy_url
+from vobiz_click_to_call.services.attendance import agent_attendance_enabled
 from vobiz_click_to_call.services.call_log_update import save_doc_latest, snapshot_doc
 from vobiz_click_to_call.services.client import VobizClient, extract_provider_id
 from vobiz_click_to_call.services.call_status import status_from_provider
@@ -546,7 +547,11 @@ def set_my_availability(status: str) -> dict[str, Any]:
 
 
 def _record_availability_attendance(user: str, status: str) -> None:
-    if not user or not frappe.db.exists("DocType", AGENT_ATTENDANCE_DOCTYPE):
+    if (
+        not agent_attendance_enabled()
+        or not user
+        or not frappe.db.exists("DocType", AGENT_ATTENDANCE_DOCTYPE)
+    ):
         return
 
     meta = frappe.get_meta(AGENT_ATTENDANCE_DOCTYPE)

@@ -234,6 +234,19 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn('"offline_at"', attendance)
         self.assertIn("vobiz_click_to_call.api.console.close_stale_agent_attendance_sessions", hooks)
 
+    def test_agent_attendance_is_hard_disabled(self):
+        attendance_service = (
+            Path(__file__).resolve().parents[1] / "services" / "attendance.py"
+        ).read_text(encoding="utf-8")
+        console = CONSOLE_API.read_text(encoding="utf-8")
+        call_api = (Path(__file__).resolve().parents[1] / "api" / "call.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("AGENT_ATTENDANCE_ENABLED = False", attendance_service)
+        self.assertIn("agent_attendance_enabled() and bool(", console)
+        self.assertIn("not agent_attendance_enabled()", call_api)
+
     def test_agent_desk_activity_tracks_online_time_without_call_availability(self):
         source = CONSOLE_API.read_text(encoding="utf-8")
         hooks = (Path(__file__).resolve().parents[1] / "hooks.py").read_text(encoding="utf-8")
