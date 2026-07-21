@@ -247,6 +247,23 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("agent_attendance_enabled() and bool(", console)
         self.assertIn("not agent_attendance_enabled()", call_api)
 
+    def test_analytics_api_is_hard_disabled(self):
+        source = CONSOLE_API.read_text(encoding="utf-8")
+
+        self.assertIn("ANALYTICS_API_ENABLED = False", source)
+        self.assertIn(
+            'if not ANALYTICS_API_ENABLED or frappe.conf.get("disable_vobiz_analytics_api"):',
+            source,
+        )
+        self.assertNotIn(
+            "shift_start, _, shift_elapsed_until, shift_elapsed_seconds",
+            source,
+        )
+        self.assertIn(
+            "shift_start, _shift_end, shift_elapsed_until, shift_elapsed_seconds",
+            source,
+        )
+
     def test_agent_desk_activity_tracks_online_time_without_call_availability(self):
         source = CONSOLE_API.read_text(encoding="utf-8")
         hooks = (Path(__file__).resolve().parents[1] / "hooks.py").read_text(encoding="utf-8")

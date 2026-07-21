@@ -44,6 +44,8 @@ CONSOLE_STATIC_CONTEXT_TTL_SECONDS = 60
 CONSOLE_QUEUE_LIMIT_MAX = 100
 ANALYTICS_STATUS_OPTIONS = ("total", "connected", "missed", "busy", "no_answer", "failed", "cancelled")
 ANALYTICS_CALL_LIMIT_MAX = 100
+# Hard-disabled to prevent the analytics API from executing expensive queries.
+ANALYTICS_API_ENABLED = False
 AGENT_ATTENDANCE_DOCTYPE = "Vobiz Agent Attendance Log"
 AVAILABILITY_ATTENDANCE_SOURCE = "Availability"
 AGENT_SHIFT_START_HOUR = 9
@@ -714,7 +716,7 @@ def get_analytics(
     call_offset: int | str = 0,
     unique_only: int | str = 0,
 ) -> dict[str, Any]:
-    if frappe.conf.get("disable_vobiz_analytics_api"):
+    if not ANALYTICS_API_ENABLED or frappe.conf.get("disable_vobiz_analytics_api"):
         frappe.throw(_("Vobiz analytics API is temporarily disabled."), frappe.PermissionError)
 
     if frappe.session.user == "Guest":
@@ -1567,7 +1569,7 @@ def _availability_attendance_snapshot(
             "records": [],
         }
 
-    shift_start, _, shift_elapsed_until, shift_elapsed_seconds = _today_shift_window(now)
+    shift_start, _shift_end, shift_elapsed_until, shift_elapsed_seconds = _today_shift_window(now)
     rows = frappe.get_all(
         AGENT_ATTENDANCE_DOCTYPE,
         filters={"agent_user": user, "shift_date": _shift_date(now), "source": AVAILABILITY_ATTENDANCE_SOURCE},
