@@ -22,6 +22,7 @@ from vobiz_click_to_call.services.settings import (
     get_allowed_doctypes,
     get_caller_id,
     get_default_country_code,
+    get_idle_auto_offline_config,
     get_settings,
 )
 
@@ -115,12 +116,40 @@ def get_call_capability(reference_doctype: str | None = None, reference_name: st
     }
 
 
+def _patient_primary_phone_candidates(doc, default_country_code: str) -> list[dict[str, str]]:
+    candidates = []
+    seen = set()
+    for fieldname, label in (("mobile", _("Mobile Number")), ("phone", _("Contact Number"))):
+        if not doc.meta.has_field(fieldname):
+            continue
+        number = str(doc.get(fieldname) or "").strip()
+        normalized = normalize_phone_number(number, default_country_code=default_country_code)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        candidates.append({"fieldname": fieldname, "label": label, "number": number})
+    return candidates
+
+
+@frappe.whitelist()
+def get_patient_phone_choices(patient: str) -> list[dict[str, str]]:
+    if frappe.session.user == "Guest":
+        frappe.throw(_("Login required."))
+    if not patient or not frappe.db.exists("Patient", patient):
+        frappe.throw(_("Patient not found."))
+    doc = frappe.get_doc("Patient", patient)
+    if not doc.has_permission("read") and not has_mapped_patient_access("Patient", patient):
+        frappe.throw(_("You do not have permission to read this patient."))
+    return _patient_primary_phone_candidates(doc, get_default_country_code(get_settings()))
+
+
 @frappe.whitelist()
 def start_call(
     reference_doctype: str,
     reference_name: str,
     phone_field: str | None = None,
     phone_number: str | None = None,
+    patient_phone_selected: int | str = 0,
 ) -> dict[str, Any]:
     log_vobiz_event(
         "Start call requested",
@@ -149,7 +178,10 @@ def start_call(
     doc = frappe.get_doc(reference_doctype, reference_name)
     if not doc.has_permission("read") and not has_mapped_patient_access(reference_doctype, reference_name):
         frappe.throw(_("You do not have permission to call from this document."))
-
+    if reference_doctype == "Patient":
+        choices = _patient_primary_phone_candidates(doc, get_default_country_code(settings))
+        if len(choices) > 1 and not frappe.utils.cint(patient_phone_selected):
+            frappe.throw(_("Select the Patient number to call."))
     mapping = get_user_mapping(frappe.session.user)
     if not mapping:
         frappe.throw(_("No active Vobiz user mapping found for your user."))
@@ -488,6 +520,7 @@ def get_my_availability() -> dict[str, Any]:
     mapping = get_user_mapping(frappe.session.user)
     if not mapping:
         return {"is_mapped": False, "reason": _("No active Vobiz user mapping found.")}
+    idle_auto_offline = get_idle_auto_offline_config()
 
     last_status_at = mapping.get("last_status_at")
     last_status_epoch_ms = 0
@@ -505,7 +538,9 @@ def get_my_availability() -> dict[str, Any]:
         "current_call_log": mapping.get("current_call_log"),
         "last_status_at": frappe.utils.format_datetime(last_status_at) if last_status_at else "",
         "last_status_epoch_ms": last_status_epoch_ms,
-        "idle_auto_offline_enabled": _should_apply_idle_auto_offline(frappe.session.user),
+        "idle_auto_offline_enabled": bool(idle_auto_offline.get("enabled")) and _should_apply_idle_auto_offline(frappe.session.user),
+        "idle_auto_offline_seconds": idle_auto_offline.get("seconds") or 0,
+        "idle_auto_offline_minutes": idle_auto_offline.get("minutes") or 0,
         "reason": get_mapping_unavailable_reason(mapping) or "",
     }
 

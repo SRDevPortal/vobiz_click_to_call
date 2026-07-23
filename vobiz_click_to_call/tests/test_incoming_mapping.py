@@ -6,6 +6,7 @@ import unittest
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
+BENCH_APPS = APP_ROOT.parents[1]
 INBOUND_API = APP_ROOT / "api" / "inbound.py"
 PATCHES = APP_ROOT / "patches.txt"
 HOOKS = APP_ROOT / "hooks.py"
@@ -24,18 +25,34 @@ INCOMING_AGENT_JSON = (
     / "vobiz_incoming_mapping_agent"
     / "vobiz_incoming_mapping_agent.json"
 )
+DEDUPE_SETTINGS_JSON = (
+    BENCH_APPS
+    / "crm_lead_dedupe"
+    / "crm_lead_dedupe"
+    / "crm_lead_dedupe"
+    / "doctype"
+    / "crm_lead_dedupe_settings"
+    / "crm_lead_dedupe_settings.json"
+)
+VOBIZ_SETTINGS_JSON = (
+    APP_ROOT
+    / "vobiz_click_to_call"
+    / "doctype"
+    / "vobiz_settings"
+    / "vobiz_settings.json"
+)
 
 
 class TestIncomingMappingSource(unittest.TestCase):
     def setUp(self):
         self.inbound_source = INBOUND_API.read_text(encoding="utf-8")
 
-    def test_unknown_route_is_only_called_after_previous_agent_lookup(self):
+    def test_assignment_and_status_routing_runs_before_previous_agent_lookup(self):
         previous_index = self.inbound_source.index("previous = find_last_customer_agent(customer_number)")
-        unknown_index = self.inbound_source.index("routed = route_unknown_inbound(customer_number, did_number, payload, settings)")
+        unknown_index = self.inbound_source.index("reference_first = bool(")
         resolve_index = self.inbound_source.index("target = resolve_inbound_target(previous, settings)")
 
-        self.assertLess(previous_index, unknown_index)
+        self.assertLess(unknown_index, previous_index)
         self.assertLess(unknown_index, resolve_index)
 
     def test_unknown_route_keeps_existing_lead_and_patient_out(self):
@@ -48,7 +65,43 @@ class TestIncomingMappingSource(unittest.TestCase):
         self.assertIn("route_existing_crm_lead_inbound(existing[\"name\"], customer_number, did_number, payload, settings)", source)
         self.assertIn("return None", source[source.index("def find_existing_reference"): source.index("def find_incoming_mapping")])
         self.assertIn('find_by_phone("Patient"', source)
-        self.assertIn('find_by_phone("CRM Lead"', source)
+        self.assertIn("find_latest_crm_lead_by_phone(customer_number)", source)
+
+    def test_existing_reference_routes_before_last_called_agent(self):
+        source = self.inbound_source
+        route_start = source.index("def route():")
+        route_end = source.index("def dial_action(", route_start)
+        route_source = source[route_start:route_end]
+
+        self.assertLess(
+            route_source.index("reference_first = bool("),
+            route_source.index("previous = find_last_customer_agent(customer_number)"),
+        )
+
+    def test_assignment_priority_is_configurable_in_vobiz_settings(self):
+        settings = json.loads(VOBIZ_SETTINGS_JSON.read_text(encoding="utf-8"))
+        fields = {field["fieldname"]: field for field in settings["fields"]}
+        field = fields["prefer_current_lead_assignment_for_incoming_calls"]
+
+        self.assertEqual(field["fieldtype"], "Check")
+        self.assertEqual(field["default"], "1")
+        self.assertIn(
+            "prefer_current_lead_assignment_for_incoming_calls(settings)",
+            self.inbound_source,
+        )
+        self.assertIn("existing.get(\"treat_as_new\")", self.inbound_source)
+
+    def test_treat_as_new_status_uses_dedicated_dedupe_setting(self):
+        source = self.inbound_source
+        settings = json.loads(DEDUPE_SETTINGS_JSON.read_text(encoding="utf-8"))
+        fields = {field["fieldname"]: field for field in settings["fields"]}
+
+        field = fields["incoming_call_treat_as_new_statuses"]
+        self.assertEqual(field["fieldtype"], "Table MultiSelect")
+        self.assertEqual(field["options"], "CRM Lead Dedupe Merge Status")
+        self.assertIn("lead.status in _incoming_call_treat_as_new_statuses()", source)
+        self.assertIn('filters={fieldname: key}', source)
+        self.assertNotIn('find_by_phone("CRM Lead"', source)
 
     def test_existing_patient_overrides_lead_owner_and_routes_by_department_followup(self):
         source = self.inbound_source

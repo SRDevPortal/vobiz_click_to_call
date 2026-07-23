@@ -1,4 +1,19 @@
 (function () {
+    const AGENT_CONSOLE_PAGE_CACHE_VERSION = "20260723.3";
+    const AGENT_CONSOLE_PAGE_CACHE_VERSION_KEY = "vobiz_agent_console_page_cache_version";
+    try {
+        if (window.localStorage) {
+            const currentVersion = window.localStorage.getItem(AGENT_CONSOLE_PAGE_CACHE_VERSION_KEY);
+            if (currentVersion !== AGENT_CONSOLE_PAGE_CACHE_VERSION) {
+                window.localStorage.removeItem("_page:vobiz-agent-console");
+                window.localStorage.setItem(
+                    AGENT_CONSOLE_PAGE_CACHE_VERSION_KEY,
+                    AGENT_CONSOLE_PAGE_CACHE_VERSION
+                );
+            }
+        }
+    } catch (e) {}
+
     const STATUSES = ["Available", "Away", "Offline"];
     const COLORS = {
         Available: "green",
@@ -10,7 +25,7 @@
         Away: "Break",
     };
     const ACTIVITY_HEARTBEAT_MS = 30 * 1000;
-    const ACTIVITY_IDLE_MS = 5 * 60 * 1000;
+    const DEFAULT_ACTIVITY_IDLE_MS = 5 * 60 * 1000;
     const AVAILABILITY_REFRESH_MS = 60 * 1000;
     const ACTIVITY_TAB_KEY = "vobiz_agent_activity_tab_id";
     const ACTIVITY_LAST_KEY = "vobiz_agent_last_activity_at";
@@ -580,7 +595,7 @@
             shouldLoadAvailability() &&
             document.visibilityState !== "hidden" &&
             currentAvailability.availability_status !== "Away" &&
-            (!idleRuleEnabled || globalActivityAge() < ACTIVITY_IDLE_MS) &&
+            (!idleRuleEnabled || globalActivityAge() < activityIdleMs()) &&
             !idleInactive
         );
     }
@@ -613,7 +628,7 @@
         if (!isIdleAutoOfflineEnabled()) {
             return;
         }
-        if (currentAvailability && currentAvailability.availability_status === "Away") {
+        if (isIdleAutoOfflinePaused()) {
             return;
         }
         idleInactive = true;
@@ -673,14 +688,15 @@
         if (!trackingActivity || idleInactive || !shouldLoadAvailability()) return;
         if (!isIdleAutoOfflineEnabled()) return;
         const age = globalActivityAge();
-        const delay = Math.max(1000, ACTIVITY_IDLE_MS - age);
+        const delay = Math.max(1000, activityIdleMs() - age);
         activityIdleTimer = setTimeout(() => {
             const age = globalActivityAge();
-            if (age < ACTIVITY_IDLE_MS) {
+            if (age < activityIdleMs()) {
                 resetActivityIdleTimer();
                 return;
             }
-            if (currentAvailability && currentAvailability.availability_status === "Away") {
+            if (isIdleAutoOfflinePaused()) {
+                touchGlobalActivity();
                 resetActivityIdleTimer();
                 return;
             }
@@ -708,7 +724,7 @@
         try {
             const value = window.localStorage && window.localStorage.getItem(activityLastKey());
             const last = safeNumber(value);
-            if (!last) return ACTIVITY_IDLE_MS + 1;
+            if (!last) return activityIdleMs() + 1;
             return Math.max(0, Date.now() - last);
         } catch (e) {
             return 0;
@@ -717,6 +733,18 @@
 
     function isIdleAutoOfflineEnabled() {
         return !currentAvailability || currentAvailability.idle_auto_offline_enabled !== false;
+    }
+
+    function activityIdleMs() {
+        const seconds = currentAvailability ? safeNumber(currentAvailability.idle_auto_offline_seconds) : 0;
+        return Math.max(60 * 1000, (seconds || DEFAULT_ACTIVITY_IDLE_MS / 1000) * 1000);
+    }
+
+    function isIdleAutoOfflinePaused() {
+        return Boolean(
+            currentAvailability &&
+            ["Away", "Busy"].includes(currentAvailability.availability_status)
+        );
     }
 
     function handleVisibilityChange() {

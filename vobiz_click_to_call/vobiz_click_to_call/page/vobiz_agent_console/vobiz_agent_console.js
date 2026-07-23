@@ -3210,15 +3210,33 @@ class VobizAgentConsole {
 		this.start_call_for_row(row);
 	}
 
-	start_call_for_row(row) {
+	start_call_for_row(row, patientPhone = null) {
 		if (!row) return Promise.resolve();
+		if (row.doctype === 'Patient' && !patientPhone) {
+			return frappe.call({
+				method: 'vobiz_click_to_call.api.call.get_patient_phone_choices',
+				args: { patient: row.name },
+				freeze: true,
+				freeze_message: __('Checking Patient numbers...')
+			}).then((r) => {
+				const choices = r.message || [];
+				if (choices.length > 1) {
+					return this.select_patient_phone(row, choices);
+				}
+				return this.start_call_for_row(row, choices[0] || {
+					fieldname: row.phone_field,
+					number: row.phone
+				});
+			});
+		}
 		return frappe.call({
 			method: 'vobiz_click_to_call.api.call.start_call',
 			args: {
 				reference_doctype: row.doctype,
 				reference_name: row.name,
-				phone_field: row.phone_field,
-				phone_number: row.phone
+				phone_field: patientPhone ? patientPhone.fieldname : row.phone_field,
+				phone_number: patientPhone ? patientPhone.number : row.phone,
+				patient_phone_selected: patientPhone ? 1 : 0
 			},
 			freeze: true,
 			freeze_message: __('Starting call...')
@@ -3243,6 +3261,41 @@ class VobizAgentConsole {
 			frappe.show_alert({ message: __('Call started: {0}', [message.call_log || 'Vobiz']), indicator: 'green' });
 			this.load();
 			return message;
+		});
+	}
+
+	select_patient_phone(row, choices) {
+		return new Promise((resolve) => {
+			let callStarted = false;
+			const optionMap = {};
+			const options = choices.map((choice) => {
+				const option = `${choice.label}: ${choice.number}`;
+				optionMap[option] = choice;
+				return option;
+			});
+			const dialog = new frappe.ui.Dialog({
+				title: __('Select Patient Number'),
+				fields: [{
+					fieldname: 'patient_number',
+					fieldtype: 'Select',
+					label: __('Number to call'),
+					options,
+					default: options[0] || '',
+					reqd: 1
+				}],
+				primary_action_label: __('Start Call'),
+				primary_action: (values) => {
+					const selected = optionMap[values.patient_number];
+					if (!selected) return;
+					callStarted = true;
+					dialog.hide();
+					resolve(this.start_call_for_row(row, selected));
+				}
+			});
+			dialog.$wrapper.on('hidden.bs.modal', () => {
+				if (!callStarted) resolve(null);
+			});
+			dialog.show();
 		});
 	}
 
@@ -3357,6 +3410,13 @@ class VobizAgentConsole {
 		this.show_auto_call_dialog();
 
 		this.start_call_for_row(row).then((message) => {
+			if (!message) {
+				session.in_flight = false;
+				session.current = null;
+				this.state.auto_dial = session;
+				this.stop_auto_dial();
+				return;
+			}
 			session.current = {
 				lead: row.name,
 				title: row.title || row.name,

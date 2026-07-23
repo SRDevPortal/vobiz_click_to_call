@@ -12,12 +12,16 @@ app_include_js = [
     "/assets/vobiz_click_to_call/js/click_to_call.js",
     "/assets/vobiz_click_to_call/js/list_dialer.js",
     "/assets/vobiz_click_to_call/js/call_log.js",
-    "/assets/vobiz_click_to_call/js/availability.js?v=20260716.3",
+    "/assets/vobiz_click_to_call/js/availability.js?v=20260723.3",
 ]
 
 doctype_js = {
     "Vobiz Settings": "public/js/vobiz_settings.js",
     "Vobiz User Mapping": "public/js/vobiz_user_mapping.js",
+}
+
+doctype_list_js = {
+    "Vobiz User Mapping": "public/js/vobiz_user_mapping_list.js",
 }
 
 doc_events = {

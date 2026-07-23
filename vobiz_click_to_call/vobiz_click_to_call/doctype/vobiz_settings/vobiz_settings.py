@@ -51,6 +51,7 @@ class VobizSettings(Document):
             frappe.throw(_("Busy Callback AI Fallback Mobile is required when Busy Callback AI Fallback is enabled."))
         self.max_call_attempts_per_reference_per_day = self.max_call_attempts_per_reference_per_day or 0
         self.max_calls_per_user_per_day = self.max_calls_per_user_per_day or 0
+        self.idle_auto_offline_minutes = max(1, frappe.utils.cint(self.idle_auto_offline_minutes) or 5)
         self.http_timeout = self.http_timeout or 20
         self.cdr_sync_lookback_days = self.cdr_sync_lookback_days or 7
         self.recording_format = self.recording_format or "mp3"

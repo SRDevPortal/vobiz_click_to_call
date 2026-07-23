@@ -10,7 +10,7 @@ import frappe
 from werkzeug.wrappers import Response
 
 from vobiz_ai.api.call_log import make_outbound_call_key, sync_reference_links
-from vobiz_ai.api.utils import find_by_phone, get_settings as get_ai_settings
+from vobiz_ai.api.utils import find_by_phone, get_settings as get_ai_settings, last10
 from vobiz_click_to_call.api.call import get_mapping_unavailable_reason, get_user_mapping, restore_mapping_after_call
 from vobiz_click_to_call.api.console import is_agent_console_online
 from vobiz_click_to_call.services.call_log_update import save_doc_latest, snapshot_doc
@@ -23,6 +23,7 @@ from vobiz_click_to_call.services.settings import (
     get_default_country_code,
     get_inbound_callback_token,
     get_settings,
+    prefer_current_lead_assignment_for_incoming_calls,
 )
 
 TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
@@ -68,9 +69,36 @@ def route():
         log_vobiz_event("Inbound route ignored: caller number missing", severity="Warning", payload=payload)
         return _xml_response(_hangup_xml())
 
+    existing = find_existing_reference(customer_number)
+    reference_first = bool(
+        existing
+        and (
+            existing.get("treat_as_new")
+            or prefer_current_lead_assignment_for_incoming_calls(settings)
+        )
+    )
+    if reference_first:
+        routed = route_unknown_inbound(
+            customer_number,
+            did_number,
+            payload,
+            settings,
+            existing=existing,
+            existing_checked=True,
+        )
+        if routed:
+            return routed
+
     previous = find_last_customer_agent(customer_number)
     if not previous:
-        routed = route_unknown_inbound(customer_number, did_number, payload, settings)
+        routed = route_unknown_inbound(
+            customer_number,
+            did_number,
+            payload,
+            settings,
+            existing=existing,
+            existing_checked=True,
+        )
         if routed:
             return routed
         log_vobiz_event("Inbound route ignored: no previous mapped agent found", severity="Warning", payload=payload)
@@ -300,30 +328,62 @@ def create_inbound_call_log(
     return doc
 
 
-def route_unknown_inbound(customer_number: str, did_number: str, payload: dict[str, Any], settings):
-    existing = find_existing_reference(customer_number)
+def route_unknown_inbound(
+    customer_number: str,
+    did_number: str,
+    payload: dict[str, Any],
+    settings,
+    *,
+    existing: dict[str, Any] | None = None,
+    existing_checked: bool = False,
+):
+    if not existing_checked:
+        existing = find_existing_reference(customer_number)
     if existing:
-        if existing.get("doctype") == "Patient":
+        if existing.get("treat_as_new"):
+            log_vobiz_event(
+                "Existing CRM Lead status configured to create a new inbound Lead",
+                payload={
+                    "customer_number": customer_number,
+                    "did_number": did_number,
+                    "reference_name": existing.get("name"),
+                    "status": existing.get("status"),
+                },
+            )
+        elif existing.get("doctype") == "Patient":
             return route_existing_patient_inbound(existing["name"], customer_number, did_number, payload, settings)
-        if existing.get("doctype") == "CRM Lead":
+        elif existing.get("doctype") == "CRM Lead":
             return route_existing_crm_lead_inbound(existing["name"], customer_number, did_number, payload, settings)
-        log_vobiz_event(
-            "Unknown inbound mapping skipped: caller already exists",
-            severity="Warning",
-            payload={
-                "customer_number": customer_number,
-                "did_number": did_number,
-                "reference_doctype": existing.get("doctype"),
-                "reference_name": existing.get("name"),
-            },
-        )
-        return None
+        else:
+            log_vobiz_event(
+                "Unknown inbound mapping skipped: caller already exists",
+                severity="Warning",
+                payload={
+                    "customer_number": customer_number,
+                    "did_number": did_number,
+                    "reference_doctype": existing.get("doctype"),
+                    "reference_name": existing.get("name"),
+                },
+            )
+            return None
 
     if not _unknown_inbound_supported():
         return None
 
     mapping = find_incoming_mapping(did_number)
     if not mapping:
+        if existing and existing.get("treat_as_new"):
+            log_vobiz_event(
+                "New inbound Lead not created: DID has no enabled incoming mapping",
+                severity="Warning",
+                payload={
+                    "customer_number": customer_number,
+                    "did_number": did_number,
+                    "previous_lead": existing.get("name"),
+                    "previous_status": existing.get("status"),
+                },
+            )
+            return _xml_response(_hangup_xml())
         return None
 
     target = select_incoming_agent(mapping)
@@ -528,10 +588,49 @@ def find_existing_reference(customer_number: str) -> dict[str, str] | None:
             return {"doctype": "Patient", "name": patient}
 
     if frappe.db.exists("DocType", "CRM Lead"):
-        lead = find_by_phone("CRM Lead", ("mobile_no", "phone", "custom_whatsapp_number"), customer_number)
+        lead = find_latest_crm_lead_by_phone(customer_number)
         if lead:
-            return {"doctype": "CRM Lead", "name": lead}
+            return {
+                "doctype": "CRM Lead",
+                "name": lead.name,
+                "status": lead.status,
+                "treat_as_new": lead.status in _incoming_call_treat_as_new_statuses(),
+            }
     return None
+
+
+def find_latest_crm_lead_by_phone(customer_number: str):
+    key = last10(customer_number)
+    if not key:
+        return None
+
+    meta = frappe.get_meta("CRM Lead")
+    indexed_fields = [
+        fieldname
+        for fieldname in ("sr_mobile_norm", "vobiz_mobile_last10", "vobiz_phone_last10", "vobiz_whatsapp_last10")
+        if meta.has_field(fieldname)
+    ]
+    newest = None
+    for fieldname in indexed_fields:
+        rows = frappe.get_all(
+            "CRM Lead",
+            filters={fieldname: key},
+            fields=["name", "status", "creation"],
+            order_by="creation desc",
+            limit=1,
+        )
+        if rows and (newest is None or rows[0].creation > newest.creation):
+            newest = rows[0]
+    return newest
+
+
+def _incoming_call_treat_as_new_statuses() -> set[str]:
+    try:
+        from crm_lead_dedupe.leads.dup_utils import incoming_call_treat_as_new_statuses
+
+        return incoming_call_treat_as_new_statuses()
+    except Exception:
+        return set()
 
 
 def find_incoming_mapping(did_number: str):

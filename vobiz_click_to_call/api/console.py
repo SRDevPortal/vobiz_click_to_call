@@ -21,7 +21,7 @@ from vobiz_click_to_call.api.recording import recording_proxy_url
 from vobiz_click_to_call.api.disposition import get_disposition_options_api, get_patient_followup_status_options_api
 from vobiz_click_to_call.services.call_status import MISSED_STATUSES, is_inbound_missed_call, status_bucket, talk_seconds
 from vobiz_click_to_call.services.lead_disposition import get_lead_disposition_context
-from vobiz_click_to_call.services.settings import get_settings
+from vobiz_click_to_call.services.settings import get_idle_auto_offline_config, get_settings
 
 
 TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
@@ -38,6 +38,8 @@ COMBINED_QUEUE_SOURCE = "CRM Lead and Patient"
 HTML_TAG_RE = re.compile(r"<[^>]*>")
 CONSOLE_SESSION_TTL_SECONDS = 75
 CONSOLE_HEARTBEAT_DB_TOUCH_SECONDS = 60
+DESK_ACTIVITY_DB_TOUCH_SECONDS = 5 * 60
+DESK_ACTIVITY_STALE_SECONDS = DESK_ACTIVITY_DB_TOUCH_SECONDS + CONSOLE_SESSION_TTL_SECONDS
 CONSOLE_AVAILABILITY_TOUCH_SECONDS = 60
 CONSOLE_STATIC_CONTEXT_TTL_SECONDS = 60
 CONSOLE_QUEUE_LIMIT_MAX = 100
@@ -45,6 +47,7 @@ ANALYTICS_STATUS_OPTIONS = ("total", "connected", "missed", "busy", "no_answer",
 ANALYTICS_CALL_LIMIT_MAX = 100
 AGENT_ATTENDANCE_DOCTYPE = "Vobiz Agent Attendance Log"
 AVAILABILITY_ATTENDANCE_SOURCE = "Availability"
+ACTIVITY_ATTENDANCE_SOURCES = ("Agent Console", "Desk Activity")
 AGENT_SHIFT_START_HOUR = 9
 AGENT_SHIFT_END_HOUR = 21
 AGENT_SHIFT_MIN_SECONDS = 12 * 60 * 60
@@ -74,6 +77,10 @@ def _console_heartbeat_db_touch_key(user: str, tab_id: str) -> str:
 
 def _console_availability_touch_key(user: str) -> str:
     return f"vobiz_agent_console:availability_touch:{user}"
+
+
+def _desk_activity_db_touch_key(user: str, tab_id: str) -> str:
+    return f"vobiz_agent_console:desk_activity_db_touch:{user}:{tab_id}"
 
 
 def _console_static_context_key(user: str, queue_source: str, queue_doctype: str, agent_queue_source: str) -> str:
@@ -138,7 +145,8 @@ def record_agent_activity(tab_id: str | None = None, route: str | None = None) -
     tab_id = _clean_tab_id(tab_id)
     now = _now_ist()
     _set_attendance_state(user, True, now)
-    _open_or_touch_attendance_session(user, tab_id, now, source="Desk Activity")
+    if _should_touch_desk_activity_db(user, tab_id):
+        _open_or_touch_attendance_session(user, tab_id, now, source="Desk Activity")
     _remember_console_tab(user, tab_id)
     frappe.cache().set_value(
         _console_tab_key(user, tab_id),
@@ -165,6 +173,9 @@ def mark_agent_activity_inactive(tab_id: str | None = None) -> dict[str, Any]:
     user = frappe.session.user
     if not _has_enabled_vobiz_user_mapping(user):
         return {"online": False, "is_mapped": False}
+    idle_auto_offline = get_idle_auto_offline_config()
+    if not idle_auto_offline.get("enabled"):
+        return {"online": is_agent_console_online(user), "is_mapped": True, "idle_auto_offline_enabled": False}
     if not _should_apply_idle_auto_offline(user):
         return {"online": is_agent_console_online(user), "is_mapped": True, "idle_auto_offline_enabled": False}
 
@@ -475,7 +486,11 @@ def get_whatsapp_conversation(reference_doctype: str, reference_name: str) -> di
         try:
             from wa_chat_hub.api.chat import get_conversation_for_reference
 
-            result = get_conversation_for_reference(reference_doctype, reference_name) or {}
+            result = get_conversation_for_reference(
+                reference_doctype,
+                reference_name,
+                channel_account=route_status.get("channel_account"),
+            ) or {}
             if result.get("success") and result.get("conversation"):
                 return {
                     "success": True,
@@ -1406,6 +1421,38 @@ def _analytics_mapped_agent_scope(
     return None
 
 
+def _availability_attendance_rows(users: list[str], now) -> dict[str, list[Any]]:
+    """Load today's availability transitions for all visible agents in one query."""
+    if not users or not _agent_attendance_log_enabled():
+        return {}
+    meta = frappe.get_meta(AGENT_ATTENDANCE_DOCTYPE)
+    if not meta.has_field("availability_status"):
+        return {}
+
+    rows = frappe.get_all(
+        AGENT_ATTENDANCE_DOCTYPE,
+        filters={
+            "agent_user": ["in", list(dict.fromkeys(users))],
+            "shift_date": _shift_date(now),
+            "source": AVAILABILITY_ATTENDANCE_SOURCE,
+        },
+        fields=[
+            "agent_user",
+            "availability_status",
+            "online_from",
+            "last_seen_at",
+            "offline_at",
+            "status",
+        ],
+        order_by="agent_user asc, online_from asc",
+        limit_page_length=10000,
+    )
+    by_user: dict[str, list[Any]] = {}
+    for attendance_row in rows:
+        by_user.setdefault(attendance_row.agent_user, []).append(attendance_row)
+    return by_user
+
+
 def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
     users = [row.get("user") for row in rows if row.get("user") and row.get("user") != _("Unassigned")]
     if not users or not frappe.db.exists("DocType", "Vobiz User Mapping"):
@@ -1415,9 +1462,11 @@ def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
         "Vobiz User Mapping",
         filters={"user": ["in", users], "enabled": 1},
         fields=["user", "availability_status", "accept_calls", "current_call_log", "last_status_at"],
+        limit_page_length=2000,
     )
     by_user = {row.user: row for row in mappings}
     now = _now_ist()
+    attendance_by_user = _availability_attendance_rows(users, now)
     shift_start, shift_end, shift_elapsed_until, shift_elapsed_seconds = _today_shift_window(now)
     shift_min_label = _human_duration_seconds(AGENT_SHIFT_MIN_SECONDS)
     for row in rows:
@@ -1465,6 +1514,7 @@ def _attach_agent_availability(rows: list[dict[str, Any]]) -> None:
             stored_status,
             heartbeat_online,
             mapping.last_status_at,
+            rows=attendance_by_user.get(row.get("user"), []),
         )
         row.update(
             {
@@ -1544,9 +1594,10 @@ def _availability_attendance_snapshot(
     current_status: str,
     heartbeat_online: bool,
     current_status_since=None,
+    rows=None,
 ) -> dict[str, Any]:
     if not user or not _agent_attendance_log_enabled() or not frappe.get_meta(AGENT_ATTENDANCE_DOCTYPE).has_field("availability_status"):
-        legacy = _attendance_snapshot(user, now, heartbeat_online)
+        legacy = _attendance_snapshot(user, now, heartbeat_online, use_persistent=False)
         current_seconds = max(0, int((now - legacy["since"]).total_seconds())) if legacy.get("since") else 0
         return {
             "since": legacy.get("since"),
@@ -1564,13 +1615,14 @@ def _availability_attendance_snapshot(
         }
 
     shift_start, _, shift_elapsed_until, shift_elapsed_seconds = _today_shift_window(now)
-    rows = frappe.get_all(
-        AGENT_ATTENDANCE_DOCTYPE,
-        filters={"agent_user": user, "shift_date": _shift_date(now), "source": AVAILABILITY_ATTENDANCE_SOURCE},
-        fields=["availability_status", "online_from", "last_seen_at", "offline_at", "status"],
-        order_by="online_from asc",
-        limit_page_length=500,
-    )
+    if rows is None:
+        rows = frappe.get_all(
+            AGENT_ATTENDANCE_DOCTYPE,
+            filters={"agent_user": user, "shift_date": _shift_date(now), "source": AVAILABILITY_ATTENDANCE_SOURCE},
+            fields=["availability_status", "online_from", "last_seen_at", "offline_at", "status"],
+            order_by="online_from asc",
+            limit_page_length=500,
+        )
     authoritative_since = frappe.utils.get_datetime(current_status_since) if current_status_since else None
     if authoritative_since and authoritative_since > now:
         authoritative_since = None
@@ -1616,7 +1668,7 @@ def _availability_attendance_snapshot(
                 "has_over_break": current_status == "Away" and current_seconds > AGENT_BREAK_LIMIT_SECONDS,
                 "records": records,
             }
-        fallback = _attendance_snapshot(user, now, heartbeat_online)
+        fallback = _attendance_snapshot(user, now, heartbeat_online, use_persistent=False)
         fallback_current = "Available" if heartbeat_online else "Offline"
         current_seconds = max(0, int((now - fallback["since"]).total_seconds())) if fallback.get("since") else 0
         return {
@@ -1778,6 +1830,19 @@ def _should_touch_availability(user: str) -> bool:
         return True
 
 
+def _should_touch_desk_activity_db(user: str, tab_id: str) -> bool:
+    key = _desk_activity_db_touch_key(user, tab_id)
+    try:
+        if frappe.cache().get_value(key):
+            return False
+        frappe.cache().set_value(key, frappe.utils.now(), expires_in_sec=DESK_ACTIVITY_DB_TOUCH_SECONDS)
+        return True
+    except Exception:
+        # Redis is the liveness layer. Do not amplify a Redis incident into a
+        # MariaDB write storm by falling back to a persistent touch.
+        return False
+
+
 def _remember_console_tab(user: str, tab_id: str) -> None:
     tabs = _console_tab_ids(user)
     if tab_id not in tabs:
@@ -1868,8 +1933,8 @@ def _set_attendance_state(user: str, online: bool, now=None) -> dict[str, Any]:
     return state
 
 
-def _attendance_snapshot(user: str, now, is_online: bool) -> dict[str, Any]:
-    if _agent_attendance_log_enabled():
+def _attendance_snapshot(user: str, now, is_online: bool, *, use_persistent: bool = True) -> dict[str, Any]:
+    if use_persistent and _agent_attendance_log_enabled():
         return _persistent_attendance_snapshot(user, now, is_online)
 
     state = _get_attendance_state(user, now)
@@ -1970,7 +2035,7 @@ def _close_all_activity_sessions(user: str, closed_at=None) -> None:
     closed_at = closed_at or _now_ist()
     rows = frappe.get_all(
         AGENT_ATTENDANCE_DOCTYPE,
-        filters={"agent_user": user, "status": "Open", "source": ["!=", AVAILABILITY_ATTENDANCE_SOURCE]},
+        filters={"agent_user": user, "status": "Open", "source": ["in", ACTIVITY_ATTENDANCE_SOURCES]},
         fields=["name", "online_from"],
         order_by="creation desc",
         limit_page_length=100,
@@ -1989,14 +2054,19 @@ def _close_stale_attendance_sessions(user: str, now=None) -> None:
             "agent_user": user,
             "status": "Open",
             "shift_date": _shift_date(now),
-            "source": ["!=", AVAILABILITY_ATTENDANCE_SOURCE],
+            "source": ["in", ACTIVITY_ATTENDANCE_SOURCES],
         },
-        fields=["name", "online_from", "last_seen_at"],
+        fields=["name", "online_from", "last_seen_at", "source"],
         limit_page_length=100,
     )
     for row in rows:
         last_seen = frappe.utils.get_datetime(row.last_seen_at or row.online_from)
-        stale_at = last_seen + timedelta(seconds=CONSOLE_SESSION_TTL_SECONDS)
+        stale_seconds = (
+            DESK_ACTIVITY_STALE_SECONDS
+            if row.source == "Desk Activity"
+            else CONSOLE_SESSION_TTL_SECONDS
+        )
+        stale_at = last_seen + timedelta(seconds=stale_seconds)
         if stale_at < now:
             _close_attendance_row(row.name, row.online_from, stale_at)
 
@@ -2007,14 +2077,19 @@ def close_stale_agent_attendance_sessions() -> dict[str, int | bool]:
     now = _now_ist()
     rows = frappe.get_all(
         AGENT_ATTENDANCE_DOCTYPE,
-        filters={"status": "Open", "source": ["!=", AVAILABILITY_ATTENDANCE_SOURCE]},
-        fields=["name", "agent_user", "online_from", "last_seen_at"],
+        filters={"status": "Open", "source": ["in", ACTIVITY_ATTENDANCE_SOURCES]},
+        fields=["name", "agent_user", "online_from", "last_seen_at", "source"],
         limit_page_length=1000,
     )
     closed = 0
     for row in rows:
         last_seen = frappe.utils.get_datetime(row.last_seen_at or row.online_from)
-        stale_at = last_seen + timedelta(seconds=CONSOLE_SESSION_TTL_SECONDS)
+        stale_seconds = (
+            DESK_ACTIVITY_STALE_SECONDS
+            if row.source == "Desk Activity"
+            else CONSOLE_SESSION_TTL_SECONDS
+        )
+        stale_at = last_seen + timedelta(seconds=stale_seconds)
         if stale_at < now:
             _close_attendance_row(row.name, row.online_from, stale_at)
             closed += 1
@@ -3842,6 +3917,11 @@ def _whatsapp_route_status_for_lead(lead) -> dict[str, Any]:
     pipeline = lead.get("sr_lead_pipeline")
     if not pipeline:
         return {"available": False, "conversation": None, "message": _("Select a CRM Lead Pipeline before opening WhatsApp chat.")}
+
+    account_route = _interakt_account_for_outbound_pipeline(pipeline)
+    if account_route:
+        return {"available": True, "channel_account": account_route, "pipeline_map": None}
+
     if not frappe.db.exists("SR Lead Pipeline", pipeline):
         return {"available": False, "conversation": None, "message": _("Could not find Pipeline: {0}").format(pipeline)}
 
@@ -3849,6 +3929,37 @@ def _whatsapp_route_status_for_lead(lead) -> dict[str, Any]:
 
     row = get_pipeline_map(pipeline=pipeline)
     return {"available": True, "channel_account": row.get("chat_channel_account"), "pipeline_map": row.get("name")}
+
+
+def _interakt_account_for_outbound_pipeline(pipeline: str) -> str | None:
+    if not frappe.db.exists("DocType", "Chat Channel Account"):
+        return None
+    if not frappe.db.exists("DocType", "Chat Channel Account Pipeline"):
+        return None
+
+    mapped_accounts = frappe.get_all(
+        "Chat Channel Account Pipeline",
+        filters={"pipeline": pipeline, "parenttype": "Chat Channel Account"},
+        pluck="parent",
+        limit_page_length=2,
+    )
+    if not mapped_accounts:
+        return None
+    accounts = frappe.get_all(
+        "Chat Channel Account",
+        filters={
+            "name": ["in", mapped_accounts],
+            "channel_type": "Interakt",
+            "is_active": 1,
+        },
+        pluck="name",
+        limit_page_length=2,
+    )
+    if len(accounts) > 1:
+        frappe.throw(
+            _("Multiple active Interakt accounts are configured for Pipeline {0}.").format(pipeline)
+        )
+    return accounts[0] if accounts else None
 
 
 def _whatsapp_route_status_for_patient(patient) -> dict[str, Any]:

@@ -248,16 +248,19 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("/assets/vobiz_click_to_call/js/availability.js", hooks)
         self.assertIn("def record_agent_activity", source)
         self.assertIn("def mark_agent_activity_inactive", source)
-        self.assertIn("_open_or_touch_attendance_session(user, tab_id, now, source=\"Desk Activity\")", source)
+        self.assertIn("if _should_touch_desk_activity_db(user, tab_id):", activity_source)
+        self.assertIn("_open_or_touch_attendance_session(user, tab_id, now, source=\"Desk Activity\")", activity_source)
+        self.assertIn("DESK_ACTIVITY_DB_TOUCH_SECONDS = 5 * 60", source)
+        self.assertIn("return False", source[source.index("\ndef _should_touch_desk_activity_db("):])
         self.assertIn("record_agent_activity", availability)
         self.assertIn("mark_agent_activity_inactive", availability)
         self.assertIn("ACTIVITY_HEARTBEAT_MS = 30 * 1000", availability)
-        self.assertIn("ACTIVITY_IDLE_MS = 5 * 60 * 1000", availability)
+        self.assertIn("DEFAULT_ACTIVITY_IDLE_MS = 5 * 60 * 1000", availability)
+        self.assertIn("function activityIdleMs()", availability)
         self.assertIn("sessionStorage", availability)
         self.assertNotIn("availability_status", activity_source)
         self.assertNotIn("accept_calls", activity_source)
-        self.assertNotIn("availability_status", inactive_source)
-        self.assertNotIn("accept_calls", inactive_source)
+        self.assertIn("get_idle_auto_offline_config()", inactive_source)
 
     def test_queue_owner_uses_only_lead_owner_field(self):
         source = CONSOLE_API.read_text(encoding="utf-8")
@@ -286,6 +289,17 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn('data-workdesk-action="call"', self.source)
         self.assertIn("return this.handle_workdesk_primary_action(row)", self.source)
         self.assertIn("this.update_workdesk_primary_action(row)", render_live_source)
+
+    def test_patient_mobile_and_contact_number_require_selection(self):
+        call_api = (Path(__file__).resolve().parents[1] / "api" / "call.py").read_text(encoding="utf-8")
+        chooser = self.method_source("select_patient_phone", "toggle_auto_dial")
+
+        self.assertIn('(("mobile", _("Mobile Number")), ("phone", _("Contact Number")))', call_api)
+        self.assertIn("def get_patient_phone_choices(patient: str)", call_api)
+        self.assertIn("if (row.doctype === 'Patient' && !patientPhone)", self.source)
+        self.assertIn("Select Patient Number", chooser)
+        self.assertIn("if (!callStarted) resolve(null)", chooser)
+        self.assertNotIn("get_close_btn().hide()", chooser)
 
     def test_workdesk_stop_and_terminal_call_prompt_disposition(self):
         cancel_source = self.method_source("cancel_call_log", "maybe_prompt_workdesk_disposition")

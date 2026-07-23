@@ -82,6 +82,26 @@ def get_inbound_callback_token(settings=None) -> str:
     return (token or frappe.conf.get("vobiz_inbound_callback_token") or "").strip()
 
 
+def prefer_current_lead_assignment_for_incoming_calls(settings=None) -> bool:
+    settings = settings or get_settings()
+    return bool(
+        frappe.utils.cint(
+            getattr(settings, "prefer_current_lead_assignment_for_incoming_calls", 1)
+        )
+    )
+
+
+def get_idle_auto_offline_config(settings=None) -> dict:
+    settings = settings or get_settings()
+    enabled = bool(frappe.utils.cint(getattr(settings, "enable_idle_auto_offline", 0)))
+    minutes = max(1, frappe.utils.cint(getattr(settings, "idle_auto_offline_minutes", 5)) or 5)
+    return {
+        "enabled": enabled,
+        "minutes": minutes,
+        "seconds": minutes * 60,
+    }
+
+
 def _first_caller_id(settings=None) -> str:
     ids = get_caller_ids(settings)
     return ids[0] if ids else ""

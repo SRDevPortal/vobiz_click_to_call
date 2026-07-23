@@ -17,6 +17,7 @@
   "call_section",
   "allowed_doctypes",
   "default_call_flow",
+  "prefer_current_lead_assignment_for_incoming_calls",
   "manual_disposition_options",
   "agent_ring_timeout",
   "max_call_duration",
@@ -26,6 +27,8 @@
   "busy_callback_ai_fallback_mobile",
   "safety_section",
   "prevent_blocked_numbers",
+  "enable_idle_auto_offline",
+  "idle_auto_offline_minutes",
   "max_call_attempts_per_reference_per_day",
   "max_calls_per_user_per_day",
   "http_timeout",
@@ -137,6 +140,13 @@
    "options": "Customer First\nAgent First"
   },
   {
+   "default": "1",
+   "description": "When enabled, incoming calls from an existing CRM Lead are routed to the current Lead Owner before the agent who last called. Treat-as-new statuses always take priority.",
+   "fieldname": "prefer_current_lead_assignment_for_incoming_calls",
+   "fieldtype": "Check",
+   "label": "Prefer Current Lead Assignment for Incoming Calls"
+  },
+  {
    "default": "Connected\nNo Answer\nBusy\nFailed\nWrong Number\nNot Interested\nInterested\nFollow Up Required\nConverted\nCall Back Later\nLanguage Issue\nDuplicate Lead\nInvalid Number\nDo Not Call",
    "description": "One manual post-call disposition per line.",
    "fieldname": "manual_disposition_options",
@@ -195,6 +205,21 @@
    "fieldname": "prevent_blocked_numbers",
    "fieldtype": "Check",
    "label": "Prevent Blocked Numbers"
+  },
+  {
+   "default": "0",
+   "description": "When enabled, normal agent users are automatically marked Offline after no CRM activity for the configured time. Team Leaders and Admin / Manager users are excluded.",
+   "fieldname": "enable_idle_auto_offline",
+   "fieldtype": "Check",
+   "label": "Enable Idle Auto Offline"
+  },
+  {
+   "default": "5",
+   "depends_on": "eval:doc.enable_idle_auto_offline",
+   "description": "No-activity timeout in minutes for normal agents.",
+   "fieldname": "idle_auto_offline_minutes",
+   "fieldtype": "Int",
+   "label": "Idle Auto Offline Minutes"
   },
   {
    "default": "0",

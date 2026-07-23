@@ -19,6 +19,7 @@
  ],
  "fields": [
   {
+   "db_index": 1,
    "fieldname": "agent_user",
    "fieldtype": "Link",
    "in_list_view": 1,
@@ -27,12 +28,14 @@
    "reqd": 1
   },
   {
+   "db_index": 1,
    "fieldname": "tab_id",
    "fieldtype": "Data",
    "label": "Tab ID"
   },
   {
    "default": "Open",
+   "db_index": 1,
    "fieldname": "status",
    "fieldtype": "Select",
    "in_list_view": 1,
@@ -41,6 +44,7 @@
    "reqd": 1
   },
   {
+   "db_index": 1,
    "fieldname": "shift_date",
    "fieldtype": "Date",
    "in_list_view": 1,
@@ -48,6 +52,7 @@
    "reqd": 1
   },
   {
+   "db_index": 1,
    "fieldname": "online_from",
    "fieldtype": "Datetime",
    "in_list_view": 1,
@@ -55,6 +60,7 @@
    "reqd": 1
   },
   {
+   "db_index": 1,
    "fieldname": "last_seen_at",
    "fieldtype": "Datetime",
    "in_list_view": 1,
@@ -111,5 +117,5 @@
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],
- "track_changes": 1
+ "track_changes": 0
 }
