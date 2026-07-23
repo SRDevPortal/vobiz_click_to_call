@@ -19,6 +19,7 @@ from vobiz_click_to_call.api.call import (
 )
 from vobiz_click_to_call.api.recording import recording_proxy_url
 from vobiz_click_to_call.api.disposition import get_disposition_options_api, get_patient_followup_status_options_api
+from vobiz_click_to_call.services.attendance import agent_attendance_enabled
 from vobiz_click_to_call.services.call_status import MISSED_STATUSES, is_inbound_missed_call, status_bucket, talk_seconds
 from vobiz_click_to_call.services.lead_disposition import get_lead_disposition_context
 from vobiz_click_to_call.services.settings import get_idle_auto_offline_config, get_settings
@@ -45,6 +46,8 @@ CONSOLE_STATIC_CONTEXT_TTL_SECONDS = 60
 CONSOLE_QUEUE_LIMIT_MAX = 100
 ANALYTICS_STATUS_OPTIONS = ("total", "connected", "missed", "busy", "no_answer", "failed", "cancelled")
 ANALYTICS_CALL_LIMIT_MAX = 100
+# Hard-disabled to prevent the analytics API from executing expensive queries.
+ANALYTICS_API_ENABLED = False
 AGENT_ATTENDANCE_DOCTYPE = "Vobiz Agent Attendance Log"
 AVAILABILITY_ATTENDANCE_SOURCE = "Availability"
 ACTIVITY_ATTENDANCE_SOURCES = ("Agent Console", "Desk Activity")
@@ -728,6 +731,9 @@ def get_analytics(
     call_offset: int | str = 0,
     unique_only: int | str = 0,
 ) -> dict[str, Any]:
+    if not ANALYTICS_API_ENABLED or frappe.conf.get("disable_vobiz_analytics_api"):
+        frappe.throw(_("Vobiz analytics API is temporarily disabled."), frappe.PermissionError)
+
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
 
@@ -1614,6 +1620,7 @@ def _availability_attendance_snapshot(
             "records": [],
         }
 
+<<<<<<< HEAD
     shift_start, _, shift_elapsed_until, shift_elapsed_seconds = _today_shift_window(now)
     if rows is None:
         rows = frappe.get_all(
@@ -1623,6 +1630,16 @@ def _availability_attendance_snapshot(
             order_by="online_from asc",
             limit_page_length=500,
         )
+=======
+    shift_start, _shift_end, shift_elapsed_until, shift_elapsed_seconds = _today_shift_window(now)
+    rows = frappe.get_all(
+        AGENT_ATTENDANCE_DOCTYPE,
+        filters={"agent_user": user, "shift_date": _shift_date(now), "source": AVAILABILITY_ATTENDANCE_SOURCE},
+        fields=["availability_status", "online_from", "last_seen_at", "offline_at", "status"],
+        order_by="online_from asc",
+        limit_page_length=500,
+    )
+>>>>>>> b3cb8f5c397f60b62cf7831ce64a746203540c55
     authoritative_since = frappe.utils.get_datetime(current_status_since) if current_status_since else None
     if authoritative_since and authoritative_since > now:
         authoritative_since = None
@@ -1965,7 +1982,9 @@ def _attendance_snapshot(user: str, now, is_online: bool, *, use_persistent: boo
 
 
 def _agent_attendance_log_enabled() -> bool:
-    return bool(frappe.db.exists("DocType", AGENT_ATTENDANCE_DOCTYPE))
+    return agent_attendance_enabled() and bool(
+        frappe.db.exists("DocType", AGENT_ATTENDANCE_DOCTYPE)
+    )
 
 
 def _has_enabled_vobiz_user_mapping(user: str | None) -> bool:
