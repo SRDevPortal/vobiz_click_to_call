@@ -1620,7 +1620,6 @@ def _availability_attendance_snapshot(
             "records": [],
         }
 
-<<<<<<< HEAD
     shift_start, _, shift_elapsed_until, shift_elapsed_seconds = _today_shift_window(now)
     if rows is None:
         rows = frappe.get_all(
@@ -1630,16 +1629,6 @@ def _availability_attendance_snapshot(
             order_by="online_from asc",
             limit_page_length=500,
         )
-=======
-    shift_start, _shift_end, shift_elapsed_until, shift_elapsed_seconds = _today_shift_window(now)
-    rows = frappe.get_all(
-        AGENT_ATTENDANCE_DOCTYPE,
-        filters={"agent_user": user, "shift_date": _shift_date(now), "source": AVAILABILITY_ATTENDANCE_SOURCE},
-        fields=["availability_status", "online_from", "last_seen_at", "offline_at", "status"],
-        order_by="online_from asc",
-        limit_page_length=500,
-    )
->>>>>>> b3cb8f5c397f60b62cf7831ce64a746203540c55
     authoritative_since = frappe.utils.get_datetime(current_status_since) if current_status_since else None
     if authoritative_since and authoritative_since > now:
         authoritative_since = None
