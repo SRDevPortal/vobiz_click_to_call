@@ -172,6 +172,8 @@ class VobizAgentConsole {
 										<th style="width: 112px">${__('Missed Call')}</th>
 										<th style="width: 92px">${__('WhatsApp')}</th>
 										<th class="vobiz-patient-col hidden">${__('Department')}</th>
+										<th class="vobiz-patient-col hidden">${__('Disease')}</th>
+										<th class="vobiz-patient-col hidden">${__('Language')}</th>
 										<th class="vobiz-patient-col hidden">${__('Follow-up ID')}</th>
 										<th class="vobiz-patient-col hidden">${__('Day')}</th>
 										<th class="vobiz-team-col">${__('Team')}</th>
@@ -898,7 +900,7 @@ class VobizAgentConsole {
 		const query = (this.page.main.find('[data-role="search"]').val() || '').toLowerCase();
 		const rows = this.state.queue
 			.map((row, index) => ({ ...row, index }))
-			.filter(row => !query || [row.name, row.title, row.company, row.phone, row.owner, row.status, row.next_action, row.team, row.sr_medical_department, row.sr_followup_id, row.sr_followup_day, row.missed_call_status, row.missed_call_time, row.whatsapp_last_message_preview].join(' ').toLowerCase().includes(query));
+			.filter(row => !query || [row.name, row.title, row.company, row.phone, row.owner, row.status, row.next_action, row.team, row.sr_medical_department, row.sr_dpt_disease, row.sr_dpt_language, row.sr_followup_id, row.sr_followup_day, row.missed_call_status, row.missed_call_time, row.whatsapp_last_message_preview].join(' ').toLowerCase().includes(query));
 		return this.new_missed_calls_first(rows);
 	}
 
@@ -966,7 +968,7 @@ class VobizAgentConsole {
 
 	queue_colspan() {
 		const meta = this.state.queue_meta || this.default_queue_meta();
-		return (meta.doctype || '') === 'Patient' ? 14 : 13;
+		return (meta.doctype || '') === 'Patient' ? 16 : 13;
 	}
 
 	reset_filter_group_if_doctype_changed() {
@@ -1064,6 +1066,8 @@ class VobizAgentConsole {
 				<td>${this.missed_call_cell_html(row)}</td>
 				<td>${this.whatsapp_queue_cell_html(row)}</td>
 				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_medical_department || '')}</td>
+				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_dpt_disease || '')}</td>
+				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_dpt_language || '')}</td>
 				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_followup_id || '')}</td>
 				<td class="vobiz-patient-col ${this.is_patient_queue() ? '' : 'hidden'}">${frappe.utils.escape_html(row.sr_followup_day || '')}</td>
 				<td class="vobiz-team-col ${this.is_patient_queue() ? 'hidden' : ''}">${frappe.utils.escape_html(row.team || '')}</td>

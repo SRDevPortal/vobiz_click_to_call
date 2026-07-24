@@ -14,6 +14,10 @@
   "patient_routing_section",
   "sr_medical_department",
   "sr_medical_departments",
+  "sr_dpt_disease",
+  "sr_dpt_diseases",
+  "sr_dpt_language",
+  "sr_dpt_languages",
   "sr_followup_id",
   "sr_followup_ids",
   "availability_section",
@@ -104,6 +108,36 @@
    "fieldtype": "Small Text",
    "hidden": 1,
    "label": "Departments"
+  },
+  {
+   "depends_on": "eval:['Patient', 'CRM Lead and Patient'].includes(doc.queue_source) && (doc.sr_medical_department=='Regional' || (doc.sr_medical_departments && doc.sr_medical_departments.split('\\n').includes('Regional')))",
+   "fieldname": "sr_dpt_disease",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Disease",
+   "options": "DPT Disease"
+  },
+  {
+   "fieldname": "sr_dpt_diseases",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "Diseases"
+  },
+  {
+   "depends_on": "eval:['Patient', 'CRM Lead and Patient'].includes(doc.queue_source) && (doc.sr_medical_department=='Regional' || (doc.sr_medical_departments && doc.sr_medical_departments.split('\\n').includes('Regional')))",
+   "fieldname": "sr_dpt_language",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Language",
+   "options": "DPT Language"
+  },
+  {
+   "fieldname": "sr_dpt_languages",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "Languages"
   },
   {
    "depends_on": "eval:['Patient', 'CRM Lead and Patient'].includes(doc.queue_source)",

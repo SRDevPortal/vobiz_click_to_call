@@ -117,9 +117,12 @@ class TestIncomingMappingSource(unittest.TestCase):
         self.assertIn('"route_type": "patient_mapping"', patient_source)
         self.assertIn('"route_type": "patient_mapping_fallback_user"', patient_source)
         self.assertIn('"route_type": "patient_end_fallback_mobile"', patient_source)
-        self.assertIn("_patient_mapping_matches(row, patient_department, patient_followup_id)", patient_source)
-        self.assertIn('mapping.get("sr_medical_departments")', patient_source)
-        self.assertIn('mapping.get("sr_followup_ids")', patient_source)
+        self.assertIn("_patient_mapping_matches(row, patient)", patient_source)
+        self.assertIn('"sr_medical_departments"', patient_source)
+        self.assertIn('"sr_followup_ids"', patient_source)
+        self.assertIn('"sr_dpt_diseases"', patient_source)
+        self.assertIn('"sr_dpt_languages"', patient_source)
+        self.assertIn("patient_matches_mapping(patient, mapping)", patient_source)
 
     def test_existing_crm_lead_routes_to_lead_owner_fallback_then_end_fallback(self):
         source = self.inbound_source

@@ -17,6 +17,7 @@ from vobiz_click_to_call.services.call_status import status_from_provider
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
 from vobiz_click_to_call.services.disposition import update_reference_call_metrics
 from vobiz_click_to_call.services.numbers import mask_phone, normalize_phone_number, numbers_match
+from vobiz_click_to_call.services.patient_routing import patient_matches_mapping
 from vobiz_click_to_call.services.safety import assert_call_allowed, get_working_hours_block_reason
 from vobiz_click_to_call.services.settings import (
     build_callback_url,
@@ -677,6 +678,10 @@ def get_user_mapping(user: str) -> dict[str, Any] | None:
             "sr_medical_departments",
             "sr_followup_id",
             "sr_followup_ids",
+            "sr_dpt_disease",
+            "sr_dpt_diseases",
+            "sr_dpt_language",
+            "sr_dpt_languages",
         ]),
         limit=1,
     )
@@ -724,19 +729,13 @@ def has_mapped_patient_access(reference_doctype: str, reference_name: str, user:
     mapping = get_user_mapping(user or frappe.session.user)
     if not mapping or (mapping.get("queue_source") or "").strip() not in {"Patient", "CRM Lead and Patient"}:
         return False
-    meta = frappe.get_meta("Patient")
-    filters: dict[str, Any] = {"name": reference_name}
-    if meta.has_field("sr_medical_department"):
-        departments = _split_mapping_values(mapping.get("sr_medical_departments"), first=mapping.get("sr_medical_department"))
-        if not departments:
-            return False
-        filters["sr_medical_department"] = ["in", departments]
-    if meta.has_field("sr_followup_id"):
-        followup_ids = _split_mapping_values(mapping.get("sr_followup_ids"), first=mapping.get("sr_followup_id"))
-        if not followup_ids:
-            return False
-        filters["sr_followup_id"] = ["in", followup_ids]
-    return bool(frappe.db.exists("Patient", filters))
+    patient = frappe.db.get_value(
+        "Patient",
+        reference_name,
+        ["sr_medical_department", "sr_followup_id", "sr_dpt_disease", "sr_dpt_language"],
+        as_dict=True,
+    )
+    return bool(patient and patient_matches_mapping(patient, mapping))
 
 
 def _split_mapping_values(value: str | None, first: str | None = None) -> list[str]:

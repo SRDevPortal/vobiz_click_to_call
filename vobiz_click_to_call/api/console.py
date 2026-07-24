@@ -22,6 +22,7 @@ from vobiz_click_to_call.api.disposition import get_disposition_options_api, get
 from vobiz_click_to_call.services.attendance import agent_attendance_enabled
 from vobiz_click_to_call.services.call_status import MISSED_STATUSES, is_inbound_missed_call, status_bucket, talk_seconds
 from vobiz_click_to_call.services.lead_disposition import get_lead_disposition_context
+from vobiz_click_to_call.services.patient_routing import patient_matches_mapping
 from vobiz_click_to_call.services.settings import get_idle_auto_offline_config, get_settings
 
 
@@ -455,19 +456,13 @@ def _has_mapped_patient_access(reference_doctype: str, reference_name: str) -> b
     agent = _agent_context()
     if (agent.get("queue_source") or "").strip() not in {"Patient", COMBINED_QUEUE_SOURCE}:
         return False
-    meta = frappe.get_meta("Patient")
-    filters: dict[str, Any] = {"name": reference_name}
-    if meta.has_field("sr_medical_department"):
-        departments = _split_values(agent.get("sr_medical_departments"), first=agent.get("sr_medical_department"))
-        if not departments:
-            return False
-        filters["sr_medical_department"] = ["in", departments]
-    if meta.has_field("sr_followup_id"):
-        followup_ids = _split_values(agent.get("sr_followup_ids"), first=agent.get("sr_followup_id"))
-        if not followup_ids:
-            return False
-        filters["sr_followup_id"] = ["in", followup_ids]
-    return bool(frappe.db.exists("Patient", filters))
+    patient = frappe.db.get_value(
+        "Patient",
+        reference_name,
+        ["sr_medical_department", "sr_followup_id", "sr_dpt_disease", "sr_dpt_language"],
+        as_dict=True,
+    )
+    return bool(patient and patient_matches_mapping(patient, agent))
 
 
 @frappe.whitelist()
@@ -2728,6 +2723,10 @@ def _agent_context() -> dict[str, Any]:
         "sr_medical_departments",
         "sr_followup_id",
         "sr_followup_ids",
+        "sr_dpt_disease",
+        "sr_dpt_diseases",
+        "sr_dpt_language",
+        "sr_dpt_languages",
         "fallback_user",
         "fallback_users",
         "team",
@@ -2919,6 +2918,8 @@ def _queue_for_doctype(
             "lead_owner",
             "created_by_agent",
             "sr_medical_department",
+            "sr_dpt_disease",
+            "sr_dpt_language",
             "sr_followup_id",
             "sr_followup_day",
             "sr_followup_status",
@@ -2943,6 +2944,8 @@ def _queue_for_doctype(
         order_by=_queue_order_by(meta, sort_by),
         limit_page_length=fetch_limit,
     )
+    if doctype == "Patient" and queue_source == "Patient":
+        rows = [row for row in rows if patient_matches_mapping(row, agent or {})]
     rows = [_reference_row(doctype, row) for row in rows]
     rows = _attach_queue_missed_calls(rows)
     rows = _attach_queue_whatsapp(rows, sort_by=sort_by)
@@ -3145,6 +3148,8 @@ def _reference_row(doctype: str, doc) -> dict[str, Any]:
         "status": status,
         "next_action": str(next_action),
         "sr_medical_department": data.get("sr_medical_department"),
+        "sr_dpt_disease": data.get("sr_dpt_disease"),
+        "sr_dpt_language": data.get("sr_dpt_language"),
         "sr_followup_status": data.get("sr_followup_status"),
         "sr_followup_id": data.get("sr_followup_id"),
         "sr_followup_day": data.get("sr_followup_day"),

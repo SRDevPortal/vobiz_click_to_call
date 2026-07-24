@@ -13,6 +13,10 @@ frappe.ui.form.on('Vobiz User Mapping', {
 			frm.set_value('sr_medical_departments', '');
 			frm.set_value('sr_followup_id', '');
 			frm.set_value('sr_followup_ids', '');
+			frm.set_value('sr_dpt_disease', '');
+			frm.set_value('sr_dpt_diseases', '');
+			frm.set_value('sr_dpt_language', '');
+			frm.set_value('sr_dpt_languages', '');
 		}
 		setup_patient_routing_multi_ui(frm);
 	},
@@ -20,6 +24,12 @@ frappe.ui.form.on('Vobiz User Mapping', {
 		setup_patient_routing_multi_ui(frm);
 	},
 	sr_followup_id(frm) {
+		setup_patient_routing_multi_ui(frm);
+	},
+	sr_dpt_disease(frm) {
+		setup_patient_routing_multi_ui(frm);
+	},
+	sr_dpt_language(frm) {
 		setup_patient_routing_multi_ui(frm);
 	},
 	fallback_user(frm) {
@@ -66,12 +76,27 @@ function load_team_leader(frm) {
 
 function setup_patient_routing_multi_ui(frm) {
 	const show = queue_source_includes_patient(frm.doc.queue_source);
+	const showRegional = show && get_multi_values(frm.doc.sr_medical_departments)
+		.concat([(frm.doc.sr_medical_department || '').toString().trim()])
+		.includes('Regional');
 	setup_multi_value_field(frm, {
 		fieldname: 'sr_medical_department',
 		store_fieldname: 'sr_medical_departments',
 		button_title: __('Add Department'),
 		empty_text: __('No extra departments added')
 	}, show);
+	setup_multi_value_field(frm, {
+		fieldname: 'sr_dpt_disease',
+		store_fieldname: 'sr_dpt_diseases',
+		button_title: __('Add Disease'),
+		empty_text: __('No extra diseases added')
+	}, showRegional);
+	setup_multi_value_field(frm, {
+		fieldname: 'sr_dpt_language',
+		store_fieldname: 'sr_dpt_languages',
+		button_title: __('Add Language'),
+		empty_text: __('No extra languages added')
+	}, showRegional);
 	setup_multi_value_field(frm, {
 		fieldname: 'sr_followup_id',
 		store_fieldname: 'sr_followup_ids',

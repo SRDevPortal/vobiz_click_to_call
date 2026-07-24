@@ -17,6 +17,7 @@ from vobiz_click_to_call.services.call_log_update import save_doc_latest, snapsh
 from vobiz_click_to_call.services.call_status import status_from_provider
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
 from vobiz_click_to_call.services.numbers import normalize_phone_number, phone_key, provider_phone_number
+from vobiz_click_to_call.services.patient_routing import patient_matches_mapping
 from vobiz_click_to_call.services.settings import (
     build_callback_url,
     get_caller_ids,
@@ -800,6 +801,10 @@ def patient_route_mappings(patient) -> list[dict[str, Any]]:
             "sr_medical_departments",
             "sr_followup_id",
             "sr_followup_ids",
+            "sr_dpt_disease",
+            "sr_dpt_diseases",
+            "sr_dpt_language",
+            "sr_dpt_languages",
         ],
     )
     rows = frappe.get_all(
@@ -809,19 +814,11 @@ def patient_route_mappings(patient) -> list[dict[str, Any]]:
         order_by="modified asc",
         limit_page_length=0,
     )
-    patient_department = str(patient.get("sr_medical_department") or "").strip()
-    patient_followup_id = str(patient.get("sr_followup_id") or "").strip()
-    return [row for row in rows if _patient_mapping_matches(row, patient_department, patient_followup_id)]
+    return [row for row in rows if _patient_mapping_matches(row, patient)]
 
 
-def _patient_mapping_matches(mapping: dict[str, Any], patient_department: str, patient_followup_id: str) -> bool:
-    departments = _split_route_values(mapping.get("sr_medical_departments"), first=mapping.get("sr_medical_department"))
-    followup_ids = _split_route_values(mapping.get("sr_followup_ids"), first=mapping.get("sr_followup_id"))
-    if not patient_department or not departments or patient_department not in departments:
-        return False
-    if not patient_followup_id or not followup_ids or patient_followup_id not in followup_ids:
-        return False
-    return True
+def _patient_mapping_matches(mapping: dict[str, Any], patient) -> bool:
+    return patient_matches_mapping(patient, mapping)
 
 
 def resolve_lead_owner_inbound_target(lead, settings=None) -> dict[str, Any]:

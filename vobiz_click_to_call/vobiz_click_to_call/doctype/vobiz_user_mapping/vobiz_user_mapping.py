@@ -25,23 +25,41 @@ class VobizUserMapping(Document):
         if self.queue_source in {"Patient", "CRM Lead and Patient"}:
             departments = _split_values(self.get("sr_medical_departments"))
             followup_ids = _split_values(self.get("sr_followup_ids"))
+            diseases = _split_values(self.get("sr_dpt_diseases"))
+            languages = _split_values(self.get("sr_dpt_languages"))
             if self.sr_medical_department and self.sr_medical_department not in departments:
                 departments.insert(0, self.sr_medical_department)
             if self.sr_followup_id not in (None, "") and str(self.sr_followup_id) not in followup_ids:
                 followup_ids.insert(0, str(self.sr_followup_id))
+            if self.get("sr_dpt_disease") and self.sr_dpt_disease not in diseases:
+                diseases.insert(0, self.sr_dpt_disease)
+            if self.get("sr_dpt_language") and self.sr_dpt_language not in languages:
+                languages.insert(0, self.sr_dpt_language)
             if not departments:
                 frappe.throw(_("At least one Department is required when Queue Source is Patient."))
             if not followup_ids:
                 frappe.throw(_("At least one Follow up ID is required when Queue Source is Patient."))
+            if "Regional" in departments and not diseases:
+                frappe.throw(_("At least one Disease is required when Department includes Regional."))
+            if "Regional" in departments and not languages:
+                frappe.throw(_("At least one Language is required when Department includes Regional."))
             self.sr_medical_department = departments[0]
             self.sr_medical_departments = "\n".join(departments)
             self.sr_followup_id = followup_ids[0]
             self.sr_followup_ids = "\n".join(followup_ids)
+            self.sr_dpt_disease = diseases[0] if diseases else ""
+            self.sr_dpt_diseases = "\n".join(diseases)
+            self.sr_dpt_language = languages[0] if languages else ""
+            self.sr_dpt_languages = "\n".join(languages)
         else:
             self.sr_medical_department = ""
             self.sr_followup_id = ""
             self.sr_medical_departments = ""
             self.sr_followup_ids = ""
+            self.sr_dpt_disease = ""
+            self.sr_dpt_diseases = ""
+            self.sr_dpt_language = ""
+            self.sr_dpt_languages = ""
         self.fallback_users = "\n".join(_split_values(self.get("fallback_users"), first=self.get("fallback_user")))
         if not self.fallback_user and self.fallback_users:
             self.fallback_user = _split_values(self.fallback_users)[0]
