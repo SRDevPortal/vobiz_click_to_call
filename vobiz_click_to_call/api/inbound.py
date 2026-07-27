@@ -167,6 +167,7 @@ def dial_action(call_log: str | None = None, token: str | None = None):
     if not doc:
         return _xml_response(_hangup_xml())
 
+    doc = _lock_call_log(doc)
     before = snapshot_doc(doc)
     apply_provider_payload(doc, payload)
     status = str(_first_value(payload, "DialCallStatus", "dial_call_status", "DialStatus", "dial_status", "Status", "status") or "").strip().lower().replace("_", "-")
@@ -227,7 +228,88 @@ def dial_action(call_log: str | None = None, token: str | None = None):
     if doc.status in TERMINAL_STATUSES:
         restore_mapping_after_call(doc.name)
     frappe.db.commit()
+    if doc.status == "Connected":
+        _start_recording_safely(doc.name)
     return _xml_response(_wait_xml())
+
+
+@frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
+def dial_event(call_log: str | None = None, token: str | None = None):
+    """Track the agent B-leg so incoming talk time starts when the agent answers."""
+    doc, payload = _validate_callback(call_log, token)
+    if not doc:
+        return _plain_response("IGNORED")
+
+    doc = _lock_call_log(doc)
+    before = snapshot_doc(doc)
+    apply_provider_payload(doc, payload)
+    event = _event_name(payload)
+    dial_action_name = str(_first_value(payload, "DialAction", "dial_action") or "").strip().lower()
+    event_time = _first_value(
+        payload,
+        "AnswerTime",
+        "DialAnswerTime",
+        "EndTime",
+        "Timestamp",
+        "timestamp",
+    ) or frappe.utils.now()
+
+    if event in {"dialanswer", "dialconnected"} or dial_action_name in {"answer", "connected"}:
+        doc.answer_time = doc.answer_time or event_time
+        doc.status = "Connected"
+        doc.call_status = "connected"
+    elif event == "dialhangup" or dial_action_name == "hangup":
+        doc.end_time = _first_value(payload, "EndTime", "Timestamp", "timestamp") or frappe.utils.now()
+        answered_seconds = _answered_seconds(doc)
+        if answered_seconds > 0:
+            doc.duration = answered_seconds
+            doc.billsec = answered_seconds
+            doc.status = "Completed"
+            doc.call_status = "completed"
+        else:
+            provider_status = str(
+                _first_value(
+                    payload,
+                    "DialBLegStatus",
+                    "DialStatus",
+                    "CallStatus",
+                    "Status",
+                )
+                or ""
+            ).strip()
+            doc.status = status_from_provider(
+                {
+                    "status": provider_status,
+                    "call_status": provider_status,
+                    "hangup_cause": _first_value(
+                        payload,
+                        "DialBLegHangupCause",
+                        "DialHangupCause",
+                        "HangupCause",
+                    ),
+                },
+                previous=doc.status,
+            ) or "No Answer"
+        doc.hangup_cause = _first_value(
+            payload,
+            "DialBLegHangupCause",
+            "DialHangupCause",
+            "HangupCause",
+        ) or doc.hangup_cause
+
+    try:
+        request_data = json.loads(doc.request_json or "{}")
+    except Exception:
+        request_data = {}
+    if not isinstance(request_data, dict):
+        request_data = {}
+    request_data.update(_safe_payload(payload))
+    doc.request_json = json.dumps(request_data, indent=2, default=str)
+    doc = save_doc_latest(doc, before)
+    if doc.status in TERMINAL_STATUSES:
+        restore_mapping_after_call(doc.name)
+    frappe.db.commit()
+    return _plain_response("OK")
 
 
 def find_last_customer_agent(customer_number: str):
@@ -611,11 +693,15 @@ def find_latest_crm_lead_by_phone(customer_number: str):
         for fieldname in ("sr_mobile_norm", "vobiz_mobile_last10", "vobiz_phone_last10", "vobiz_whatsapp_last10")
         if meta.has_field(fieldname)
     ]
+    canonical_filters = {}
+    for fieldname in ("sr_is_archived", "sr_is_duplicate"):
+        if meta.has_field(fieldname):
+            canonical_filters[fieldname] = 0
     newest = None
     for fieldname in indexed_fields:
         rows = frappe.get_all(
             "CRM Lead",
-            filters={fieldname: key},
+            filters={fieldname: key, **canonical_filters},
             fields=["name", "status", "creation"],
             order_by="creation desc",
             limit=1,
@@ -751,7 +837,7 @@ def resolve_patient_inbound_target(patient, settings=None) -> dict[str, Any]:
         for fallback_user in _fallback_users(mapping):
             fallback_mapping = get_user_mapping(fallback_user)
             fallback_mobile = _mapping_mobile(fallback_mapping, "")
-            if fallback_mapping and fallback_mobile and _mapping_can_receive(fallback_user, fallback_mapping) and not get_mapping_unavailable_reason(fallback_mapping):
+            if fallback_mapping and fallback_mobile:
                 return {
                     "user": fallback_user,
                     "agent_mobile": fallback_mobile,
@@ -858,7 +944,7 @@ def resolve_lead_owner_inbound_target(lead, settings=None) -> dict[str, Any]:
     for fallback_user in _fallback_users(mapping):
         fallback_mapping = get_user_mapping(fallback_user)
         fallback_mobile = _mapping_mobile(fallback_mapping, "")
-        if fallback_mapping and fallback_mobile and _mapping_can_receive(fallback_user, fallback_mapping):
+        if fallback_mapping and fallback_mobile:
             return {
                 "user": fallback_user,
                 "agent_mobile": fallback_mobile,
@@ -1213,6 +1299,7 @@ def find_existing_inbound_call(payload: dict[str, Any]):
 
 
 def update_inbound_call_event(doc, payload: dict[str, Any], *, commit: bool = True) -> None:
+    doc = _lock_call_log(doc)
     before = snapshot_doc(doc)
     apply_provider_payload(doc, payload)
     event = _event_name(payload)
@@ -1220,11 +1307,18 @@ def update_inbound_call_event(doc, payload: dict[str, Any], *, commit: bool = Tr
     reason = _first_value(payload, "Reason", "HangupCause", "DialHangupCause", "hangup_cause")
 
     if event == "hangup":
+        answered_seconds = _answered_seconds(doc)
+        if answered_seconds > 0:
+            doc.duration = answered_seconds
+            doc.billsec = answered_seconds
         doc.status = status_from_provider(
             {
                 "status": status,
                 "call_status": status,
                 "hangup_cause": reason,
+                "call_flow": doc.call_flow,
+                "answer_time": doc.answer_time,
+                "end_time": doc.end_time,
                 "duration": doc.duration or _safe_int(_first_value(payload, "Duration", "duration")),
                 "billsec": doc.billsec or _safe_int(_first_value(payload, "BillSec", "billsec", "BillSeconds", "bill_seconds")),
             },
@@ -1270,9 +1364,12 @@ def mark_inbound_missed(doc, reason: str, payload: dict[str, Any], *, commit: bo
 
 
 def apply_provider_payload(doc, payload: dict[str, Any]) -> None:
+    event = str(_first_value(payload, "Event", "event") or "").strip().lower()
     values = {
         "event": _first_value(payload, "Event", "event"),
         "call_uuid": _first_value(payload, "CallUUID", "call_uuid", "uuid"),
+        "a_leg_uuid": _first_value(payload, "DialALegUUID", "ALegUUID", "a_leg_uuid"),
+        "b_leg_uuid": _first_value(payload, "DialBLegUUID", "BLegUUID", "b_leg_uuid"),
         "request_id": _first_value(payload, "RequestID", "request_id"),
         "request_uuid": _first_value(payload, "RequestUUID", "request_uuid"),
         "sip_call_id": _first_value(payload, "SIPCallID", "sip_call_id"),
@@ -1280,11 +1377,15 @@ def apply_provider_payload(doc, payload: dict[str, Any]) -> None:
         "trunk_id": _first_value(payload, "TrunkID", "trunk_id"),
         "domain": _first_value(payload, "Domain", "domain"),
         "event_timestamp": _first_value(payload, "Timestamp", "timestamp"),
+        "start_time": _first_value(payload, "StartTime", "start_time"),
+        "answer_time": _first_value(payload, "AnswerTime", "answer_time"),
+        "end_time": _first_value(payload, "EndTime", "end_time"),
         "duration": _safe_int(_first_value(payload, "Duration", "duration")),
         "billsec": _safe_int(_first_value(payload, "BillSec", "billsec", "BillSeconds", "bill_seconds")),
         "ring_time": _safe_int(_first_value(payload, "RingTime", "ring_time")),
-        "raw_payload": json.dumps(_safe_payload(payload), indent=2, default=str),
     }
+    if event != "dialaction" or not doc.raw_payload:
+        values["raw_payload"] = json.dumps(_safe_payload(payload), indent=2, default=str)
     for fieldname, value in values.items():
         if value not in (None, "") and frappe.get_meta("Vobiz Call Log").has_field(fieldname):
             setattr(doc, fieldname, value)
@@ -1301,7 +1402,7 @@ def resolve_inbound_target(previous, settings=None) -> dict[str, Any]:
     for fallback_user in _fallback_users(mapping):
         fallback_mapping = get_user_mapping(fallback_user)
         fallback_mobile = _mapping_mobile(fallback_mapping, "")
-        if fallback_mapping and fallback_mobile and _mapping_can_receive(fallback_user, fallback_mapping):
+        if fallback_mapping and fallback_mobile:
             return {
                 "user": fallback_user,
                 "agent_mobile": fallback_mobile,
@@ -1329,7 +1430,7 @@ def _next_inbound_fallback(doc) -> dict[str, Any]:
             continue
         fallback_mapping = get_user_mapping(fallback_user)
         fallback_mobile = _mapping_mobile(fallback_mapping, "")
-        if fallback_mapping and fallback_mobile and _mapping_can_receive(fallback_user, fallback_mapping):
+        if fallback_mapping and fallback_mobile:
             return {
                 "user": fallback_user,
                 "agent_mobile": fallback_mobile,
@@ -1404,6 +1505,18 @@ def _mapping_can_receive(user: str, mapping: dict[str, Any]) -> bool:
     return True
 
 
+def _start_recording_safely(call_log: str) -> None:
+    try:
+        frappe.enqueue(
+            "vobiz_click_to_call.services.recording.start_recording_if_needed",
+            queue="short",
+            timeout=180,
+            call_log=call_log,
+        )
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Vobiz inbound recording start failed")
+
+
 def _inbound_callback_allowed(payload: dict[str, Any], settings, did_number: str) -> bool:
     configured_dids = set(get_caller_ids(settings))
     if configured_dids and (not did_number or did_number not in configured_dids):
@@ -1460,9 +1573,17 @@ def _dial_agent_xml(call_log, agent_mobile: str, settings) -> str:
         call_log.callback_token,
         settings,
     )
+    event_url = build_callback_url(
+        "vobiz_click_to_call.api.inbound.dial_event",
+        call_log.name,
+        call_log.callback_token,
+        settings,
+    )
     attrs = [
         ("action", action_url),
         ("method", "POST"),
+        ("callbackUrl", event_url),
+        ("callbackMethod", "POST"),
         ("redirect", "false"),
     ]
     if call_log.did_number:
@@ -1472,14 +1593,57 @@ def _dial_agent_xml(call_log, agent_mobile: str, settings) -> str:
     if settings.max_call_duration:
         attrs.append(("timeLimit", str(int(settings.max_call_duration))))
     attr_text = " ".join(f"{name}={quoteattr(value)}" for name, value in attrs)
+    record_xml = ""
+    if frappe.utils.cint(getattr(settings, "enable_recording", 0)):
+        recording_url = build_callback_url(
+            "vobiz_click_to_call.api.webhook.recording_callback",
+            call_log.name,
+            call_log.callback_token,
+            settings,
+        )
+        record_attrs = [
+            ("callbackUrl", recording_url),
+            ("callbackMethod", "POST"),
+            ("fileFormat", getattr(settings, "recording_format", None) or "mp3"),
+            ("maxLength", str(int(getattr(settings, "recording_time_limit", None) or settings.max_call_duration or 3600))),
+            ("playBeep", "false"),
+            ("recordSession", "true"),
+            ("redirect", "false"),
+        ]
+        record_attr_text = " ".join(f"{name}={quoteattr(value)}" for name, value in record_attrs)
+        record_xml = f"<Record {record_attr_text}/>"
     return (
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
         "<Response>"
+        f"{record_xml}"
         f"<Dial {attr_text}>"
         f"<Number>{escape(provider_phone_number(agent_mobile))}</Number>"
         "</Dial>"
         "</Response>"
     )
+
+
+def _lock_call_log(doc):
+    """Serialize callbacks for one call so Hangup data cannot be overwritten by DialAction."""
+    if not getattr(doc, "name", None) or getattr(doc, "__islocal", False):
+        return doc
+    frappe.db.sql(
+        "select `name` from `tabVobiz Call Log` where `name` = %s for update",
+        doc.name,
+    )
+    doc.reload()
+    return doc
+
+
+def _answered_seconds(doc) -> int:
+    if not doc.answer_time or not doc.end_time:
+        return 0
+    try:
+        answer_time = frappe.utils.get_datetime(doc.answer_time)
+        end_time = frappe.utils.get_datetime(doc.end_time)
+    except Exception:
+        return 0
+    return max(0, frappe.utils.cint((end_time - answer_time).total_seconds()))
 
 
 def _validate_callback(call_log: str | None, token: str | None):

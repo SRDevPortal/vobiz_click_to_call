@@ -45,10 +45,21 @@ DESK_ACTIVITY_STALE_SECONDS = DESK_ACTIVITY_DB_TOUCH_SECONDS + CONSOLE_SESSION_T
 CONSOLE_AVAILABILITY_TOUCH_SECONDS = 60
 CONSOLE_STATIC_CONTEXT_TTL_SECONDS = 60
 CONSOLE_QUEUE_LIMIT_MAX = 100
-ANALYTICS_STATUS_OPTIONS = ("total", "connected", "missed", "busy", "no_answer", "failed", "cancelled")
+ANALYTICS_STATUS_OPTIONS = (
+    "total",
+    "connected",
+    "connected_inbound",
+    "connected_outbound",
+    "missed",
+    "busy",
+    "no_answer",
+    "failed",
+    "cancelled",
+)
 ANALYTICS_CALL_LIMIT_MAX = 100
-# Hard-disabled to prevent the analytics API from executing expensive queries.
-ANALYTICS_API_ENABLED = False
+# Enabled for the analytics page. It can still be disabled immediately with
+# disable_vobiz_analytics_api in site_config.json.
+ANALYTICS_API_ENABLED = True
 AGENT_ATTENDANCE_DOCTYPE = "Vobiz Agent Attendance Log"
 AVAILABILITY_ATTENDANCE_SOURCE = "Availability"
 ACTIVITY_ATTENDANCE_SOURCES = ("Agent Console", "Desk Activity")
@@ -1022,9 +1033,10 @@ def _apply_patient_department_analytics_filter(
 def _analytics_bucket_sql() -> str:
     signal = "lower(concat_ws(' ', coalesce(`status`, ''), coalesce(`call_status`, ''), coalesce(`dial_status`, ''), coalesce(`hangup_cause`, '')))"
     recording = _analytics_recording_duration_sql()
+    talk = _analytics_talk_sql()
     return f"""
         case
-            when {recording} > 0 or coalesce(`billsec`, 0) > 0 then 'connected'
+            when {talk} > 0 or {recording} > 0 or coalesce(`billsec`, 0) > 0 then 'connected'
             when {signal} like '%%busy%%' then 'busy'
             when {signal} like '%%no-answer%%' or {signal} like '%%no answer%%' or {signal} like '%%timeout%%' or {signal} like '%%unanswered%%' then 'no_answer'
             when `status` in ('Connected', 'Completed') then 'no_answer'
@@ -1089,6 +1101,10 @@ def _analytics_bucket_filter_sql(status_filter: str | None, table_alias: str | N
     direction = _analytics_column("direction", table_alias)
     if status_filter == "connected":
         return f"where {bucket} = 'connected'"
+    if status_filter == "connected_inbound":
+        return f"where {bucket} = 'connected' and {direction} = 'Incoming'"
+    if status_filter == "connected_outbound":
+        return f"where {bucket} = 'connected' and {direction} = 'Outgoing'"
     if status_filter == "missed":
         return f"where {bucket} in ('missed', 'busy', 'no_answer', 'failed', 'cancelled') and {direction} = 'Incoming'"
     if status_filter in {"busy", "no_answer", "failed", "cancelled"}:
@@ -1137,6 +1153,16 @@ def _summary_from_bucket_rows(rows: list[dict[str, Any]], unique_calls: int = 0)
         counts[row.bucket] = counts.get(row.bucket, 0) + frappe.utils.cint(row.call_count)
     total = sum(counts.values())
     connected = counts.get("connected", 0)
+    connected_inbound = sum(
+        frappe.utils.cint(row.call_count)
+        for row in rows
+        if row.bucket == "connected" and row.get("direction") == "Incoming"
+    )
+    connected_outbound = sum(
+        frappe.utils.cint(row.call_count)
+        for row in rows
+        if row.bucket == "connected" and row.get("direction") == "Outgoing"
+    )
     missed = sum(
         frappe.utils.cint(row.call_count)
         for row in rows
@@ -1153,6 +1179,8 @@ def _summary_from_bucket_rows(rows: list[dict[str, Any]], unique_calls: int = 0)
         "total": total,
         "unique_calls": frappe.utils.cint(unique_calls),
         "connected": connected,
+        "connected_inbound": connected_inbound,
+        "connected_outbound": connected_outbound,
         "missed": missed,
         "busy": counts.get("busy", 0),
         "no_answer": counts.get("no_answer", 0),
@@ -1615,7 +1643,7 @@ def _availability_attendance_snapshot(
             "records": [],
         }
 
-    shift_start, _, shift_elapsed_until, shift_elapsed_seconds = _today_shift_window(now)
+    shift_start, _shift_end, shift_elapsed_until, shift_elapsed_seconds = _today_shift_window(now)
     if rows is None:
         rows = frappe.get_all(
             AGENT_ATTENDANCE_DOCTYPE,
@@ -2336,6 +2364,10 @@ def _filter_performance_rows(rows: list[dict[str, Any]], status_filter: str | No
     missed_buckets = {"missed", "busy", "no_answer", "failed", "cancelled"}
     if status_filter == "connected":
         return [row for row in rows if row.get("bucket") == "connected"]
+    if status_filter == "connected_inbound":
+        return [row for row in rows if row.get("bucket") == "connected" and row.get("direction") == "Incoming"]
+    if status_filter == "connected_outbound":
+        return [row for row in rows if row.get("bucket") == "connected" and row.get("direction") == "Outgoing"]
     if status_filter == "missed":
         return [row for row in rows if row.get("bucket") in missed_buckets and row.get("direction") == "Incoming"]
     if status_filter in {"busy", "no_answer", "failed", "cancelled"}:

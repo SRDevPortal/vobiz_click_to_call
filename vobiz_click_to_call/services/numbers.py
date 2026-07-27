@@ -24,6 +24,11 @@ def normalize_phone_number(value: str | None, *, default_country_code: str = "+9
     if raw.startswith("00") and len(digits) > 2:
         return f"+{digits[2:]}"
 
+    # Vobiz may send Indian DIDs in domestic trunk-prefix form (for example,
+    # 07971442651). Drop the leading zero before applying the country code.
+    if default_digits == "91" and len(digits) == 11 and digits.startswith("0"):
+        return f"+{default_digits}{digits[1:]}"
+
     if default_digits and len(digits) == 10:
         return f"+{default_digits}{digits}"
 

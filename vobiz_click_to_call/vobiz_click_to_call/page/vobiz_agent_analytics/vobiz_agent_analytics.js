@@ -36,7 +36,7 @@ class VobizAgentAnalytics {
 			from_date: frappe.datetime.get_today(),
 			to_date: frappe.datetime.get_today(),
 			status_filter: 'total',
-			queue_source: 'CRM Lead',
+			queue_source: 'CRM Lead and Patient',
 			agent_user: [],
 			lead_owner: [],
 			team: [],
@@ -292,7 +292,7 @@ class VobizAgentAnalytics {
 				.vobiz-checkbox-empty { color: #667085; font-size: 12px; padding: 8px; }
 				.vobiz-filter-action { display: flex; justify-content: flex-end; }
 				.vobiz-summary { padding: 0; }
-				.vobiz-kpi-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); }
+				.vobiz-kpi-grid { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); }
 				.vobiz-kpi { background: #fff; border-right: 1px solid #edf0ea; min-height: 106px; padding: 18px 16px; position: relative; }
 				.vobiz-kpi:last-child { border-right: 0; }
 				.vobiz-kpi[role="button"] { cursor: pointer; }
@@ -300,6 +300,8 @@ class VobizAgentAnalytics {
 				.vobiz-kpi[role="button"]:focus { box-shadow: inset 0 0 0 2px #2f80ed; outline: 0; }
 				.vobiz-kpi:before { border-radius: 50%; content: ""; height: 8px; position: absolute; right: 16px; top: 18px; width: 8px; }
 				.vobiz-kpi.missed:before { background: #e2554f; }
+				.vobiz-kpi.connected-incoming:before { background: #14b8a6; }
+				.vobiz-kpi.connected-outgoing:before { background: #2563eb; }
 				.vobiz-kpi.connected:before { background: #1f9d72; }
 				.vobiz-kpi.total:before { background: #f2a93b; }
 				.vobiz-kpi.unique:before { background: #14b8a6; }
@@ -763,7 +765,7 @@ class VobizAgentAnalytics {
 			status_filter: status_filter === 'unique' ? 'total' : (status_filter || 'total'),
 			unique_only: status_filter === 'unique' ? 1 : 0
 		});
-		const queueSource = filters.queue_source || this.state.queue_source || 'CRM Lead';
+		const queueSource = filters.queue_source || this.state.queue_source || 'CRM Lead and Patient';
 		if (['CRM Lead', 'Discontinued'].includes(queueSource)) {
 			filters.lead_owner = JSON.stringify([agent_user]);
 			filters.agent_user = '';
@@ -854,7 +856,7 @@ class VobizAgentAnalytics {
 			from_date: today,
 			to_date: today,
 			status_filter: 'total',
-			queue_source: 'CRM Lead',
+			queue_source: 'CRM Lead and Patient',
 			agent_user: '',
 			lead_owner: [],
 			team: [],
@@ -959,7 +961,7 @@ class VobizAgentAnalytics {
 			from_date: (this.page.main.find('[data-role="from-date"]').val() || frappe.datetime.get_today()).trim(),
 			to_date: (this.page.main.find('[data-role="to-date"]').val() || frappe.datetime.get_today()).trim(),
 			status_filter: (this.page.main.find('[data-role="status-filter"]').val() || 'total').trim(),
-			queue_source: (this.page.main.find('[data-role="queue-source"]').val() || this.state.queue_source || 'CRM Lead').trim(),
+			queue_source: (this.page.main.find('[data-role="queue-source"]').val() || this.state.queue_source || 'CRM Lead and Patient').trim(),
 			agent_user: JSON.stringify(this.selected_values('agent')),
 			lead_owner: JSON.stringify(this.selected_values('lead-owner')),
 			team: JSON.stringify(this.selected_values('team')),
@@ -1190,7 +1192,8 @@ class VobizAgentAnalytics {
 	render_kpis(summary, data) {
 		const kpis = [
 			{ label: __('Missed'), value: summary.missed || 0, note: `${summary.missed_rate || 0}% ${__('missed')}`, className: 'missed', status_filter: 'missed' },
-			{ label: __('Connected'), value: summary.connected || 0, note: `${summary.answer_rate || 0}% ${__('answer rate')}`, className: 'connected', status_filter: 'connected' },
+			{ label: __('Connected Incoming'), value: summary.connected_inbound || 0, note: __('answered incoming calls'), className: 'connected-incoming', status_filter: 'connected_inbound' },
+			{ label: __('Connected Outgoing'), value: summary.connected_outbound || 0, note: __('answered outgoing calls'), className: 'connected-outgoing', status_filter: 'connected_outbound' },
 			{ label: __('Total Calls'), value: summary.total || 0, note: data.queue_source || '', className: 'total', status_filter: 'total' },
 			{ label: __('Unique Calls'), value: summary.unique_calls || 0, note: __('repeat calls counted once'), className: 'unique', status_filter: 'unique' },
 			{ label: __('Avg Talk Time'), value: summary.average_duration_label || '0s', note: __('connected calls only'), className: 'average' },
@@ -1246,6 +1249,8 @@ class VobizAgentAnalytics {
 		return {
 			total: __('Total Calls'),
 			connected: __('Connected Calls'),
+			connected_inbound: __('Connected Incoming Calls'),
+			connected_outbound: __('Connected Outgoing Calls'),
 			missed: __('Missed Calls'),
 			unique: __('Unique Calls'),
 			busy: __('Busy Calls'),
@@ -1914,6 +1919,8 @@ class VobizAgentAnalytics {
 			['total', __('All')],
 			['unique', __('Unique Calls')],
 			['connected', __('Connected')],
+			['connected_inbound', __('Connected Inbound')],
+			['connected_outbound', __('Connected Outbound')],
 			['missed', __('Missed')],
 			['busy', __('Busy')],
 			['no_answer', __('No Answer')],

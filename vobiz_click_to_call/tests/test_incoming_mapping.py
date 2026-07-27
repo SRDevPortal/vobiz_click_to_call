@@ -47,6 +47,15 @@ class TestIncomingMappingSource(unittest.TestCase):
     def setUp(self):
         self.inbound_source = INBOUND_API.read_text(encoding="utf-8")
 
+    def test_connected_inbound_call_starts_recording(self):
+        start = self.inbound_source.index("def dial_action(")
+        end = self.inbound_source.index("\ndef find_last_customer_agent", start)
+        dial_action = self.inbound_source[start:end]
+
+        self.assertIn('if doc.status == "Connected":', dial_action)
+        self.assertIn("_start_recording_safely(doc.name)", dial_action)
+        self.assertLess(dial_action.index("frappe.db.commit()"), dial_action.rindex("_start_recording_safely(doc.name)"))
+
     def test_assignment_and_status_routing_runs_before_previous_agent_lookup(self):
         previous_index = self.inbound_source.index("previous = find_last_customer_agent(customer_number)")
         unknown_index = self.inbound_source.index("reference_first = bool(")

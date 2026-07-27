@@ -50,7 +50,7 @@ def _answered_duration_seconds(row: dict[str, Any]) -> int:
 
 def has_talk_time(row: dict[str, Any] | None) -> bool:
     row = row or {}
-    return billable_talk_seconds(row) > 0
+    return talk_seconds(row) > 0 or billable_talk_seconds(row) > 0
 
 
 def status_from_provider(
