@@ -7,6 +7,7 @@ from typing import Any
 from xml.sax.saxutils import escape, quoteattr
 
 import frappe
+from frappe.rate_limiter import rate_limit
 from werkzeug.wrappers import Response
 
 from vobiz_ai.api.call_log import make_outbound_call_key, sync_reference_links
@@ -16,7 +17,7 @@ from vobiz_click_to_call.api.console import is_agent_console_online
 from vobiz_click_to_call.services.call_log_update import save_doc_latest, snapshot_doc
 from vobiz_click_to_call.services.call_status import status_from_provider
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
-from vobiz_click_to_call.services.numbers import normalize_phone_number, phone_key, provider_phone_number
+from vobiz_click_to_call.services.numbers import normalize_phone_number, provider_phone_number
 from vobiz_click_to_call.services.patient_routing import patient_matches_mapping
 from vobiz_click_to_call.services.settings import (
     build_callback_url,
@@ -31,20 +32,18 @@ TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "C
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
+@rate_limit(limit=300, seconds=60)
 def route():
     """Route inbound DID callbacks to the agent who last called this customer."""
     payload = _payload()
     event = _event_name(payload)
     settings = get_settings()
+    if not settings.enabled:
+        return _plain_response("IGNORED")
     default_country_code = get_default_country_code(settings)
     did_number = normalize_phone_number(_first_value(payload, "To", "to", "Called", "did", "DID"), default_country_code=default_country_code)
 
     if not _inbound_callback_allowed(payload, settings, did_number):
-        log_vobiz_event(
-            "Inbound route rejected: callback token or DID validation failed",
-            severity="Warning",
-            payload={"event": event, "did_number": did_number, "payload": _safe_payload(payload)},
-        )
         return _plain_response("IGNORED") if event == "hangup" else _xml_response(_hangup_xml())
 
     if event == "hangup":
@@ -162,6 +161,7 @@ def route():
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
+@rate_limit(limit=300, seconds=60)
 def dial_action(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
@@ -234,6 +234,7 @@ def dial_action(call_log: str | None = None, token: str | None = None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
+@rate_limit(limit=300, seconds=60)
 def dial_event(call_log: str | None = None, token: str | None = None):
     """Track the agent B-leg so incoming talk time starts when the agent answers."""
     doc, payload = _validate_callback(call_log, token)
@@ -314,7 +315,6 @@ def dial_event(call_log: str | None = None, token: str | None = None):
 
 def find_last_customer_agent(customer_number: str):
     normalized = normalize_phone_number(customer_number, default_country_code=get_default_country_code())
-    last10 = phone_key(customer_number)
     base_filters = {
         "source_app": "vobiz_click_to_call",
         "direction": "Outgoing",
@@ -329,14 +329,7 @@ def find_last_customer_agent(customer_number: str):
         if rows:
             return rows[0]
 
-    if not last10:
-        return None
-
-    recent_cutoff = frappe.utils.add_to_date(frappe.utils.now_datetime(), days=-90)
-    rows = _last_customer_agent_rows(
-        {**base_filters, "customer_number": ["like", f"%{last10}%"], "creation": [">=", recent_cutoff]}
-    )
-    return rows[0] if rows else None
+    return None
 
 
 def _last_customer_agent_rows(filters: dict[str, Any]):
@@ -898,7 +891,7 @@ def patient_route_mappings(patient) -> list[dict[str, Any]]:
         filters={"enabled": 1, "queue_source": ["in", ["Patient", "CRM Lead and Patient"]]},
         fields=fields,
         order_by="modified asc",
-        limit_page_length=0,
+        limit_page_length=2000,
     )
     return [row for row in rows if _patient_mapping_matches(row, patient)]
 
@@ -1524,7 +1517,7 @@ def _inbound_callback_allowed(payload: dict[str, Any], settings, did_number: str
 
     expected_token = get_inbound_callback_token(settings)
     if not expected_token:
-        return True
+        return False
 
     received_token = _first_value(payload, "token", "Token", "callback_token", "inbound_token", "inbound_callback_token")
     return hmac.compare_digest(str(expected_token), str(received_token or ""))
@@ -1773,6 +1766,21 @@ def _safe_int(value) -> int:
 def _safe_payload(payload: dict[str, Any]) -> dict[str, Any]:
     safe_payload = dict(payload or {})
     safe_payload.pop("cmd", None)
+    for fieldname in (
+        "token",
+        "Token",
+        "callback_token",
+        "inbound_token",
+        "inbound_callback_token",
+    ):
+        safe_payload.pop(fieldname, None)
+    encoded = json.dumps(safe_payload, default=str)
+    if len(encoded) > 64 * 1024:
+        return {
+            "truncated": True,
+            "original_size": len(encoded),
+            "preview": encoded[: 64 * 1024],
+        }
     return safe_payload
 
 

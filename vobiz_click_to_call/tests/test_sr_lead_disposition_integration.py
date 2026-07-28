@@ -16,6 +16,8 @@ VOBIZ_SETTINGS_JS = APP / "public" / "js" / "vobiz_settings.js"
 CONSOLE = APP / "api" / "console.py"
 HOOKS = APP / "hooks.py"
 INSTALL = APP / "install.py"
+PATCHES = APP / "patches.txt"
+DISPOSITION_CACHE_PATCH = APP / "patches" / "v1_0" / "remove_runtime_call_log_disposition_property_setters.py"
 
 
 class TestSRLeadDispositionIntegration(unittest.TestCase):
@@ -32,6 +34,8 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         cls.console = CONSOLE.read_text(encoding="utf-8")
         cls.hooks = HOOKS.read_text(encoding="utf-8")
         cls.install = INSTALL.read_text(encoding="utf-8")
+        cls.patches = PATCHES.read_text(encoding="utf-8")
+        cls.disposition_cache_patch = DISPOSITION_CACHE_PATCH.read_text(encoding="utf-8")
 
     def test_sr_lead_disposition_is_source_of_truth(self):
         self.assertIn('SR_LEAD_DISPOSITION = "SR Lead Disposition"', self.lead_disposition)
@@ -88,12 +92,25 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
             "https://dev-sr.butest.tech",
         )
 
-    def test_call_log_disposition_field_uses_sr_lead_disposition_selector(self):
-        self.assertIn("ensure_vobiz_call_log_disposition_field()", self.install)
-        self.assertIn('"Vobiz Call Log", "disposition", "fieldtype", "Select"', self.install)
-        self.assertIn("get_vobiz_call_log_disposition_options", self.install)
-        self.assertIn('"Vobiz Call Log", "disposition", "reqd", "0"', self.install)
-        self.assertIn("sync_call_log_disposition_options(disposition)", self.disposition)
+    def test_call_log_disposition_does_not_mutate_schema_at_runtime(self):
+        self.assertNotIn("ensure_vobiz_call_log_disposition_field", self.install)
+        self.assertNotIn("get_vobiz_call_log_disposition_options", self.install)
+        self.assertNotIn("sync_call_log_disposition_options", self.disposition)
+        self.assertNotIn("sync_call_log_disposition_options", self.ai)
+        self.assertNotIn('frappe.clear_cache(doctype="Vobiz Call Log")', self.install)
+
+    def test_call_log_disposition_property_setters_are_removed_by_patch(self):
+        patch_path = (
+            "vobiz_click_to_call.patches.v1_0."
+            "remove_runtime_call_log_disposition_property_setters"
+        )
+        self.assertIn(patch_path, self.patches)
+        self.assertIn('DOCTYPE = "Vobiz Call Log"', self.disposition_cache_patch)
+        self.assertIn(
+            'frappe.db.delete("Property Setter"',
+            self.disposition_cache_patch,
+        )
+        self.assertIn("frappe.clear_cache(doctype=DOCTYPE)", self.disposition_cache_patch)
 
     def test_patient_followup_status_fallback_uses_custom_options(self):
         self.assertIn('SR_FOLLOWUP_STATUS_DOCTYPE = "SR Followup Status"', self.disposition)

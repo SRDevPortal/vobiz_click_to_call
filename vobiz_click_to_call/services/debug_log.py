@@ -5,6 +5,8 @@ from typing import Any
 
 import frappe
 
+MAX_DIAGNOSTIC_PAYLOAD_CHARS = 20 * 1024
+
 
 def log_vobiz_event(
     message: str,
@@ -59,5 +61,12 @@ def _stringify(payload: Any) -> str:
     if payload is None:
         return ""
     if isinstance(payload, str):
-        return payload
-    return json.dumps(payload, indent=2, default=str)
+        text = payload
+    else:
+        text = json.dumps(payload, indent=2, default=str)
+    if len(text) <= MAX_DIAGNOSTIC_PAYLOAD_CHARS:
+        return text
+    return (
+        text[:MAX_DIAGNOSTIC_PAYLOAD_CHARS]
+        + f"\n...[truncated {len(text) - MAX_DIAGNOSTIC_PAYLOAD_CHARS} characters]"
+    )

@@ -75,9 +75,6 @@ def save_call_disposition(
     if doc.reference_doctype != "Patient" and disposition and allowed_dispositions and disposition not in allowed_dispositions:
         frappe.throw(_("Invalid disposition."))
 
-    if disposition:
-        sync_call_log_disposition_options(disposition)
-        doc.meta = frappe.get_meta("Vobiz Call Log", cached=False)
     doc.disposition = disposition
     doc.disposition_notes = notes
     doc.follow_up_datetime = follow_up_datetime
@@ -162,17 +159,6 @@ def get_patient_followup_status_field(meta=None):
         if label == "followup status":
             return field
     return None
-
-
-def sync_call_log_disposition_options(disposition: str | None = None) -> None:
-    try:
-        from vobiz_click_to_call.install import ensure_vobiz_call_log_disposition_field
-
-        extra_options = [disposition] if disposition else []
-        extra_options.extend(get_patient_followup_status_options())
-        ensure_vobiz_call_log_disposition_field(extra_options=extra_options)
-    except Exception:
-        frappe.log_error(frappe.get_traceback(), "Vobiz Call Log disposition selector sync failed")
 
 
 def assert_user_can_update_disposition(doc) -> None:
@@ -285,6 +271,7 @@ def update_reference_call_metrics(reference_doctype: str | None, reference_name:
             "follow_up_datetime",
         ],
         order_by="creation desc",
+        limit_page_length=1,
     )
     if not rows:
         return
@@ -297,18 +284,56 @@ def update_reference_call_metrics(reference_doctype: str | None, reference_name:
         values["vobiz_last_call_time"] = last.creation
     if "vobiz_last_called_by" in fields:
         values["vobiz_last_called_by"] = last.user
+    stats_rows = frappe.db.sql(
+        """
+        select count(*) as total_calls,
+               sum(
+                   `status` in ('Connected', 'Completed')
+                   or coalesce(`billsec`, 0) > 0
+                   or coalesce(`duration`, 0) > 0
+                   or coalesce(`recording_duration`, 0) > 0
+               ) as connected_calls,
+               sum(
+                   `direction` = 'Incoming'
+                   and `status` in ('Failed', 'Busy', 'No Answer', 'Cancelled', 'Canceled')
+               ) as missed_calls
+        from `tabVobiz Call Log`
+        where `reference_doctype` = %s and `reference_name` = %s
+        """,
+        (reference_doctype, reference_name),
+        as_dict=True,
+    )
+    stats = stats_rows[0] if stats_rows else {}
     if "vobiz_total_call_attempts" in fields:
-        values["vobiz_total_call_attempts"] = len(rows)
+        values["vobiz_total_call_attempts"] = frappe.utils.cint(stats.get("total_calls"))
     if "vobiz_connected_call_count" in fields:
-        values["vobiz_connected_call_count"] = len([row for row in rows if status_bucket(row) == "connected"])
+        values["vobiz_connected_call_count"] = frappe.utils.cint(stats.get("connected_calls"))
     if "vobiz_missed_call_count" in fields:
-        values["vobiz_missed_call_count"] = len([row for row in rows if is_inbound_missed_call(row)])
+        values["vobiz_missed_call_count"] = frappe.utils.cint(stats.get("missed_calls"))
 
-    last_disposition = next((row.disposition for row in rows if row.disposition), "")
+    last_disposition = frappe.db.get_value(
+        "Vobiz Call Log",
+        {
+            "reference_doctype": reference_doctype,
+            "reference_name": reference_name,
+            "disposition": ["is", "set"],
+        },
+        "disposition",
+        order_by="creation desc",
+    ) or ""
     if "vobiz_last_disposition" in fields:
         values["vobiz_last_disposition"] = last_disposition
 
-    next_follow_up = next((row.follow_up_datetime for row in rows if row.follow_up_datetime), None)
+    next_follow_up = frappe.db.get_value(
+        "Vobiz Call Log",
+        {
+            "reference_doctype": reference_doctype,
+            "reference_name": reference_name,
+            "follow_up_datetime": ["is", "set"],
+        },
+        "follow_up_datetime",
+        order_by="creation desc",
+    )
     if "vobiz_next_follow_up" in fields:
         values["vobiz_next_follow_up"] = next_follow_up
 

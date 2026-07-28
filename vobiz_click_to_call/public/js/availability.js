@@ -24,7 +24,7 @@
     const LABELS = {
         Away: "Break",
     };
-    const ACTIVITY_HEARTBEAT_MS = 30 * 1000;
+    const ACTIVITY_HEARTBEAT_MS = 60 * 1000;
     const DEFAULT_ACTIVITY_IDLE_MS = 5 * 60 * 1000;
     const AVAILABILITY_REFRESH_MS = 60 * 1000;
     const ACTIVITY_TAB_KEY = "vobiz_agent_activity_tab_id";
@@ -55,7 +55,11 @@
     }
 
     function shouldLoadAvailability() {
-        return window.location && window.location.pathname && window.location.pathname.indexOf("/app") === 0;
+        if (!(window.location && window.location.pathname && window.location.pathname.indexOf("/app") === 0)) {
+            return false;
+        }
+        const route = currentRoute();
+        return route[0] !== "vobiz-agent-console";
     }
 
     function init() {

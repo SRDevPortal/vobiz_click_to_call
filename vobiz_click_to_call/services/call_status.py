@@ -87,7 +87,7 @@ def status_from_provider(
 def status_bucket(row: dict[str, Any] | None) -> str:
     row = row or {}
     status = str(row.get("status") or "").strip()
-    if has_talk_time(row):
+    if billable_talk_seconds(row) > 0:
         return "connected"
 
     signal = call_signal(row)
@@ -95,14 +95,16 @@ def status_bucket(row: dict[str, Any] | None) -> str:
         return "busy"
     if "no-answer" in signal or "no answer" in signal or "timeout" in signal or "unanswered" in signal:
         return "no_answer"
-    if status in CONNECTED_STATUSES:
-        return "no_answer"
-    if "cancel" in signal or "reject" in signal or "decline" in signal:
-        return "cancelled"
     if "fail" in signal or "error" in signal:
         return "failed"
+    if talk_seconds(row) > 0:
+        return "connected"
+    if "cancel" in signal or "reject" in signal or "decline" in signal:
+        return "cancelled"
     if status in MISSED_STATUSES:
         return "missed"
+    if status in CONNECTED_STATUSES:
+        return "no_answer"
     return "other"
 
 

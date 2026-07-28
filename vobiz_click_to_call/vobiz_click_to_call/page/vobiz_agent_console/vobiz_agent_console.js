@@ -74,6 +74,7 @@ class VobizAgentConsole {
 		};
 		this.timer = null;
 		this.poller = null;
+		this.load_in_flight = false;
 		this.search_timer = null;
 		this.heartbeat_timer = null;
 		this.heartbeat_in_flight = false;
@@ -534,12 +535,14 @@ class VobizAgentConsole {
 			this.stop_console_heartbeat();
 			return;
 		}
+		if (this.load_in_flight) return;
+		this.load_in_flight = true;
 		const search = (this.page.main.find('[data-role="search"]').val() || '').trim();
 		const queue_source_filter = (this.page.main.find('[data-role="queue-source-filter"]').val() || '').trim();
 		const sort_by = (this.state.queue_sort_by || this.page.main.find('[data-role="queue-sort"]').val() || 'creation_desc').trim();
 		this.state.queue_sort_by = sort_by;
-		frappe.call('vobiz_click_to_call.api.console.get_agent_console_data', {
-			limit: 500,
+		const request = frappe.call('vobiz_click_to_call.api.console.get_agent_console_data', {
+			limit: 50,
 			search,
 			queue_source_filter,
 			sort_by,
@@ -573,6 +576,9 @@ class VobizAgentConsole {
 			}
 			this.restore_workdesk_dialog();
 		});
+		request.always(() => {
+			this.load_in_flight = false;
+		});
 	}
 
 	queue_search_changed() {
@@ -595,7 +601,7 @@ class VobizAgentConsole {
 
 	start_polling() {
 		clearInterval(this.poller);
-		this.poller = setInterval(() => this.load(), 5000);
+		this.poller = setInterval(() => this.load(), 30000);
 		$(window).one('beforeunload', () => {
 			clearInterval(this.poller);
 			clearInterval(this.timer);
@@ -2099,11 +2105,17 @@ class VobizAgentConsole {
 	refresh_workdesk_live_call() {
 		const callLog = this.state.workdesk_live_call_log;
 		if (!callLog || this.state.workdesk_live_polling) return;
+		const active = this.state.active_call || {};
+		if (active.name === callLog) {
+			this.state.workdesk_live_call = active;
+			this.render_workdesk_live_call();
+			return;
+		}
 
 		this.state.workdesk_live_polling = true;
 		frappe.call({
 			method: 'vobiz_click_to_call.api.call.get_call_status',
-			args: { call_log: callLog }
+			args: { call_log: callLog, sync_provider: 0 }
 		}).then((r) => {
 			const call = r.message || {};
 			if (call.name) {
@@ -3472,7 +3484,7 @@ class VobizAgentConsole {
 		this.state.auto_dial = session;
 		frappe.call({
 			method: 'vobiz_click_to_call.api.call.get_call_status',
-			args: { call_log: current.call_log }
+			args: { call_log: current.call_log, sync_provider: 0 }
 		}).then((r) => {
 			const call = r.message || {};
 			const latest = this.state.auto_dial || {};
@@ -3692,7 +3704,7 @@ class VobizAgentConsole {
 		return frappe.call('vobiz_click_to_call.api.call.cancel_call', { call_log }).then(() => {
 			return frappe.call({
 				method: 'vobiz_click_to_call.api.call.get_call_status',
-				args: { call_log }
+				args: { call_log, sync_provider: 0 }
 			});
 		}).then((r) => {
 			const call = r.message || { name: call_log, status: 'Cancelled' };

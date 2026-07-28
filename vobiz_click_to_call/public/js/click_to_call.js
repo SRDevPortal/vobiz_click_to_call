@@ -16,6 +16,7 @@
     let DOCTYPES = DEFAULT_DOCTYPES.slice();
     const TERMINAL_STATUSES = ["Completed", "Failed", "Busy", "No Answer", "Cancelled"];
     let currentPoller = null;
+    let statusPollInFlight = false;
     const registeredDoctypes = new Set();
     let allowedDoctypesLoaded = false;
 
@@ -379,14 +380,16 @@
         $panel.find(".vobiz-cancel-call").on("click", () => cancelCall(callLog));
 
         pollStatus(callLog, frm, $panel, startedAt);
-        currentPoller = window.setInterval(() => pollStatus(callLog, frm, $panel, startedAt), 5000);
+        currentPoller = window.setInterval(() => pollStatus(callLog, frm, $panel, startedAt), 15000);
     }
 
     function pollStatus(callLog, frm, $panel, startedAt) {
+        if (statusPollInFlight) return;
+        statusPollInFlight = true;
         updateTimer($panel, startedAt);
-        frappe.call({
+        const request = frappe.call({
             method: "vobiz_click_to_call.api.call.get_call_status",
-            args: { call_log: callLog },
+            args: { call_log: callLog, sync_provider: 0 },
         }).then((r) => {
             const data = r.message || {};
             updateTimer($panel, startedAt);
@@ -412,6 +415,9 @@
                     openDispositionDialog(callLog, data.status, frm);
                 }
             }
+        });
+        request.always(() => {
+            statusPollInFlight = false;
         });
     }
 

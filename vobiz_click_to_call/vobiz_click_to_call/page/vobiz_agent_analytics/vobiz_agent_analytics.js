@@ -760,6 +760,7 @@ class VobizAgentAnalytics {
 	agent_call_filters(agent_user, offset = 0, status_filter = 'total', limit = 25) {
 		const filters = Object.assign({}, this.filters(), {
 			include_calls: 1,
+			calls_only: 1,
 			call_limit: limit,
 			call_offset: offset,
 			status_filter: status_filter === 'unique' ? 'total' : (status_filter || 'total'),
@@ -944,6 +945,7 @@ class VobizAgentAnalytics {
 			method: 'vobiz_click_to_call.api.console.get_analytics',
 			args: Object.assign({}, filters, {
 				include_calls: 1,
+				calls_only: 1,
 				call_limit: limit,
 				call_offset: offset,
 				unique_only: unique_only ? 1 : 0
@@ -1157,6 +1159,7 @@ class VobizAgentAnalytics {
 			method: 'vobiz_click_to_call.api.console.get_analytics',
 			args: Object.assign({}, filters, {
 				include_calls: 1,
+				calls_only: 1,
 				call_limit: this.calls_limit,
 				call_offset: offset
 			}),

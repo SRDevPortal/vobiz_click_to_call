@@ -11,6 +11,8 @@ from werkzeug.wrappers import Response
 
 from vobiz_click_to_call.services.settings import get_auth_credentials, get_settings
 
+MAX_RECORDING_BYTES = 100 * 1024 * 1024
+
 
 @frappe.whitelist()
 @rate_limit(limit=30, seconds=60)
@@ -38,16 +40,42 @@ def download(call_log: str):
             "X-Auth-Token": auth_token,
         },
         timeout=int(settings.http_timeout or 20),
+        stream=True,
     )
     if response.status_code >= 400:
-        frappe.throw(_("Unable to fetch Vobiz recording: {0}").format(response.text or response.reason))
+        reason = response.reason or str(response.status_code)
+        response.close()
+        frappe.throw(_("Unable to fetch Vobiz recording: {0}").format(reason))
+
+    content_length = frappe.utils.cint(response.headers.get("Content-Length"))
+    if content_length and content_length > MAX_RECORDING_BYTES:
+        response.close()
+        frappe.throw(_("Recording is too large to proxy through the application server."))
 
     extension = _extension_from_url(doc.recording_url)
-    frappe.local.response["type"] = "download"
-    frappe.local.response["filename"] = f"{doc.name}{extension}"
-    frappe.local.response["filecontent"] = response.content
-    frappe.local.response["content_type"] = response.headers.get("Content-Type") or _content_type(extension)
-    frappe.local.response["display_content_as"] = "inline"
+
+    def generate():
+        received = 0
+        try:
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                received += len(chunk)
+                if received > MAX_RECORDING_BYTES:
+                    raise RuntimeError("Recording exceeded the application proxy size limit.")
+                yield chunk
+        finally:
+            response.close()
+
+    return Response(
+        generate(),
+        headers={
+            "Content-Disposition": f'attachment; filename="{doc.name}{extension}"',
+            "Cache-Control": "private, no-store",
+        },
+        content_type=response.headers.get("Content-Type") or _content_type(extension),
+        direct_passthrough=True,
+    )
 
 
 @frappe.whitelist()
@@ -84,7 +112,13 @@ def stream(call_log: str):
         stream=True,
     )
     if response.status_code >= 400:
-        frappe.throw(_("Unable to fetch Vobiz recording: {0}").format(response.text or response.reason))
+        reason = response.reason or str(response.status_code)
+        response.close()
+        frappe.throw(_("Unable to fetch Vobiz recording: {0}").format(reason))
+    content_length = frappe.utils.cint(response.headers.get("Content-Length"))
+    if content_length and content_length > MAX_RECORDING_BYTES:
+        response.close()
+        frappe.throw(_("Recording is too large to proxy through the application server."))
 
     extension = _extension_from_url(doc.recording_url)
     response_headers = {
@@ -97,9 +131,13 @@ def stream(call_log: str):
             response_headers[header] = response.headers[header]
 
     def generate():
+        received = 0
         try:
             for chunk in response.iter_content(chunk_size=64 * 1024):
                 if chunk:
+                    received += len(chunk)
+                    if received > MAX_RECORDING_BYTES:
+                        raise RuntimeError("Recording exceeded the application proxy size limit.")
                     yield chunk
         finally:
             response.close()

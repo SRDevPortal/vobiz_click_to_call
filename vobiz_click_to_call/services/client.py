@@ -57,7 +57,7 @@ class VobizClient:
             data = response.json()
         except Exception:
             data = {"raw_response": response.text}
-        message = data.get("message") or data.get("error") or response.text or response.reason
+        message = _bounded_error_message(data.get("message") or data.get("error") or response.text or response.reason)
         frappe.throw(_("Vobiz hangup request failed: {0}").format(message))
 
     def search_cdrs(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -94,7 +94,7 @@ class VobizClient:
             data = {"raw_response": response.text}
 
         if response.status_code >= 400:
-            message = data.get("message") or data.get("error") or response.text or response.reason
+            message = _bounded_error_message(data.get("message") or data.get("error") or response.text or response.reason)
             frappe.throw(_("{0}: {1}").format(failure_label, message))
 
         return data
@@ -117,10 +117,17 @@ class VobizClient:
             data = {"raw_response": response.text}
 
         if response.status_code >= 400:
-            message = data.get("message") or data.get("error") or response.text or response.reason
+            message = _bounded_error_message(data.get("message") or data.get("error") or response.text or response.reason)
             frappe.throw(_("{0}: {1}").format(failure_label, message))
 
         return data
+
+
+def _bounded_error_message(value: Any, max_chars: int = 2000) -> str:
+    text = str(value or "Unknown provider error")
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars]}...[truncated]"
 
 
 def extract_provider_id(payload: dict[str, Any] | None, *keys: str) -> str:

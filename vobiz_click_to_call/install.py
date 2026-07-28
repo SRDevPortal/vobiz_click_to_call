@@ -80,28 +80,6 @@ def ensure_defaults():
     ensure_crm_lead_fields()
     ensure_issue_department_fields()
     ensure_crm_lead_disposition_optional()
-    ensure_vobiz_call_log_disposition_field()
-
-
-def ensure_vobiz_call_log_disposition_field(extra_options: list[str] | None = None):
-    if not frappe.db.exists("DocType", "Vobiz Call Log"):
-        return
-
-    meta = frappe.get_meta("Vobiz Call Log")
-    if not meta.has_field("disposition"):
-        return
-
-    from frappe.custom.doctype.property_setter.property_setter import make_property_setter
-
-    options = get_vobiz_call_log_disposition_options(extra_options=extra_options)
-    if options:
-        make_property_setter("Vobiz Call Log", "disposition", "fieldtype", "Select", "Data", validate_fields_for_doctype=False)
-        make_property_setter("Vobiz Call Log", "disposition", "options", options, "Text", validate_fields_for_doctype=False)
-    else:
-        make_property_setter("Vobiz Call Log", "disposition", "fieldtype", "Data", "Data", validate_fields_for_doctype=False)
-        make_property_setter("Vobiz Call Log", "disposition", "options", "", "Text", validate_fields_for_doctype=False)
-    make_property_setter("Vobiz Call Log", "disposition", "reqd", "0", "Check", validate_fields_for_doctype=False)
-    frappe.clear_cache(doctype="Vobiz Call Log")
 
 
 def ensure_crm_lead_disposition_optional():
@@ -134,27 +112,6 @@ def ensure_crm_lead_disposition_optional():
             )
 
     frappe.clear_cache(doctype="CRM Lead")
-
-
-def get_vobiz_call_log_disposition_options(extra_options: list[str] | None = None) -> str:
-    values: list[str] = []
-    if frappe.db.exists("DocType", "SR Lead Disposition"):
-        try:
-            from vobiz_click_to_call.services.lead_disposition import get_lead_disposition_options
-
-            values.extend(get_lead_disposition_options())
-        except Exception:
-            frappe.log_error(frappe.get_traceback(), "Vobiz Call Log disposition options sync failed")
-
-    values.extend(extra_options or [])
-    cleaned = []
-    seen = set()
-    for value in values:
-        value = (value or "").strip()
-        if value and value not in seen:
-            cleaned.append(value)
-            seen.add(value)
-    return "\n" + "\n".join(cleaned) if cleaned else ""
 
 
 def ensure_crm_lead_fields():

@@ -5,6 +5,7 @@ from datetime import datetime
 from xml.sax.saxutils import escape, quoteattr
 
 import frappe
+from frappe.rate_limiter import rate_limit
 from werkzeug.wrappers import Response
 
 from vobiz_ai.api.call_log import sync_linked_summaries
@@ -18,10 +19,10 @@ from vobiz_click_to_call.services.settings import build_callback_url, get_inboun
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
+@rate_limit(limit=300, seconds=60)
 def answer(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
-        log_vobiz_event("Answer callback ignored: invalid call log or token", severity="Warning", payload=payload)
         return _xml_response(_hangup_xml())
 
     _log_webhook_event("answer received", doc, payload)
@@ -49,10 +50,10 @@ def answer(call_log: str | None = None, token: str | None = None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
+@rate_limit(limit=300, seconds=60)
 def ring(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
-        log_vobiz_event("Ring callback ignored: invalid call log or token", severity="Warning", payload=payload)
         return _plain_response("IGNORED")
 
     _log_webhook_event("ring received", doc, payload)
@@ -69,10 +70,10 @@ def ring(call_log: str | None = None, token: str | None = None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
+@rate_limit(limit=300, seconds=60)
 def dial_callback(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
-        log_vobiz_event("Dial callback ignored: invalid call log or token", severity="Warning", payload=payload)
         return _plain_response("IGNORED")
 
     _log_webhook_event("dial_callback received", doc, payload)
@@ -103,10 +104,10 @@ def dial_callback(call_log: str | None = None, token: str | None = None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
+@rate_limit(limit=300, seconds=60)
 def dial_action(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
-        log_vobiz_event("Dial action ignored: invalid call log or token", severity="Warning", payload=payload)
         return _xml_response(_hangup_xml())
 
     _log_webhook_event("dial_action received", doc, payload)
@@ -153,10 +154,10 @@ def dial_action(call_log: str | None = None, token: str | None = None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
+@rate_limit(limit=300, seconds=60)
 def hangup(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
-        log_vobiz_event("Hangup callback ignored: invalid call log or token", severity="Warning", payload=payload)
         return _plain_response("IGNORED")
 
     _log_webhook_event("hangup received", doc, payload)
@@ -191,10 +192,10 @@ def hangup(call_log: str | None = None, token: str | None = None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
+@rate_limit(limit=300, seconds=60)
 def fallback(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
-        log_vobiz_event("Fallback callback ignored: invalid call log or token", severity="Warning", payload=payload)
         return _plain_response("IGNORED")
 
     _log_webhook_event("fallback received", doc, payload, severity="Error")
@@ -215,6 +216,7 @@ def fallback(call_log: str | None = None, token: str | None = None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
+@rate_limit(limit=300, seconds=60)
 def recording_callback(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
@@ -241,6 +243,7 @@ def recording_callback(call_log: str | None = None, token: str | None = None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
+@rate_limit(limit=300, seconds=60)
 def transcription_callback(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
@@ -252,10 +255,10 @@ def transcription_callback(call_log: str | None = None, token: str | None = None
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
+@rate_limit(limit=300, seconds=60)
 def transcription_event():
     payload = _payload()
     if not _static_event_allowed(payload):
-        log_vobiz_event("Transcription event ignored: invalid static callback token", severity="Warning", payload=payload)
         return _plain_response("IGNORED")
     data = _with_nested_response(payload)
     doc = _find_call_log_from_provider_payload(data)
@@ -491,7 +494,7 @@ def _append_callback_if_enabled(call_log: str, event: str, payload: dict) -> Non
             kwargs={
                 "call_log": call_log,
                 "event": event,
-                "payload": payload,
+                "payload": _bounded_payload(payload),
             },
         )
     except Exception:
@@ -537,10 +540,24 @@ def _first_value(payload: dict, *keys: str):
 
 
 def _json_dumps(payload: dict) -> str:
-    safe_payload = dict(payload or {})
+    safe_payload = _bounded_payload(payload)
     safe_payload.pop("token", None)
     safe_payload.pop("cmd", None)
     return json.dumps(safe_payload, indent=2, default=str)
+
+
+def _bounded_payload(payload: dict, max_chars: int = 64 * 1024) -> dict:
+    safe_payload = dict(payload or {})
+    safe_payload.pop("token", None)
+    safe_payload.pop("cmd", None)
+    encoded = json.dumps(safe_payload, default=str)
+    if len(encoded) <= max_chars:
+        return safe_payload
+    return {
+        "truncated": True,
+        "original_size": len(encoded),
+        "payload_preview": encoded[:max_chars],
+    }
 
 
 def _recording_duration_seconds(payload: dict) -> int:
@@ -614,7 +631,7 @@ def _has_billable_talk_time(billsec=None, duration=None) -> bool:
 def _static_event_allowed(payload: dict) -> bool:
     expected = get_inbound_callback_token(get_settings())
     if not expected:
-        return True
+        return False
     received = _first_value(payload, "token", "Token", "callback_token", "inbound_token", "inbound_callback_token")
     return secrets_match(expected, received or "")
 

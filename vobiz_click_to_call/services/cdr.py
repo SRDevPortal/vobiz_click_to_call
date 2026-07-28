@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
@@ -10,7 +11,7 @@ from vobiz_ai.api.call_log import make_outbound_call_key, sync_linked_summaries,
 from vobiz_click_to_call.services.client import VobizClient
 from vobiz_click_to_call.services.call_status import status_from_provider
 from vobiz_click_to_call.services.disposition import update_reference_call_metrics
-from vobiz_click_to_call.services.numbers import normalize_phone_number, phone_key
+from vobiz_click_to_call.services.numbers import normalize_phone_number
 from vobiz_click_to_call.services.settings import get_settings
 
 CDR_BATCH_SIZE = 10
@@ -31,7 +32,7 @@ def sync_call_log_cdr(call_log: str, ignore_permissions: bool = False) -> dict:
     if not cdr:
         doc.cdr_sync_status = "Not Found"
         doc.cdr_synced_at = frappe.utils.now()
-        doc.cdr_json = json.dumps(response, indent=2, default=str)
+        doc.cdr_json = _bounded_json(response)
         doc.save(ignore_permissions=True)
         frappe.db.commit()
         return {"status": "Not Found", "call_log": doc.name}
@@ -46,7 +47,7 @@ def enqueue_recent_cdr_sync(limit: int = 50, batch_size: int = CDR_BATCH_SIZE) -
     if not settings.enabled or not settings.enable_cdr_sync:
         return {"queued": 0, "disabled": True}
 
-    limit = max(1, int(limit or 50))
+    limit = max(1, min(int(limit or 50), 200))
     batch_size = max(1, min(int(batch_size or CDR_BATCH_SIZE), CDR_BATCH_SIZE))
 
     rows = frappe.get_all(
@@ -59,11 +60,15 @@ def enqueue_recent_cdr_sync(limit: int = 50, batch_size: int = CDR_BATCH_SIZE) -
 
     names = [row.name for row in rows]
     for start in range(0, len(names), batch_size):
+        batch = names[start : start + batch_size]
+        batch_hash = hashlib.sha1("|".join(batch).encode()).hexdigest()[:16]
         frappe.enqueue(
             "vobiz_click_to_call.services.cdr.process_cdr_batch",
-            queue="short",
+            queue="long",
             timeout=300,
-            call_logs=names[start : start + batch_size],
+            job_id=f"vobiz-cdr-batch-{batch_hash}",
+            deduplicate=True,
+            call_logs=batch,
         )
 
     return {"queued": len(names), "batch_size": batch_size}
@@ -79,8 +84,10 @@ def enqueue_missing_inbound_cdr_sync(days: int = 2) -> dict:
     for date in dates:
         frappe.enqueue(
             "vobiz_click_to_call.services.cdr.sync_missing_inbound_cdrs",
-            queue="short",
+            queue="long",
             timeout=300,
+            job_id=f"vobiz-missing-inbound-cdr-{date}",
+            deduplicate=True,
             date=date,
         )
     return {"queued": len(dates), "dates": dates}
@@ -98,23 +105,26 @@ def sync_missing_inbound_cdrs(date: str | None = None, limit: int = 100) -> dict
         return {"created": 0, "skipped": 0, "disabled": True}
 
     date = str(date or frappe.utils.today())
+    limit = max(1, min(int(limit or 100), 100))
     response = VobizClient(settings).search_cdrs({"date": date})
     rows = extract_cdr_rows(response)
     created = 0
     skipped = 0
     names = []
-    for cdr in rows[: max(1, int(limit or 100))]:
+    for cdr in rows[:limit]:
         if not _is_inbound_cdr(cdr):
             continue
         if _existing_call_log_for_cdr(cdr):
             skipped += 1
             continue
-        doc = create_missing_inbound_call_log_from_cdr(cdr, response)
+        doc = create_missing_inbound_call_log_from_cdr(cdr)
         if doc:
             created += 1
             names.append(doc.name)
         else:
             skipped += 1
+        if (created + skipped) % CDR_BATCH_SIZE == 0:
+            frappe.db.commit()
 
     frappe.db.commit()
     return {"created": created, "skipped": skipped, "call_logs": names}
@@ -231,7 +241,6 @@ def _existing_call_log_for_cdr(cdr: dict) -> str:
 
 
 def _last_outbound_for_customer(customer_number: str):
-    last10 = phone_key(customer_number)
     filters = {
         "source_app": "vobiz_click_to_call",
         "direction": "Outgoing",
@@ -257,16 +266,7 @@ def _last_outbound_for_customer(customer_number: str):
         rows = frappe.get_all("Vobiz Call Log", filters={**filters, fieldname: value}, fields=fields, order_by="creation desc", limit=1)
         if rows:
             return rows[0]
-    if not last10:
-        return None
-    rows = frappe.get_all(
-        "Vobiz Call Log",
-        filters={**filters, "customer_number": ["like", f"%{last10}%"]},
-        fields=fields,
-        order_by="creation desc",
-        limit=1,
-    )
-    return rows[0] if rows else None
+    return None
 
 
 def _cdr_datetime(value):
@@ -354,7 +354,7 @@ def extract_cdr_rows(response: dict) -> list[dict]:
 
 
 def apply_cdr_to_call_log(doc, cdr: dict, raw_response: dict) -> None:
-    doc.cdr_json = json.dumps({"matched_cdr": cdr, "raw_response": raw_response}, indent=2, default=str)
+    doc.cdr_json = _bounded_json({"matched_cdr": cdr, "raw_response": raw_response})
     doc.cdr_sync_status = "Synced"
     doc.cdr_synced_at = frappe.utils.now()
 
@@ -404,3 +404,17 @@ def first_float(row: dict, *keys: str, fallback=None) -> float:
             except Exception:
                 pass
     return fallback or 0.0
+
+
+def _bounded_json(value: Any, max_chars: int = 64 * 1024) -> str:
+    encoded = json.dumps(value, indent=2, default=str)
+    if len(encoded) <= max_chars:
+        return encoded
+    return json.dumps(
+        {
+            "truncated": True,
+            "original_size": len(encoded),
+            "payload_preview": encoded[:max_chars],
+        },
+        indent=2,
+    )

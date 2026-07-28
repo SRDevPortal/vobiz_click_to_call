@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import datetime, timedelta
@@ -57,6 +58,8 @@ ANALYTICS_STATUS_OPTIONS = (
     "cancelled",
 )
 ANALYTICS_CALL_LIMIT_MAX = 100
+ANALYTICS_MAX_DAYS = 31
+ANALYTICS_CACHE_SECONDS = 30
 # Enabled for the analytics page. It can still be disabled immediately with
 # disable_vobiz_analytics_api in site_config.json.
 ANALYTICS_API_ENABLED = True
@@ -736,6 +739,7 @@ def get_analytics(
     call_limit: int | str = 50,
     call_offset: int | str = 0,
     unique_only: int | str = 0,
+    calls_only: int | str = 0,
 ) -> dict[str, Any]:
     if not ANALYTICS_API_ENABLED or frappe.conf.get("disable_vobiz_analytics_api"):
         frappe.throw(_("Vobiz analytics API is temporarily disabled."), frappe.PermissionError)
@@ -744,21 +748,55 @@ def get_analytics(
         frappe.throw(_("Login required."))
 
     agent = _agent_context()
-    return _analytics_data(
-        from_date=from_date,
-        to_date=to_date,
-        status_filter=status_filter,
-        queue_source=queue_source or _agent_queue_source(agent),
-        agent_user=agent_user,
-        lead_owner=lead_owner,
-        team=team,
-        department=department,
-        agent=agent,
-        include_calls=include_calls,
-        call_limit=call_limit,
-        call_offset=call_offset,
-        unique_only=unique_only,
+    arguments = {
+        "from_date": from_date,
+        "to_date": to_date,
+        "status_filter": status_filter,
+        "queue_source": queue_source or _agent_queue_source(agent),
+        "agent_user": agent_user,
+        "lead_owner": lead_owner,
+        "team": team,
+        "department": department,
+        "agent": agent,
+        "include_calls": include_calls,
+        "call_limit": call_limit,
+        "call_offset": call_offset,
+        "unique_only": unique_only,
+        "calls_only": calls_only,
+    }
+    use_cache = not frappe.utils.cint(include_calls) and not frappe.utils.cint(calls_only)
+    cache_key = _analytics_cache_key(arguments) if use_cache else ""
+    if cache_key:
+        try:
+            cached = frappe.cache().get_value(cache_key)
+            if cached is not None:
+                return cached
+        except Exception:
+            pass
+
+    data = _analytics_data(
+        **arguments,
     )
+    if cache_key:
+        try:
+            frappe.cache().set_value(cache_key, data, expires_in_sec=ANALYTICS_CACHE_SECONDS)
+        except Exception:
+            pass
+    return data
+
+
+def _analytics_cache_key(arguments: dict[str, Any]) -> str:
+    cache_arguments = {
+        key: value
+        for key, value in arguments.items()
+        if key not in {"agent", "include_calls", "call_limit", "call_offset", "unique_only", "calls_only"}
+    }
+    payload = json.dumps(
+        {"user": frappe.session.user, "arguments": cache_arguments},
+        sort_keys=True,
+        default=str,
+    )
+    return f"vobiz_analytics:summary:{hashlib.sha256(payload.encode()).hexdigest()}"
 
 
 def _call_summary() -> dict[str, Any]:
@@ -779,6 +817,7 @@ def _analytics_data(
     call_limit: int | str = 50,
     call_offset: int | str = 0,
     unique_only: int | str = 0,
+    calls_only: int | str = 0,
 ) -> dict[str, Any]:
     from_date, to_date = _analytics_date_range(from_date, to_date)
     status_filter = _analytics_status_filter(status_filter)
@@ -795,9 +834,6 @@ def _analytics_data(
     is_crm_lead_queue = queue_source in {"CRM Lead", "Discontinued"}
     is_patient_queue = queue_source == "Patient"
     visible_crm_leads: list[str] | None = None
-    if not is_admin and queue_source in {"CRM Lead", "Discontinued", COMBINED_QUEUE_SOURCE}:
-        _apply_visible_crm_lead_scope(filters)
-        visible_crm_leads = list(filters.get("reference_names") or filters.get("crm_lead_reference_names") or [])
 
     team_scope = [] if is_admin else _team_member_users_for_leader(frappe.session.user)
     agent_user_values = _analytics_filter_values(agent_user)
@@ -858,12 +894,42 @@ def _analytics_data(
         )
         if field not in fields
     )
-    summary = _analytics_summary_sql(conditions, params)
-    filtered_summary = _analytics_summary_sql(conditions, params, status_filter=status_filter)
     include_call_rows = bool(frappe.utils.cint(include_calls))
     unique_call_rows = bool(frappe.utils.cint(unique_only))
     call_limit = max(10, min(frappe.utils.cint(call_limit) or 50, ANALYTICS_CALL_LIMIT_MAX))
     call_offset = max(0, frappe.utils.cint(call_offset) or 0)
+    if frappe.utils.cint(calls_only):
+        call_rows = _analytics_call_rows_sql(
+            conditions,
+            params,
+            fields,
+            status_filter=status_filter,
+            limit=call_limit + 1,
+            offset=call_offset,
+            queue_source=queue_source,
+            unique_only=unique_call_rows,
+        )
+        has_more = len(call_rows) > call_limit
+        call_rows = call_rows[:call_limit]
+        return {
+            "from_date": from_date,
+            "to_date": to_date,
+            "status_filter": status_filter,
+            "queue_source": queue_source,
+            "calls": [_performance_call_row(row) for row in call_rows],
+            "calls_loaded": True,
+            "call_limit": call_limit,
+            "call_offset": call_offset,
+            "has_more_calls": has_more,
+            "matching_call_count": call_offset + len(call_rows) + (1 if has_more else 0),
+        }
+
+    summary = _analytics_summary_sql(conditions, params)
+    filtered_summary = (
+        summary
+        if status_filter == "total"
+        else _analytics_summary_sql(conditions, params, status_filter=status_filter)
+    )
     call_slice = (
         _analytics_call_rows_sql(
             conditions,
@@ -879,6 +945,7 @@ def _analytics_data(
         else []
     )
     matching_call_count = filtered_summary.get("unique_calls" if unique_call_rows else "total", 0)
+    outcome_breakdown = _analytics_outcome_breakdown_from_rows(summary.get("_bucket_rows") or [])
 
     return {
         "from_date": from_date,
@@ -902,10 +969,10 @@ def _analytics_data(
         ),
         "is_admin": is_admin,
         "is_team_leader": bool(team_scope),
-        "summary": summary,
-        "filtered_summary": filtered_summary,
-        "status_breakdown": _analytics_status_breakdown_sql(conditions, params),
-        "outcome_breakdown": _analytics_outcome_breakdown_sql(conditions, params),
+        "summary": _public_analytics_summary(summary),
+        "filtered_summary": _public_analytics_summary(filtered_summary),
+        "status_breakdown": _analytics_status_breakdown(summary, outcome_breakdown),
+        "outcome_breakdown": outcome_breakdown,
         "daily": _analytics_daily_sql(conditions, params, from_date, to_date),
         "agents": _analytics_agents_sql(
             conditions,
@@ -931,14 +998,6 @@ def _analytics_sql_conditions(start: str, end: str, filters: dict[str, Any]) -> 
     if filters.get("reference_doctype"):
         params["reference_doctype"] = filters["reference_doctype"]
         conditions.append("`reference_doctype` = %(reference_doctype)s")
-    if filters.get("reference_names"):
-        params["reference_names"] = tuple(filters["reference_names"])
-        conditions.append("`reference_name` in %(reference_names)s")
-    if filters.get("crm_lead_reference_names"):
-        params["crm_lead_reference_names"] = tuple(filters["crm_lead_reference_names"])
-        conditions.append("(`reference_doctype` != 'CRM Lead' or `reference_name` in %(crm_lead_reference_names)s)")
-    if filters.get("exclude_crm_leads"):
-        conditions.append("`reference_doctype` != 'CRM Lead'")
     if filters.get("force_empty"):
         conditions.append("1 = 0")
     if filters.get("user"):
@@ -949,6 +1008,42 @@ def _analytics_sql_conditions(start: str, end: str, filters: dict[str, Any]) -> 
         if users:
             params["users"] = tuple(users)
             conditions.append("`user` in %(users)s")
+    if filters.get("lead_owners"):
+        params["lead_owners"] = tuple(filters["lead_owners"])
+        conditions.append(
+            """
+            exists (
+                select 1
+                from `tabCRM Lead` analytics_lead
+                where analytics_lead.`name` = `tabVobiz Call Log`.`reference_name`
+                  and analytics_lead.`lead_owner` in %(lead_owners)s
+            )
+            """.strip()
+        )
+    if filters.get("teams"):
+        params["teams"] = tuple(filters["teams"])
+        conditions.append(
+            """
+            exists (
+                select 1
+                from `tabCRM Lead` analytics_team
+                where analytics_team.`name` = `tabVobiz Call Log`.`reference_name`
+                  and analytics_team.`team` in %(teams)s
+            )
+            """.strip()
+        )
+    if filters.get("department"):
+        params["department"] = filters["department"]
+        conditions.append(
+            """
+            exists (
+                select 1
+                from `tabPatient` analytics_patient
+                where analytics_patient.`name` = `tabVobiz Call Log`.`reference_name`
+                  and analytics_patient.`sr_medical_department` = %(department)s
+            )
+            """.strip()
+        )
     return " and ".join(conditions), params
 
 
@@ -970,7 +1065,6 @@ def _apply_crm_lead_analytics_filters(
     if not lead_owners and not teams:
         return
 
-    lead_filters: dict[str, Any] = {}
     meta = frappe.get_meta("CRM Lead")
     if lead_owners and not meta.has_field("lead_owner"):
         filters["force_empty"] = True
@@ -979,26 +1073,9 @@ def _apply_crm_lead_analytics_filters(
         filters["force_empty"] = True
         return
     if lead_owners:
-        lead_filters["lead_owner"] = ["in", lead_owners] if len(lead_owners) > 1 else lead_owners[0]
+        filters["lead_owners"] = lead_owners
     if teams:
-        lead_filters["team"] = ["in", teams] if len(teams) > 1 else teams[0]
-    if visible_leads is not None:
-        if visible_leads:
-            lead_filters["name"] = ["in", visible_leads]
-        else:
-            filters["force_empty"] = True
-            return
-
-    names = frappe.get_all(
-        "CRM Lead",
-        filters=lead_filters,
-        pluck="name",
-        limit_page_length=50000,
-    )
-    if names:
-        filters["reference_names"] = names
-    else:
-        filters["force_empty"] = True
+        filters["teams"] = teams
 
 
 def _apply_patient_department_analytics_filter(
@@ -1018,16 +1095,7 @@ def _apply_patient_department_analytics_filter(
         filters["force_empty"] = True
         return
 
-    names = frappe.get_all(
-        "Patient",
-        filters={"sr_medical_department": department},
-        pluck="name",
-        limit_page_length=50000,
-    )
-    if names:
-        filters["reference_names"] = names
-    else:
-        filters["force_empty"] = True
+    filters["department"] = department
 
 
 def _analytics_bucket_sql() -> str:
@@ -1036,13 +1104,14 @@ def _analytics_bucket_sql() -> str:
     talk = _analytics_talk_sql()
     return f"""
         case
-            when {talk} > 0 or {recording} > 0 or coalesce(`billsec`, 0) > 0 then 'connected'
+            when {recording} > 0 or coalesce(`billsec`, 0) > 0 then 'connected'
             when {signal} like '%%busy%%' then 'busy'
             when {signal} like '%%no-answer%%' or {signal} like '%%no answer%%' or {signal} like '%%timeout%%' or {signal} like '%%unanswered%%' then 'no_answer'
-            when `status` in ('Connected', 'Completed') then 'no_answer'
-            when {signal} like '%%cancel%%' or {signal} like '%%reject%%' or {signal} like '%%decline%%' then 'cancelled'
             when {signal} like '%%fail%%' or {signal} like '%%error%%' then 'failed'
+            when {talk} > 0 then 'connected'
+            when {signal} like '%%cancel%%' or {signal} like '%%reject%%' or {signal} like '%%decline%%' then 'cancelled'
             when `status` in ('Failed', 'Busy', 'No Answer', 'Cancelled', 'Canceled') then 'missed'
+            when `status` in ('Connected', 'Completed') then 'no_answer'
             else 'other'
         end
     """
@@ -1144,35 +1213,38 @@ def _analytics_summary_sql(conditions: str, params: dict[str, Any], status_filte
         as_dict=True,
     )
     unique_calls = frappe.utils.cint(unique_rows[0].unique_calls) if unique_rows else 0
-    return _summary_from_bucket_rows(rows, unique_calls=unique_calls)
+    summary = _summary_from_bucket_rows(rows, unique_calls=unique_calls)
+    summary["_bucket_rows"] = rows
+    return summary
 
 
 def _summary_from_bucket_rows(rows: list[dict[str, Any]], unique_calls: int = 0) -> dict[str, Any]:
     counts: dict[str, int] = {}
     for row in rows:
-        counts[row.bucket] = counts.get(row.bucket, 0) + frappe.utils.cint(row.call_count)
+        bucket = row.get("bucket")
+        counts[bucket] = counts.get(bucket, 0) + frappe.utils.cint(row.get("call_count"))
     total = sum(counts.values())
     connected = counts.get("connected", 0)
     connected_inbound = sum(
-        frappe.utils.cint(row.call_count)
+        frappe.utils.cint(row.get("call_count"))
         for row in rows
-        if row.bucket == "connected" and row.get("direction") == "Incoming"
+        if row.get("bucket") == "connected" and row.get("direction") == "Incoming"
     )
     connected_outbound = sum(
-        frappe.utils.cint(row.call_count)
+        frappe.utils.cint(row.get("call_count"))
         for row in rows
-        if row.bucket == "connected" and row.get("direction") == "Outgoing"
+        if row.get("bucket") == "connected" and row.get("direction") == "Outgoing"
     )
     missed = sum(
-        frappe.utils.cint(row.call_count)
+        frappe.utils.cint(row.get("call_count"))
         for row in rows
-        if row.bucket in {"missed", "busy", "no_answer", "failed", "cancelled"}
+        if row.get("bucket") in {"missed", "busy", "no_answer", "failed", "cancelled"}
         and (row.get("direction") in (None, "", "Incoming"))
     )
     talk_seconds = sum(
-        frappe.utils.cint(row.talk_seconds)
+        frappe.utils.cint(row.get("talk_seconds"))
         for row in rows
-        if row.bucket == "connected"
+        if row.get("bucket") == "connected"
     )
     average_duration = round(talk_seconds / connected) if connected else 0
     return {
@@ -1186,6 +1258,7 @@ def _summary_from_bucket_rows(rows: list[dict[str, Any]], unique_calls: int = 0)
         "no_answer": counts.get("no_answer", 0),
         "failed": counts.get("failed", 0),
         "cancelled": counts.get("cancelled", 0),
+        "other": counts.get("other", 0),
         "rejected": counts.get("cancelled", 0),
         "talk_seconds": talk_seconds,
         "talk_time_label": _duration_label(talk_seconds),
@@ -1193,38 +1266,39 @@ def _summary_from_bucket_rows(rows: list[dict[str, Any]], unique_calls: int = 0)
         "average_duration_label": _duration_label(average_duration),
         "answer_rate": round((connected / total) * 100, 1) if total else 0,
         "missed_rate": round((missed / total) * 100, 1) if total else 0,
-        "cost": round(sum(frappe.utils.flt(row.cost) for row in rows), 2),
+        "cost": round(sum(frappe.utils.flt(row.get("cost")) for row in rows), 2),
     }
 
 
-def _analytics_status_breakdown_sql(conditions: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-    summary = _analytics_summary_sql(conditions, params)
+def _public_analytics_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in summary.items() if not key.startswith("_")}
+
+
+def _analytics_status_breakdown(
+    summary: dict[str, Any],
+    outcome_breakdown: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     data = [
         {"bucket": "connected", "label": _("Connected"), "count": summary.get("connected") or 0},
         {"bucket": "missed", "label": _("Missed"), "count": summary.get("missed") or 0},
     ]
-    other = next((row.get("count") for row in _analytics_outcome_breakdown_sql(conditions, params) if row.get("bucket") == "other"), 0)
+    other = next((row.get("count") for row in outcome_breakdown if row.get("bucket") == "other"), 0)
     if other:
         data.append({"bucket": "other", "label": _("Other"), "count": other})
     return [row for row in data if row["count"]]
 
 
-def _analytics_outcome_breakdown_sql(conditions: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-    bucket_expr = _analytics_bucket_sql()
-    rows = frappe.db.sql(
-        f"""
-        select bucket, count(*) as call_count, sum(talk_seconds) as talk_seconds, sum(cost) as cost
-        from (
-            select {bucket_expr} as bucket, {_analytics_talk_sql()} as talk_seconds, coalesce(`cost`, 0) as cost
-            from `tabVobiz Call Log`
-            where {conditions}
-        ) analytics
-        group by bucket
-        """,
-        params,
-        as_dict=True,
-    )
-    by_bucket = {row.bucket: row for row in rows}
+def _analytics_outcome_breakdown_from_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_bucket: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        bucket = row.get("bucket") or "other"
+        current = by_bucket.setdefault(
+            bucket,
+            {"bucket": bucket, "call_count": 0, "talk_seconds": 0, "cost": 0},
+        )
+        current["call_count"] += frappe.utils.cint(row.get("call_count"))
+        current["talk_seconds"] += frappe.utils.cint(row.get("talk_seconds"))
+        current["cost"] += frappe.utils.flt(row.get("cost"))
     data = []
     for bucket in ["connected", "busy", "no_answer", "failed", "cancelled", "missed", "other"]:
         row = by_bucket.get(bucket)
@@ -1235,7 +1309,7 @@ def _analytics_outcome_breakdown_sql(conditions: str, params: dict[str, Any]) ->
             {
                 "bucket": bucket,
                 "label": _analytics_bucket_label(bucket),
-                "count": frappe.utils.cint(row.call_count),
+                "count": frappe.utils.cint(row.get("call_count")),
                 "average_duration_label": summary.get("average_duration_label"),
             }
         )
@@ -1409,7 +1483,7 @@ def _append_mapped_agents_with_zero_calls(
         "Vobiz User Mapping",
         filters=filters,
         pluck="user",
-        limit_page_length=50000,
+        limit_page_length=2000,
     )
     existing = {row.get("user") for row in rows}
     for user in mapped_users:
@@ -1474,7 +1548,7 @@ def _availability_attendance_rows(users: list[str], now) -> dict[str, list[Any]]
             "status",
         ],
         order_by="agent_user asc, online_from asc",
-        limit_page_length=10000,
+        limit_page_length=2000,
     )
     by_user: dict[str, list[Any]] = {}
     for attendance_row in rows:
@@ -2531,39 +2605,6 @@ def _crm_lead_distinct_options(
     return cleaned
 
 
-def _apply_visible_crm_lead_scope(filters: dict[str, Any]) -> None:
-    if not frappe.db.exists("DocType", "CRM Lead"):
-        if filters.get("reference_doctype") == "CRM Lead":
-            filters["force_empty"] = True
-        return
-
-    lead_names = _visible_crm_lead_names()
-    if filters.get("reference_doctype") == "CRM Lead":
-        if lead_names:
-            filters["reference_names"] = lead_names
-        else:
-            filters["force_empty"] = True
-        return
-
-    if lead_names:
-        filters["crm_lead_reference_names"] = lead_names
-    else:
-        filters["exclude_crm_leads"] = True
-
-
-def _visible_crm_lead_names() -> list[str]:
-    try:
-        return frappe.get_list(
-            "CRM Lead",
-            pluck="name",
-            order_by="modified desc",
-            limit_page_length=50000,
-        )
-    except Exception:
-        frappe.log_error(frappe.get_traceback(), "Vobiz analytics CRM Lead permission scope failed")
-        return []
-
-
 def _can_view_all_analytics_agents() -> bool:
     if frappe.session.user == "Administrator":
         return True
@@ -2629,6 +2670,8 @@ def _analytics_date_range(from_date: str | None, to_date: str | None) -> tuple[s
         end = frappe.utils.getdate(today)
     if start > end:
         start, end = end, start
+    if (end - start).days >= ANALYTICS_MAX_DAYS:
+        start = frappe.utils.add_days(end, -(ANALYTICS_MAX_DAYS - 1))
     return str(start), str(end)
 
 
@@ -2722,7 +2765,9 @@ def _active_call() -> dict[str, Any] | None:
             "availability_status": mapping.get("availability_status") or "Available",
         }
 
-    status = get_call_status(call_log)
+    # Console reconciliation must stay local. Provider state is written by
+    # callbacks/CDR jobs; polling Vobiz here can block every web worker.
+    status = get_call_status(call_log, sync_provider=0)
     doc = frappe.get_doc("Vobiz Call Log", call_log)
     if not is_active_call_log(doc.name):
         restore_mapping_after_call(doc.name)
@@ -2965,17 +3010,27 @@ def _queue_for_doctype(
     filters = _queue_filter_list(meta, queue_source=queue_source, agent=agent, followup_day=followup_day)
     filters.extend(_safe_user_filters(meta, user_filters))
     query = (search or "").strip()
-    search_fields = _queue_search_fields(meta, fields) if query else []
     fetch_rows = frappe.get_list if doctype == "CRM Lead" else frappe.get_all
-    fetch_limit = max(limit, min(500, CONSOLE_QUEUE_LIMIT_MAX * 5))
-    rows = fetch_rows(
-        doctype,
-        filters=filters,
-        or_filters=_queue_search_filters(search_fields, query) if query else None,
-        fields=fields,
-        order_by=_queue_order_by(meta, sort_by),
-        limit_page_length=fetch_limit,
-    )
+    order_by = _queue_order_by(meta, sort_by)
+    if query:
+        rows = _queue_search_rows(
+            fetch_rows,
+            doctype,
+            meta,
+            filters,
+            fields,
+            order_by,
+            limit,
+            query,
+        )
+    else:
+        rows = fetch_rows(
+            doctype,
+            filters=filters,
+            fields=fields,
+            order_by=order_by,
+            limit_page_length=limit,
+        )
     if doctype == "Patient" and queue_source == "Patient":
         rows = [row for row in rows if patient_matches_mapping(row, agent or {})]
     rows = [_reference_row(doctype, row) for row in rows]
@@ -3011,9 +3066,9 @@ def _queue_filters(meta, queue_source: str | None = None, agent: dict[str, Any] 
         return filters
 
     if meta.has_field("disabled"):
-        filters["disabled"] = ["!=", 1]
+        filters["disabled"] = 0
     if meta.has_field("vobiz_do_not_call"):
-        filters["vobiz_do_not_call"] = ["!=", 1]
+        filters["vobiz_do_not_call"] = 0
     if meta.name == "Patient" and queue_source == "Patient":
         if meta.has_field("sr_medical_department"):
             departments = _split_values((agent or {}).get("sr_medical_departments"), first=(agent or {}).get("sr_medical_department"))
@@ -3047,10 +3102,7 @@ def _safe_user_filters(meta, raw_filters: str | list | None) -> list[list[Any]]:
         "docstatus",
         "idx",
     }
-    allowed_ops = {
-        "=", "!=", ">", "<", ">=", "<=", "like", "not like", "in", "not in",
-        "is", "is not", "between", "timespan", "previous", "next",
-    }
+    allowed_ops = {"=", ">", "<", ">=", "<=", "in", "is", "between", "timespan", "previous", "next"}
     safe = []
     for item in filters:
         if not isinstance(item, (list, tuple)):
@@ -3068,6 +3120,8 @@ def _safe_user_filters(meta, raw_filters: str | list | None) -> list[list[Any]]:
         if fieldname not in standard_fields and not meta.has_field(fieldname):
             continue
         if operator not in allowed_ops:
+            continue
+        if operator == "in" and isinstance(value, (list, tuple)) and len(value) > 100:
             continue
         safe.append([meta.name, fieldname, operator, value])
     return safe
@@ -3127,7 +3181,75 @@ def _queue_search_fields(meta, loaded_fields: list[str]) -> list[str]:
 def _queue_search_filters(fields: list[str], query: str) -> list[list[str]]:
     if not fields or not query:
         return []
-    return [[fieldname, "like", f"%{query}%"] for fieldname in fields]
+    return [[fieldname, "like", f"{query}%"] for fieldname in fields]
+
+
+def _queue_search_rows(
+    fetch_rows,
+    doctype: str,
+    meta,
+    filters: list[list[Any]],
+    fields: list[str],
+    order_by: str,
+    limit: int,
+    query: str,
+) -> list[Any]:
+    """Search indexed fields separately to avoid a multi-column wildcard scan."""
+    query = str(query or "").strip()[:140]
+    digits = "".join(ch for ch in query if ch.isdigit())
+    searches: list[tuple[str, str, Any]] = []
+
+    if len(digits) >= 7:
+        last10 = digits[-10:]
+        phone_values = [query, digits, last10]
+        if len(last10) == 10:
+            phone_values.extend((f"91{last10}", f"+91{last10}"))
+        phone_fields = (
+            "sr_mobile_norm",
+            "vobiz_normalized_phone",
+            "vobiz_mobile_last10",
+            "vobiz_phone_last10",
+            "vobiz_whatsapp_last10",
+            "mobile_no",
+            "mobile",
+            "phone",
+            "phone_no",
+            "sr_pe_mobile",
+        )
+        phone_values = [value for value in dict.fromkeys(phone_values) if value]
+        for fieldname in [field for field in phone_fields if meta.has_field(field)][:6]:
+            searches.append((fieldname, "in", phone_values))
+    else:
+        for fieldname in ("name", "lead_name", "patient_name", "customer_name", "company_name", "subject"):
+            if fieldname == "name" or meta.has_field(fieldname):
+                searches.append((fieldname, "like", f"{query}%"))
+
+    results = []
+    seen = set()
+    for fieldname, operator, value in searches:
+        query_filters = list(filters)
+        query_filters.append([doctype, fieldname, operator, value])
+        for row in fetch_rows(
+            doctype,
+            filters=query_filters,
+            fields=fields,
+            order_by=order_by,
+            limit_page_length=limit,
+        ):
+            if row.name in seen:
+                continue
+            results.append(row)
+            seen.add(row.name)
+            if len(results) >= limit:
+                return _sort_queue_search_rows(results, order_by)
+    return _sort_queue_search_rows(results, order_by)
+
+
+def _sort_queue_search_rows(rows: list[Any], order_by: str) -> list[Any]:
+    parts = str(order_by or "creation desc").split()
+    fieldname = parts[0].strip("`") if parts else "creation"
+    reverse = len(parts) < 2 or parts[1].lower() == "desc"
+    return sorted(rows, key=lambda row: str(row.get(fieldname) or ""), reverse=reverse)
 
 
 def _can_view_all_queue_leads() -> bool:
@@ -3317,76 +3439,76 @@ def _attach_queue_missed_calls(rows: list[dict[str, Any]]) -> list[dict[str, Any
         names_by_doctype.setdefault(doctype, []).append(name)
         by_key[(doctype, name)] = row
 
-    missed_statuses = sorted(MISSED_STATUSES | {"Canceled"})
-    seen_logs = set()
-
-    def apply(call, key: tuple[str, str]) -> None:
-        if call.name in seen_logs or key not in by_key:
-            return
-        if not is_inbound_missed_call(call):
-            return
-        seen_logs.add(call.name)
-        row = by_key[key]
-        row["missed_call_count"] = frappe.utils.cint(row.get("missed_call_count")) + 1
-        call_time = call.get("start_time") or call.get("creation") or call.get("modified")
-        current_time = row.get("missed_call_time")
-        if not current_time or str(call_time or "") > str(current_time or ""):
-            row.setdefault("record_modified", row.get("modified"))
-            row["modified"] = call_time
-            row["missed_call_time"] = call_time
-            row["missed_call_status"] = call.get("status") or ""
-
-    fields = [
-        "name",
-        "reference_doctype",
-        "reference_name",
-        "direction",
-        "status",
-        "call_status",
-        "dial_status",
-        "hangup_cause",
-        "error_message",
-        "duration",
-        "billsec",
-        "recording_duration",
-        "start_time",
-        "creation",
-        "modified",
-    ]
     call_meta = frappe.get_meta("Vobiz Call Log")
     for doctype, names in names_by_doctype.items():
-        for call in frappe.get_all(
-            "Vobiz Call Log",
-            filters={
-                "reference_doctype": doctype,
-                "reference_name": ["in", names],
-                "direction": "Incoming",
-                "status": ["in", missed_statuses],
-            },
-            fields=fields,
-            order_by="creation desc",
-            limit_page_length=0,
-        ):
-            apply(call, (call.get("reference_doctype"), call.get("reference_name")))
-
         link_field = "crm_lead" if doctype == "CRM Lead" else ("patient" if doctype == "Patient" else "")
-        if not link_field or not call_meta.has_field(link_field):
-            continue
-        link_fields = fields + [link_field]
-        for call in frappe.get_all(
-            "Vobiz Call Log",
-            filters={
-                link_field: ["in", names],
-                "direction": "Incoming",
-                "status": ["in", missed_statuses],
-            },
-            fields=link_fields,
-            order_by="creation desc",
-            limit_page_length=0,
-        ):
-            apply(call, (doctype, call.get(link_field)))
+        if link_field and not call_meta.has_field(link_field):
+            link_field = ""
+        for summary in _missed_call_summaries(doctype, names, link_field):
+            key = (doctype, summary.reference_key)
+            row = by_key.get(key)
+            if not row:
+                continue
+            call_time = summary.latest_time
+            row["missed_call_count"] = frappe.utils.cint(summary.call_count)
+            row["missed_call_time"] = call_time
+            row["missed_call_status"] = summary.latest_status or ""
+            if call_time:
+                row.setdefault("record_modified", row.get("modified"))
+                row["modified"] = call_time
 
     return rows
+
+
+def _missed_call_summaries(doctype: str, names: list[str], link_field: str = "") -> list[Any]:
+    """Return one bounded aggregate row per queue record."""
+    names = list(dict.fromkeys(name for name in names if name))[:CONSOLE_QUEUE_LIMIT_MAX]
+    if not names:
+        return []
+
+    params = {
+        "doctype": doctype,
+        "names": tuple(names),
+        "statuses": tuple(sorted(MISSED_STATUSES | {"Canceled"})),
+    }
+    direct_sql = """
+        select `name`, `reference_name` as reference_key, `status`,
+               coalesce(`start_time`, `creation`, `modified`) as call_time
+        from `tabVobiz Call Log`
+        where `reference_doctype` = %(doctype)s
+          and `reference_name` in %(names)s
+          and `direction` = 'Incoming'
+          and `status` in %(statuses)s
+    """
+    source_sql = direct_sql
+    if link_field in {"crm_lead", "patient"}:
+        source_sql += f"""
+            union
+            select `name`, `{link_field}` as reference_key, `status`,
+                   coalesce(`start_time`, `creation`, `modified`) as call_time
+            from `tabVobiz Call Log`
+            where `{link_field}` in %(names)s
+              and `direction` = 'Incoming'
+              and `status` in %(statuses)s
+        """
+
+    return frappe.db.sql(
+        f"""
+        select reference_key,
+               count(*) as call_count,
+               max(call_time) as latest_time,
+               substring_index(
+                   group_concat(`status` order by call_time desc separator '||'),
+                   '||',
+                   1
+               ) as latest_status
+        from ({source_sql}) missed
+        where reference_key is not null and reference_key != ''
+        group by reference_key
+        """,
+        params,
+        as_dict=True,
+    )
 
 
 def _sort_queue_by_missed_calls(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -3725,12 +3847,17 @@ def _resolve_patient(
     if not phone or not frappe.db.exists("DocType", "Patient"):
         return None
 
-    candidates = ("mobile", "mobile_no", "phone", "custom_whatsapp_number")
     patient_meta = frappe.get_meta("Patient")
     last10 = str(phone)[-10:]
-    for fieldname in candidates:
-        if patient_meta.has_field(fieldname):
-            patient = frappe.db.get_value("Patient", {fieldname: ["like", f"%{last10}%"]}, "name")
+    indexed_candidates = (
+        ("vobiz_mobile_last10", last10),
+        ("vobiz_phone_last10", last10),
+        ("vobiz_whatsapp_last10", last10),
+        ("vobiz_normalized_phone", str(phone)),
+    )
+    for fieldname, value in indexed_candidates:
+        if value and patient_meta.has_field(fieldname):
+            patient = frappe.db.get_value("Patient", {fieldname: value}, "name")
             if patient:
                 return patient
     return None
@@ -4119,7 +4246,7 @@ def _conversation_for_reference_phone(reference_doctype: str, reference_name: st
 
     contacts = frappe.get_all(
         "Chat Contact",
-        filters={"phone_number": ["like", f"%{last10}"]},
+        filters={"phone_number": ["in", _whatsapp_phone_candidates(phone)]},
         fields=["name", "phone_number", "modified"],
         order_by="modified desc",
         limit_page_length=20,

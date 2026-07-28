@@ -334,7 +334,7 @@ def _fail_provider_call(call_log, exc: Exception) -> None:
 
 
 @frappe.whitelist()
-def get_call_status(call_log: str) -> dict[str, Any]:
+def get_call_status(call_log: str, sync_provider: int | str = 1) -> dict[str, Any]:
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
 
@@ -342,7 +342,8 @@ def get_call_status(call_log: str) -> dict[str, Any]:
     if "System Manager" not in frappe.get_roles() and doc.user != frappe.session.user:
         frappe.throw(_("Not permitted."))
 
-    sync_live_call_if_finished(doc)
+    if frappe.utils.cint(sync_provider):
+        sync_live_call_if_finished(doc)
 
     return {
         "name": doc.name,

@@ -109,7 +109,7 @@ class TestIncomingMappingSource(unittest.TestCase):
         self.assertEqual(field["fieldtype"], "Table MultiSelect")
         self.assertEqual(field["options"], "CRM Lead Dedupe Merge Status")
         self.assertIn("lead.status in _incoming_call_treat_as_new_statuses()", source)
-        self.assertIn('filters={fieldname: key}', source)
+        self.assertIn('filters={fieldname: key, **canonical_filters}', source)
         self.assertNotIn('find_by_phone("CRM Lead"', source)
 
     def test_existing_patient_overrides_lead_owner_and_routes_by_department_followup(self):
