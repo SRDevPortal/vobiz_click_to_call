@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import unittest
 
+from vobiz_click_to_call import hooks as app_hooks
+
 
 APP = Path(__file__).resolve().parents[1]
 WEBHOOK = APP / "api" / "webhook.py"
@@ -27,6 +29,17 @@ AGENT_CONSOLE = (
 
 
 class TestServerSafetyGuards(unittest.TestCase):
+    def test_scheduler_events_use_frappe_hook_name(self):
+        self.assertFalse(hasattr(app_hooks, "scheduled_events"))
+        self.assertEqual(
+            app_hooks.scheduler_events["hourly"],
+            [
+                "vobiz_click_to_call.services.cdr.enqueue_recent_cdr_sync",
+                "vobiz_click_to_call.services.cdr.enqueue_missing_inbound_cdr_sync",
+                "vobiz_click_to_call.api.console.close_stale_agent_attendance_sessions",
+            ],
+        )
+
     def test_guest_callbacks_are_rate_limited_and_fail_closed(self):
         webhook = WEBHOOK.read_text(encoding="utf-8")
         inbound = INBOUND.read_text(encoding="utf-8")

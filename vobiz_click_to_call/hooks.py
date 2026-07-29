@@ -34,7 +34,7 @@ doc_events = {
     },
 }
 
-scheduled_events = {
+scheduler_events = {
     "hourly": [
         "vobiz_click_to_call.services.cdr.enqueue_recent_cdr_sync",
         "vobiz_click_to_call.services.cdr.enqueue_missing_inbound_cdr_sync",
