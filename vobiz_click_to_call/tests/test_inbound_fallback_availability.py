@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 class TestInboundFallbackAvailability(unittest.TestCase):
-    def test_fallback_paths_do_not_require_agent_availability(self):
+    def test_every_fallback_path_requires_agent_availability(self):
         source = (
             Path(__file__).resolve().parents[1] / "api" / "inbound.py"
         ).read_text(encoding="utf-8")
@@ -28,8 +28,7 @@ class TestInboundFallbackAvailability(unittest.TestCase):
 
         for fallback_source in sections:
             self.assertIn("fallback_mapping and fallback_mobile", fallback_source)
-            self.assertNotIn("_mapping_can_receive", fallback_source)
-            self.assertNotIn("get_mapping_unavailable_reason", fallback_source)
+            self.assertIn("_mapping_can_receive(fallback_user, fallback_mapping)", fallback_source)
 
     def test_primary_paths_still_require_availability(self):
         source = (
@@ -44,3 +43,23 @@ class TestInboundFallbackAvailability(unittest.TestCase):
             "mapping and primary_mobile and _mapping_can_receive(owner, mapping)",
             source,
         )
+
+    def test_availability_contract_includes_console_and_mapping_state(self):
+        source = (Path(__file__).resolve().parents[1] / "api" / "inbound.py").read_text(encoding="utf-8")
+        start = source.index("def _mapping_can_receive")
+        end = source.index("\ndef _start_recording_safely", start)
+        helper = source[start:end]
+
+        self.assertIn("is_agent_console_online(user)", helper)
+        self.assertIn("get_mapping_unavailable_reason(mapping)", helper)
+
+    def test_logout_marks_the_mapping_offline(self):
+        app = Path(__file__).resolve().parents[1]
+        hooks = (app / "hooks.py").read_text(encoding="utf-8")
+        mapping = (
+            app / "vobiz_click_to_call" / "doctype" / "vobiz_user_mapping" / "vobiz_user_mapping.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("mark_user_offline_on_logout", hooks)
+        self.assertIn('"availability_status": "Offline"', mapping)
+        self.assertIn('"accept_calls": 0', mapping)

@@ -83,6 +83,34 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("this.stop_timer()", render_source)
         self.assertIn("this.clear_tracked_live_call(last.name)", render_source)
 
+    def test_active_call_disconnect_triggers_disposition_without_page_refresh(self):
+        realtime_source = self.method_source("bind_realtime", "unbind_realtime")
+        disconnect_source = self.method_source("handle_call_disconnected", "render_header_active_call")
+        disposition_source = self.method_source("maybe_prompt_workdesk_disposition", "open_post_call_disposition_dialog")
+        hooks = (Path(__file__).resolve().parents[1] / "hooks.py").read_text(encoding="utf-8")
+        realtime = (Path(__file__).resolve().parents[1] / "services" / "realtime.py").read_text(encoding="utf-8")
+
+        self.assertIn("vobiz_call_disconnected", realtime_source)
+        self.assertIn("this.render_active_call()", disconnect_source)
+        self.assertNotIn("active_call_status_timer", self.source)
+        self.assertIn("(this.state.queue || []).find", disposition_source)
+        self.assertNotIn("if (!matchesWorkdesk) return", disposition_source)
+        self.assertIn("publish_call_disconnected", hooks)
+        self.assertIn("after_commit=True", realtime)
+
+    def test_header_shows_customer_and_can_end_active_call(self):
+        render_source = self.method_source("render", "inject_styles")
+        active_source = self.method_source("render_active_call", "render_header_active_call")
+        header_source = self.method_source("render_header_active_call", "end_header_active_call")
+        end_source = self.method_source("end_header_active_call", "open_missed_calls")
+
+        self.assertLess(render_source.index('data-role="head-active-call"'), render_source.index('data-action="open-analytics"'))
+        self.assertIn('data-action="end-active-call"', render_source)
+        self.assertIn("this.render_header_active_call(active)", active_source)
+        self.assertIn("active.reference_title || active.reference_name", header_source)
+        self.assertIn("frappe.confirm", end_source)
+        self.assertIn("this.cancel_call_log(active.name)", end_source)
+
     def test_details_click_uses_lightweight_context_once(self):
         call_row_source = self.method_source("call_row", "open_detail_dialog")
         select_row_source = self.method_source("select_row", "render_focus")
@@ -118,6 +146,19 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("selected_queue_rows()", update_source)
         self.assertIn("sync_check_all_state()", update_source)
         self.assertIn("const rows = this.selected_queue_rows()", start_source)
+
+    def test_queue_uses_bounded_server_side_pagination(self):
+        console = CONSOLE_API.read_text(encoding="utf-8")
+        load_source = self.method_source("load", "queue_search_changed")
+        pagination_source = self.method_source("paginated_queue_rows", "render_queue_meta")
+
+        self.assertIn("limit_start: Math.max(0", load_source)
+        self.assertIn("limit: this.state.queue_page_size || 25", load_source)
+        self.assertIn("queue_pagination", load_source)
+        self.assertIn("limit_start: int | str = 0", console)
+        self.assertIn('"has_more": len(queue) > limit', console)
+        self.assertIn("this.load()", pagination_source)
+        self.assertNotIn(".slice(start, start + pageSize)", pagination_source)
 
     def test_lead_queue_shows_lead_owner_column(self):
         render_source = self.method_source("render", "inject_styles")
@@ -179,6 +220,33 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn('options.get(sort_key, options["creation_desc"])', console)
         self.assertIn("return rows", missed_source)
         self.assertNotIn("return _sort_queue_by_missed_calls(rows)", missed_source)
+
+    def test_new_whatsapp_sort_uses_latest_message_time(self):
+        console = CONSOLE_API.read_text(encoding="utf-8")
+        attach_start = console.index("\ndef _attach_queue_whatsapp(")
+        attach_end = console.index("\ndef _attach_queue_missed_calls(", attach_start)
+        attach_source = console[attach_start:attach_end]
+        sort_start = console.index("\ndef _sort_queue_by_whatsapp(")
+        sort_end = console.index("\ndef _whatsapp_phone_candidates(", sort_start)
+        sort_source = console[sort_start:sort_end]
+
+        self.assertIn('"last_message_time"', attach_source)
+        self.assertIn('data.get("last_message_time") or data.get("modified")', attach_source)
+        self.assertIn('frappe.utils.cint(row.get("whatsapp_unread_count")) > 0', sort_source)
+
+    def test_recently_updated_includes_whatsapp_message_time(self):
+        console = CONSOLE_API.read_text(encoding="utf-8")
+        sort_start = console.index("\ndef _sort_queue_by_whatsapp(")
+        sort_end = console.index("\ndef _whatsapp_phone_candidates(", sort_start)
+        sort_source = console[sort_start:sort_end]
+
+        self.assertIn('if sort_by == "modified_desc"', sort_source)
+        self.assertIn('str(row.get("modified") or "")', sort_source)
+        self.assertIn('str(row.get("whatsapp_last_message_at") or "")', sort_source)
+
+    def test_whatsapp_icon_colors_reflect_unread_state(self):
+        self.assertIn(".vobiz-wa-queue.has-new { background: #dcfce7; border-color: #86efac; color: #15803d; }", self.source)
+        self.assertIn(".vobiz-wa-queue.is-quiet { color: #dc2626; }", self.source)
 
     def test_agent_analytics_missed_filter_is_inbound_only(self):
         source = CONSOLE_API.read_text(encoding="utf-8")

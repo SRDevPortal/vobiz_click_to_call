@@ -34,6 +34,7 @@ class VobizAgentConsole {
 			selected: null,
 			selected_queue_keys: new Set(),
 			active_call: null,
+			ending_active_call: false,
 			call_started_at: null,
 			dispositions: [],
 			patient_followup_status_options: [],
@@ -57,6 +58,7 @@ class VobizAgentConsole {
 			queue_sort_by: 'creation_desc',
 			queue_page: 1,
 			queue_page_size: 25,
+			queue_has_more: false,
 			missed_call_seen: this.load_missed_call_seen(),
 			filter_group: null,
 			auto_dial: {
@@ -112,6 +114,16 @@ class VobizAgentConsole {
 						<h2>${__('Vobiz Agent Call Center')}</h2>
 					</div>
 					<div class="vobiz-head-actions">
+						<div class="vobiz-head-active-call hidden" data-role="head-active-call">
+							<span class="vobiz-head-call-pulse"></span>
+							<div class="vobiz-head-call-copy">
+								<small data-role="head-call-status">${__('Active Call')}</small>
+								<strong data-role="head-call-customer"></strong>
+							</div>
+							<button type="button" class="btn btn-danger btn-xs" data-action="end-active-call">
+								<i class="fa fa-phone"></i> ${__('End Call')}
+							</button>
+						</div>
 						<button class="btn btn-default btn-sm" data-action="open-analytics">
 							<i class="fa fa-line-chart"></i> ${__('Analytics')}
 						</button>
@@ -220,6 +232,13 @@ class VobizAgentConsole {
 				.vobiz-console-head h2 { font-size: 22px; font-weight: 700; margin: 0; }
 				.vobiz-eyebrow { color: #6b7280; font-size: 11px; font-weight: 700; letter-spacing: .04em; margin-bottom: 4px; }
 				.vobiz-head-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
+				.vobiz-head-active-call { align-items: center; background: #fff7ed; border: 1px solid #fdba74; border-radius: 7px; display: flex; gap: 9px; max-width: 420px; padding: 5px 7px 5px 10px; }
+				.vobiz-head-active-call.hidden { display: none; }
+				.vobiz-head-call-pulse { animation: vobiz-call-pulse 1.4s infinite; background: #16a34a; border-radius: 50%; flex: 0 0 auto; height: 9px; width: 9px; }
+				.vobiz-head-call-copy { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
+				.vobiz-head-call-copy small { color: #9a3412; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+				.vobiz-head-call-copy strong { color: #431407; max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+				@keyframes vobiz-call-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, .35); } 50% { box-shadow: 0 0 0 5px rgba(22, 163, 74, 0); } }
 				.vobiz-agent-state { align-items: center; background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; display: flex; gap: 8px; padding: 8px 12px; }
 				.vobiz-state-dot { background: #16a34a; border-radius: 50%; height: 9px; width: 9px; }
 				.vobiz-stats { display: grid; gap: 16px; grid-template-columns: repeat(6, minmax(0, 1fr)); margin-bottom: 16px; }
@@ -292,7 +311,7 @@ class VobizAgentConsole {
 				.vobiz-missed-row-grid div { min-width: 0; overflow-wrap: anywhere; }
 				.vobiz-wa-queue { align-items: center; border-radius: 999px; display: inline-flex; font-size: 12px; font-weight: 800; gap: 5px; justify-content: center; min-height: 26px; min-width: 52px; padding: 3px 9px; }
 				.vobiz-wa-queue.has-new { background: #dcfce7; border-color: #86efac; color: #15803d; }
-				.vobiz-wa-queue.is-quiet { color: #16a34a; }
+				.vobiz-wa-queue.is-quiet { color: #dc2626; }
 				.vobiz-wa-count { background: #16a34a; border-radius: 999px; color: #fff; font-size: 10px; line-height: 1; min-width: 17px; padding: 3px 5px; text-align: center; }
 				.vobiz-wa-empty { color: #9ca3af; font-weight: 700; }
 				.vobiz-side { min-width: 0; }
@@ -437,6 +456,7 @@ class VobizAgentConsole {
 		const $main = this.page.main;
 		$main.on('click', '[data-action="refresh"]', () => this.load());
 		$main.on('click', '[data-action="open-analytics"]', () => frappe.set_route('vobiz-agent-analytics'));
+		$main.on('click', '[data-action="end-active-call"]', () => this.end_header_active_call());
 		$main.on('click', '[data-action="toggle-auto"]', () => this.toggle_auto_dial());
 		$main.on('click', '[data-action="auto-report"]', () => this.open_auto_dial_report());
 		$main.on('click', '[data-action="open-filters"]', () => this.open_filter_popover());
@@ -507,7 +527,7 @@ class VobizAgentConsole {
 		$main.on('change', '[data-role="queue-page-size"]', () => {
 			this.state.queue_page_size = parseInt(this.page.main.find('[data-role="queue-page-size"]').val(), 10) || 25;
 			this.state.queue_page = 1;
-			this.render_queue();
+			this.load();
 		});
 		$(document).on('visibilitychange.vobiz-agent-console', () => {
 			if (!document.hidden && this.is_console_visible()) {
@@ -542,7 +562,8 @@ class VobizAgentConsole {
 		const sort_by = (this.state.queue_sort_by || this.page.main.find('[data-role="queue-sort"]').val() || 'creation_desc').trim();
 		this.state.queue_sort_by = sort_by;
 		const request = frappe.call('vobiz_click_to_call.api.console.get_agent_console_data', {
-			limit: 50,
+			limit: this.state.queue_page_size || 25,
+			limit_start: Math.max(0, ((this.state.queue_page || 1) - 1) * (this.state.queue_page_size || 25)),
 			search,
 			queue_source_filter,
 			sort_by,
@@ -550,6 +571,7 @@ class VobizAgentConsole {
 		}).then((r) => {
 			const data = r.message || {};
 			this.state.queue = data.queue || [];
+			this.state.queue_has_more = Boolean((data.queue_pagination || {}).has_more);
 			this.state.queue_meta = Object.assign(this.default_queue_meta(), data.queue_meta || {});
 			this.prune_selected_queue_keys();
 			this.reset_filter_group_if_doctype_changed();
@@ -721,8 +743,10 @@ class VobizAgentConsole {
 		if (!frappe.realtime || this.callback_handler) return;
 		this.callback_handler = (payload) => this.handle_customer_callback(payload || {});
 		this.patient_routed_handler = (payload) => this.handle_patient_routed_call(payload || {});
+		this.call_disconnected_handler = (payload) => this.handle_call_disconnected(payload || {});
 		frappe.realtime.on('vobiz_customer_callback', this.callback_handler);
 		frappe.realtime.on('vobiz_patient_routed_call', this.patient_routed_handler);
+		frappe.realtime.on('vobiz_call_disconnected', this.call_disconnected_handler);
 	}
 
 	unbind_realtime() {
@@ -732,8 +756,12 @@ class VobizAgentConsole {
 		if (frappe.realtime && this.patient_routed_handler && frappe.realtime.off) {
 			frappe.realtime.off('vobiz_patient_routed_call', this.patient_routed_handler);
 		}
+		if (frappe.realtime && this.call_disconnected_handler && frappe.realtime.off) {
+			frappe.realtime.off('vobiz_call_disconnected', this.call_disconnected_handler);
+		}
 		this.callback_handler = null;
 		this.patient_routed_handler = null;
+		this.call_disconnected_handler = null;
 	}
 
 	is_console_visible() {
@@ -925,40 +953,32 @@ class VobizAgentConsole {
 	}
 
 	paginated_queue_rows(rows) {
-		const pageSize = this.state.queue_page_size || 25;
-		const page = Math.max(1, this.state.queue_page || 1);
-		const start = (page - 1) * pageSize;
-		return (rows || []).slice(start, start + pageSize);
+		return rows || [];
 	}
 
 	clamp_queue_page(totalRows) {
-		const pageSize = this.state.queue_page_size || 25;
-		const totalPages = Math.max(1, Math.ceil((totalRows || 0) / pageSize));
-		this.state.queue_page = Math.min(Math.max(1, this.state.queue_page || 1), totalPages);
+		this.state.queue_page = Math.max(1, this.state.queue_page || 1);
 	}
 
 	change_queue_page(delta) {
-		const totalRows = this.filtered_queue_rows().length;
-		const pageSize = this.state.queue_page_size || 25;
-		const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
-		this.state.queue_page = Math.min(Math.max(1, (this.state.queue_page || 1) + delta), totalPages);
-		this.render_queue();
+		if (delta > 0 && !this.state.queue_has_more) return;
+		this.state.queue_page = Math.max(1, (this.state.queue_page || 1) + delta);
+		this.load();
 	}
 
 	render_queue_pagination(totalRows) {
 		const pageSize = this.state.queue_page_size || 25;
 		const page = this.state.queue_page || 1;
-		const totalPages = Math.max(1, Math.ceil((totalRows || 0) / pageSize));
 		const start = totalRows ? ((page - 1) * pageSize) + 1 : 0;
-		const end = Math.min(totalRows || 0, page * pageSize);
+		const end = totalRows ? start + totalRows - 1 : 0;
 		this.page.main.find('[data-role="queue-page-summary"]').text(
 			totalRows
-				? __('Showing {0}-{1} of {2}', [start, end, totalRows])
+				? __('Showing {0}-{1}', [start, end])
 				: __('No records')
 		);
-		this.page.main.find('[data-role="queue-page-number"]').text(__('Page {0} of {1}', [page, totalPages]));
+		this.page.main.find('[data-role="queue-page-number"]').text(__('Page {0}', [page]));
 		this.page.main.find('[data-action="queue-page-prev"]').prop('disabled', page <= 1);
-		this.page.main.find('[data-action="queue-page-next"]').prop('disabled', page >= totalPages);
+		this.page.main.find('[data-action="queue-page-next"]').prop('disabled', !this.state.queue_has_more);
 	}
 
 	render_queue_meta() {
@@ -1411,6 +1431,7 @@ class VobizAgentConsole {
 	render_active_call(skipDispositionPrompt) {
 		const active = this.state.active_call || {};
 		const last = active.last_call || {};
+		this.render_header_active_call(active);
 		this.agent_console_targets('[data-role="call-status"]').text(active.status || last.status || __('Idle'));
 		if (active.reference_name) {
 			this.agent_console_targets('[data-role="focus-name"]').text(active.reference_title || active.reference_name);
@@ -1678,6 +1699,40 @@ class VobizAgentConsole {
 			this.open_detail_dialog(row, r.message || {});
 		});
 		request.always(() => this.set_detail_loading(row, false));
+	}
+
+	handle_call_disconnected(payload = {}) {
+		const active = this.state.active_call || {};
+		if (!payload.name || active.name !== payload.name || !this.is_terminal_status(payload.status)) return;
+		const call = Object.assign({}, active, payload);
+		this.state.active_call = { last_call: call };
+		this.render_active_call();
+	}
+
+	render_header_active_call(active = {}) {
+		const isActive = Boolean(active.name && !this.is_terminal_status(active.status));
+		const $control = this.page.main.find('[data-role="head-active-call"]');
+		$control.toggleClass('hidden', !isActive);
+		if (!isActive) return;
+
+		const customer = active.reference_title || active.reference_name || active.customer_number_display || __('Customer');
+		const status = active.status || __('Active Call');
+		$control.find('[data-role="head-call-status"]').text(status);
+		$control.find('[data-role="head-call-customer"]').text(customer).attr('title', customer);
+		$control.find('[data-action="end-active-call"]').prop('disabled', Boolean(this.state.ending_active_call));
+	}
+
+	end_header_active_call() {
+		const active = this.state.active_call || {};
+		if (!active.name || this.state.ending_active_call) return;
+		frappe.confirm(__('End the active call with {0}?', [active.reference_title || active.reference_name || __('this customer')]), () => {
+			this.state.ending_active_call = true;
+			this.render_header_active_call(active);
+			Promise.resolve(this.cancel_call_log(active.name)).finally(() => {
+				this.state.ending_active_call = false;
+				this.render_header_active_call(this.state.active_call || {});
+			});
+		});
 	}
 
 	open_missed_calls(index) {
@@ -3734,11 +3789,18 @@ class VobizAgentConsole {
 		const autoCallLog = ((session.current || {}).call_log) || '';
 		if (session.running && (session.awaiting_disposition || autoCallLog === call.name)) return;
 
-		const row = this.state.active_workdesk_row || this.state.selected || {};
-		const matchesWorkdesk = row.doctype && row.name &&
-			call.reference_doctype === row.doctype &&
-			call.reference_name === row.name;
-		if (!matchesWorkdesk) return;
+		const selected = this.state.active_workdesk_row || this.state.selected || {};
+		const row = (
+			selected.doctype === call.reference_doctype && selected.name === call.reference_name
+				? selected
+				: (this.state.queue || []).find(item => item.doctype === call.reference_doctype && item.name === call.reference_name)
+		) || {
+			doctype: call.reference_doctype,
+			name: call.reference_name,
+			title: call.reference_title || call.reference_name,
+			phone: call.customer_number_display || ''
+		};
+		if (!row.doctype || !row.name) return;
 
 		this.state.disposition_prompted_call_log = call.name;
 		setTimeout(() => this.open_post_call_disposition_dialog(call, row, null, {

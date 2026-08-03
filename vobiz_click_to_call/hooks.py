@@ -7,6 +7,7 @@ app_license = "MIT"
 
 after_install = "vobiz_click_to_call.install.after_install"
 after_migrate = "vobiz_click_to_call.install.after_migrate"
+on_logout = "vobiz_click_to_call.vobiz_click_to_call.doctype.vobiz_user_mapping.vobiz_user_mapping.mark_user_offline_on_logout"
 
 app_include_js = [
     "/assets/vobiz_click_to_call/js/click_to_call.js",
@@ -30,11 +31,19 @@ doc_events = {
     },
     "Vobiz Call Log": {
         "on_trash": "vobiz_click_to_call.services.delete_cleanup.cleanup_call_log_reverse_links",
-        "on_update": "vobiz_click_to_call.services.ai.on_vobiz_call_log_update",
+        "on_update": [
+            "vobiz_click_to_call.services.ai.on_vobiz_call_log_update",
+            "vobiz_click_to_call.services.realtime.publish_call_disconnected",
+        ],
     },
 }
 
 scheduler_events = {
+    "cron": {
+        "* * * * *": [
+            "vobiz_click_to_call.services.cdr.recover_stale_ringing_calls",
+        ],
+    },
     "hourly": [
         "vobiz_click_to_call.services.cdr.enqueue_recent_cdr_sync",
         "vobiz_click_to_call.services.cdr.enqueue_missing_inbound_cdr_sync",

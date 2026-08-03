@@ -79,6 +79,25 @@ class VobizUserMapping(Document):
         sync_reciprocal_fallback_users(self)
 
 
+def mark_user_offline_on_logout(login_manager=None) -> None:
+    user = getattr(getattr(login_manager, "user", None), "name", None) or getattr(login_manager, "user", None) or frappe.session.user
+    if not user or user == "Guest":
+        return
+    mapping_name = frappe.db.get_value("Vobiz User Mapping", {"user": user, "enabled": 1}, "name")
+    if not mapping_name:
+        return
+    frappe.db.set_value(
+        "Vobiz User Mapping",
+        mapping_name,
+        {
+            "availability_status": "Offline",
+            "accept_calls": 0,
+            "last_status_at": frappe.utils.now(),
+        },
+        update_modified=True,
+    )
+
+
 def _split_values(value: str | None, first: str | None = None) -> list[str]:
     values = []
     seen = set()

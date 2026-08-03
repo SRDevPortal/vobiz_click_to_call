@@ -276,6 +276,7 @@ def mark_agent_console_offline(tab_id: str | None = None) -> dict[str, Any]:
 @frappe.whitelist()
 def get_agent_console_data(
     limit: int | str = 25,
+    limit_start: int | str = 0,
     search: str | None = None,
     followup_day: str | None = None,
     queue_source_filter: str | None = None,
@@ -286,23 +287,27 @@ def get_agent_console_data(
         frappe.throw(_("Login required."))
 
     limit = max(5, min(frappe.utils.cint(limit) or 25, CONSOLE_QUEUE_LIMIT_MAX))
+    limit_start = max(0, frappe.utils.cint(limit_start))
     agent = _agent_context()
     agent_queue_source = _agent_queue_source(agent)
     queue_source = _selected_queue_source(agent_queue_source, queue_source_filter)
     queue_doctype = _queue_doctype_for_source(queue_source)
     static_context = _get_console_static_context(queue_source, queue_doctype, agent_queue_source)
+    queue = _lead_queue(
+        limit + 1,
+        search,
+        agent=agent,
+        queue_source=queue_source,
+        followup_day=followup_day,
+        sort_by=sort_by,
+        user_filters=filters,
+        limit_start=limit_start,
+    )
     return {
         "availability": get_call_capability(),
         "active_call": _active_call(),
-        "queue": _lead_queue(
-            limit,
-            search,
-            agent=agent,
-            queue_source=queue_source,
-            followup_day=followup_day,
-            sort_by=sort_by,
-            user_filters=filters,
-        ),
+        "queue": queue[:limit],
+        "queue_pagination": {"has_more": len(queue) > limit},
         "queue_meta": static_context["queue_meta"],
         "dispositions": static_context["dispositions"],
         "ai_disposition_enabled": static_context["ai_disposition_enabled"],
@@ -2920,6 +2925,7 @@ def _lead_queue(
     followup_day: str | None = None,
     sort_by: str | None = None,
     user_filters: str | list | None = None,
+    limit_start: int = 0,
 ) -> list[dict[str, Any]]:
     queue_source = queue_source or _agent_queue_source(agent)
     preferred_doctype = _queue_doctype_for_source(queue_source)
@@ -2933,6 +2939,7 @@ def _lead_queue(
             followup_day=followup_day,
             sort_by=sort_by,
             user_filters=user_filters,
+            limit_start=limit_start,
         )
 
     for doctype in LEAD_DOCTYPE_CANDIDATES:
@@ -2946,6 +2953,7 @@ def _lead_queue(
                 followup_day=followup_day,
                 sort_by=sort_by,
                 user_filters=user_filters,
+                limit_start=limit_start,
             )
             if doctype == "CRM Lead":
                 return rows
@@ -2963,6 +2971,7 @@ def _queue_for_doctype(
     followup_day: str | None = None,
     sort_by: str | None = None,
     user_filters: str | list | None = None,
+    limit_start: int = 0,
 ) -> list[dict[str, Any]]:
     meta = frappe.get_meta(doctype)
     fields = ["name", "creation", "modified"]
@@ -3022,6 +3031,7 @@ def _queue_for_doctype(
             order_by,
             limit,
             query,
+            limit_start=max(0, frappe.utils.cint(limit_start)),
         )
     else:
         rows = fetch_rows(
@@ -3029,6 +3039,7 @@ def _queue_for_doctype(
             filters=filters,
             fields=fields,
             order_by=order_by,
+            limit_start=max(0, frappe.utils.cint(limit_start)),
             limit_page_length=limit,
         )
     if doctype == "Patient" and queue_source == "Patient":
@@ -3073,6 +3084,13 @@ def _queue_filters(meta, queue_source: str | None = None, agent: dict[str, Any] 
         if meta.has_field("sr_medical_department"):
             departments = _split_values((agent or {}).get("sr_medical_departments"), first=(agent or {}).get("sr_medical_department"))
             filters["sr_medical_department"] = ["in", departments] if departments else "__no_patient_department_mapping__"
+            if departments == ["Regional"]:
+                diseases = _split_values((agent or {}).get("sr_dpt_diseases"), first=(agent or {}).get("sr_dpt_disease"))
+                languages = _split_values((agent or {}).get("sr_dpt_languages"), first=(agent or {}).get("sr_dpt_language"))
+                if meta.has_field("sr_dpt_disease"):
+                    filters["sr_dpt_disease"] = ["in", diseases] if diseases else "__no_patient_disease_mapping__"
+                if meta.has_field("sr_dpt_language"):
+                    filters["sr_dpt_language"] = ["in", languages] if languages else "__no_patient_language_mapping__"
         if meta.has_field("sr_followup_id"):
             followup_ids = _split_values((agent or {}).get("sr_followup_ids"), first=(agent or {}).get("sr_followup_id"))
             filters["sr_followup_id"] = ["in", followup_ids] if followup_ids else "__no_patient_followup_mapping__"
@@ -3193,6 +3211,7 @@ def _queue_search_rows(
     order_by: str,
     limit: int,
     query: str,
+    limit_start: int = 0,
 ) -> list[Any]:
     """Search indexed fields separately to avoid a multi-column wildcard scan."""
     query = str(query or "").strip()[:140]
@@ -3224,6 +3243,7 @@ def _queue_search_rows(
             if fieldname == "name" or meta.has_field(fieldname):
                 searches.append((fieldname, "like", f"{query}%"))
 
+    fetch_limit = max(1, limit_start + limit)
     results = []
     seen = set()
     for fieldname, operator, value in searches:
@@ -3234,15 +3254,14 @@ def _queue_search_rows(
             filters=query_filters,
             fields=fields,
             order_by=order_by,
-            limit_page_length=limit,
+            limit_page_length=fetch_limit,
         ):
             if row.name in seen:
                 continue
             results.append(row)
             seen.add(row.name)
-            if len(results) >= limit:
-                return _sort_queue_search_rows(results, order_by)
-    return _sort_queue_search_rows(results, order_by)
+    sorted_rows = _sort_queue_search_rows(results, order_by)
+    return sorted_rows[limit_start:limit_start + limit]
 
 
 def _sort_queue_search_rows(rows: list[Any], order_by: str) -> list[Any]:
@@ -3330,7 +3349,7 @@ def _attach_queue_whatsapp(rows: list[dict[str, Any]], sort_by: str | None = Non
     conversation_meta = frappe.get_meta("Chat Conversation")
     fields = _existing_fields(
         conversation_meta,
-        ("name", "unread_count", "last_message_preview", "modified"),
+        ("name", "unread_count", "last_message_preview", "last_message_time", "modified"),
     )
     if "name" not in fields:
         fields.insert(0, "name")
@@ -3345,7 +3364,7 @@ def _attach_queue_whatsapp(rows: list[dict[str, Any]], sort_by: str | None = Non
             "whatsapp_conversation": data.get("name"),
             "whatsapp_unread_count": frappe.utils.cint(data.get("unread_count")),
             "whatsapp_last_message_preview": data.get("last_message_preview") or "",
-            "whatsapp_last_message_at": data.get("modified"),
+            "whatsapp_last_message_at": data.get("last_message_time") or data.get("modified"),
         })
 
     if conversation_meta.has_field("linked_reference_doctype") and conversation_meta.has_field("linked_reference_name"):
@@ -3604,12 +3623,22 @@ def _reference_missed_call_rows(reference_doctype: str, reference_name: str, lim
 
 
 def _sort_queue_by_whatsapp(rows: list[dict[str, Any]], sort_by: str | None = None) -> list[dict[str, Any]]:
+    if sort_by == "modified_desc":
+        return sorted(
+            rows,
+            key=lambda row: max(
+                str(row.get("modified") or ""),
+                str(row.get("whatsapp_last_message_at") or ""),
+            ),
+            reverse=True,
+        )
+
     if sort_by != "whatsapp_unread_desc":
         return rows
 
-    def key(row: dict[str, Any]) -> tuple[int, str]:
+    def key(row: dict[str, Any]) -> tuple[bool, str]:
         return (
-            frappe.utils.cint(row.get("whatsapp_unread_count")),
+            frappe.utils.cint(row.get("whatsapp_unread_count")) > 0,
             str(row.get("whatsapp_last_message_at") or ""),
         )
 

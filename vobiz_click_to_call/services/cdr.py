@@ -15,6 +15,86 @@ from vobiz_click_to_call.services.numbers import normalize_phone_number
 from vobiz_click_to_call.services.settings import get_settings
 
 CDR_BATCH_SIZE = 10
+STALE_RINGING_TIMEOUT_SECONDS = 60
+STALE_RINGING_STATUSES = ("Queued", "Initiated", "Dialing", "Ringing", "Connecting", "Agent Ringing")
+STALE_RINGING_RECOVERY_LIMIT = 1000
+
+
+def recover_stale_ringing_calls() -> dict:
+    """Release mappings held by pre-bridge calls that never reached a terminal callback."""
+    mappings = frappe.get_all(
+        "Vobiz User Mapping",
+        filters={"enabled": 1, "current_call_log": ["is", "set"]},
+        fields=["name", "current_call_log"],
+        order_by="name asc",
+        limit_page_length=STALE_RINGING_RECOVERY_LIMIT,
+    )
+    call_names = list(dict.fromkeys(row.current_call_log for row in mappings if row.current_call_log))
+    if not call_names:
+        return {"checked": 0, "recovered": 0}
+
+    calls = frappe.get_all(
+        "Vobiz Call Log",
+        filters={"name": ["in", call_names], "status": ["in", list(STALE_RINGING_STATUSES)]},
+        fields=["name", "status", "start_time", "creation", "answer_time"],
+        order_by="name asc",
+        limit_page_length=STALE_RINGING_RECOVERY_LIMIT,
+    )
+    now = frappe.utils.now_datetime()
+    stale_names = []
+    for call in calls:
+        if call.answer_time:
+            continue
+        started_at = call.start_time or call.creation
+        if started_at and (now - frappe.utils.get_datetime(started_at)).total_seconds() >= STALE_RINGING_TIMEOUT_SECONDS:
+            stale_names.append(call.name)
+
+    if not stale_names:
+        return {"checked": len(calls), "recovered": 0}
+
+    frappe.db.sql(
+        """
+        UPDATE `tabVobiz Call Log`
+        SET `status` = 'No Answer',
+            `call_status` = 'stale-local-timeout',
+            `hangup_cause` = 'STALE_RINGING_TIMEOUT',
+            `end_time` = COALESCE(`end_time`, NOW(6)),
+            `modified` = NOW(6),
+            `modified_by` = %(modified_by)s
+        WHERE `name` IN %(names)s
+          AND `status` IN %(statuses)s
+          AND `answer_time` IS NULL
+        """,
+        {"names": tuple(stale_names), "statuses": STALE_RINGING_STATUSES, "modified_by": "Administrator"},
+    )
+    recovered = frappe.get_all(
+        "Vobiz Call Log",
+        filters={
+            "name": ["in", stale_names],
+            "status": "No Answer",
+            "hangup_cause": "STALE_RINGING_TIMEOUT",
+        },
+        fields=["name"],
+        limit_page_length=len(stale_names),
+    )
+    recovered_names = tuple(row.name for row in recovered)
+    if recovered_names:
+        frappe.db.sql(
+            """
+            UPDATE `tabVobiz User Mapping`
+            SET `availability_status` = CASE WHEN COALESCE(`auto_available_after_call`, 0) = 1 THEN 'Available' ELSE 'Away' END,
+                `accept_calls` = CASE WHEN COALESCE(`auto_available_after_call`, 0) = 1 THEN 1 ELSE 0 END,
+                `current_call_log` = '',
+                `last_status_at` = NOW(6),
+                `modified` = NOW(6),
+                `modified_by` = %(modified_by)s
+            WHERE `enabled` = 1
+              AND `current_call_log` IN %(names)s
+            """,
+            {"names": recovered_names, "modified_by": "Administrator"},
+        )
+    frappe.db.commit()
+    return {"checked": len(calls), "recovered": len(recovered_names)}
 
 
 def sync_call_log_cdr(call_log: str, ignore_permissions: bool = False) -> dict:

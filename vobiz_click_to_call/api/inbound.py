@@ -830,7 +830,7 @@ def resolve_patient_inbound_target(patient, settings=None) -> dict[str, Any]:
         for fallback_user in _fallback_users(mapping):
             fallback_mapping = get_user_mapping(fallback_user)
             fallback_mobile = _mapping_mobile(fallback_mapping, "")
-            if fallback_mapping and fallback_mobile:
+            if fallback_mapping and fallback_mobile and _mapping_can_receive(fallback_user, fallback_mapping):
                 return {
                     "user": fallback_user,
                     "agent_mobile": fallback_mobile,
@@ -937,7 +937,7 @@ def resolve_lead_owner_inbound_target(lead, settings=None) -> dict[str, Any]:
     for fallback_user in _fallback_users(mapping):
         fallback_mapping = get_user_mapping(fallback_user)
         fallback_mobile = _mapping_mobile(fallback_mapping, "")
-        if fallback_mapping and fallback_mobile:
+        if fallback_mapping and fallback_mobile and _mapping_can_receive(fallback_user, fallback_mapping):
             return {
                 "user": fallback_user,
                 "agent_mobile": fallback_mobile,
@@ -1395,7 +1395,7 @@ def resolve_inbound_target(previous, settings=None) -> dict[str, Any]:
     for fallback_user in _fallback_users(mapping):
         fallback_mapping = get_user_mapping(fallback_user)
         fallback_mobile = _mapping_mobile(fallback_mapping, "")
-        if fallback_mapping and fallback_mobile:
+        if fallback_mapping and fallback_mobile and _mapping_can_receive(fallback_user, fallback_mapping):
             return {
                 "user": fallback_user,
                 "agent_mobile": fallback_mobile,
@@ -1423,7 +1423,7 @@ def _next_inbound_fallback(doc) -> dict[str, Any]:
             continue
         fallback_mapping = get_user_mapping(fallback_user)
         fallback_mobile = _mapping_mobile(fallback_mapping, "")
-        if fallback_mapping and fallback_mobile:
+        if fallback_mapping and fallback_mobile and _mapping_can_receive(fallback_user, fallback_mapping):
             return {
                 "user": fallback_user,
                 "agent_mobile": fallback_mobile,
@@ -1490,12 +1490,7 @@ def _fallback_users(mapping: dict[str, Any] | None) -> list[str]:
 def _mapping_can_receive(user: str, mapping: dict[str, Any]) -> bool:
     if not is_agent_console_online(user):
         return False
-    current_call_log = mapping.get("current_call_log")
-    if current_call_log and frappe.db.exists("Vobiz Call Log", current_call_log):
-        status = frappe.db.get_value("Vobiz Call Log", current_call_log, "status")
-        if status not in TERMINAL_STATUSES:
-            return False
-    return True
+    return not get_mapping_unavailable_reason(mapping)
 
 
 def _start_recording_safely(call_log: str) -> None:

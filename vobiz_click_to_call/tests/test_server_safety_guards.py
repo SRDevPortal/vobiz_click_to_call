@@ -40,6 +40,21 @@ class TestServerSafetyGuards(unittest.TestCase):
             ],
         )
 
+    def test_stale_ringing_recovery_is_bounded_and_bulk(self):
+        cdr = CDR.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "vobiz_click_to_call.services.cdr.recover_stale_ringing_calls",
+            app_hooks.scheduler_events["cron"]["* * * * *"],
+        )
+        self.assertIn("STALE_RINGING_TIMEOUT_SECONDS = 60", cdr)
+        self.assertIn('"Agent Ringing"', cdr)
+        self.assertIn("STALE_RINGING_TIMEOUT", cdr)
+        self.assertIn("stale-local-timeout", cdr)
+        self.assertIn("limit_page_length=STALE_RINGING_RECOVERY_LIMIT", cdr)
+        self.assertIn("UPDATE `tabVobiz Call Log`", cdr)
+        self.assertIn("UPDATE `tabVobiz User Mapping`", cdr)
+
     def test_guest_callbacks_are_rate_limited_and_fail_closed(self):
         webhook = WEBHOOK.read_text(encoding="utf-8")
         inbound = INBOUND.read_text(encoding="utf-8")

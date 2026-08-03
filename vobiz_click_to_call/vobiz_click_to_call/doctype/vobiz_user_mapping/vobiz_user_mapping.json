@@ -187,6 +187,7 @@
   {
    "fieldname": "current_call_log",
    "fieldtype": "Link",
+   "db_index": 1,
    "label": "Current Call Log",
    "options": "Vobiz Call Log",
    "read_only": 1
