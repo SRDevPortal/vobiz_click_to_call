@@ -491,6 +491,10 @@ def get_whatsapp_conversation(reference_doctype: str, reference_name: str) -> di
     if not reference_doctype or not reference_name or not frappe.db.exists(reference_doctype, reference_name):
         frappe.throw(_("Reference not found."))
 
+    doc = frappe.get_doc(reference_doctype, reference_name)
+    if reference_doctype == "Patient" and not _has_mapped_patient_access(reference_doctype, reference_name):
+        frappe.throw(_("This Patient is not assigned to your Medical Department."), frappe.PermissionError)
+
     conversation = _conversation_for_reference_phone(reference_doctype, reference_name)
     if conversation:
         return {"success": True, "conversation": conversation}
@@ -498,6 +502,24 @@ def get_whatsapp_conversation(reference_doctype: str, reference_name: str) -> di
     route_status = _whatsapp_route_status(reference_doctype, reference_name)
     if not route_status.get("available"):
         return route_status
+
+    if reference_doctype == "Patient":
+        try:
+            from wa_chat_hub.channel_resolver import get_or_create_patient_conversation_for_channel_account
+
+            result = get_or_create_patient_conversation_for_channel_account(
+                doc,
+                route_status.get("channel_account"),
+            ) or {}
+            if result.get("conversation"):
+                return {
+                    "success": True,
+                    "conversation": result.get("conversation"),
+                    "created": bool(result.get("created")),
+                }
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "Vobiz Workdesk Patient WhatsApp Conversation Create Failed")
+            raise
 
     if frappe.db.exists("DocType", "Chat Conversation"):
         try:
@@ -4170,10 +4192,39 @@ def _whatsapp_route_status_for_patient(patient) -> dict[str, Any]:
     if not frappe.db.exists("Medical Department", department):
         return {"available": False, "conversation": None, "message": _("Could not find Medical Department: {0}").format(department)}
 
-    from wa_chat_hub.messaging.channel_map import get_pipeline_map
+    if not frappe.db.exists("DocType", "Chat Channel Account"):
+        return {"available": False, "conversation": None, "message": _("Chat Channel Account is not installed.")}
+    account_meta = frappe.get_meta("Chat Channel Account")
+    if not account_meta.has_field("default_medical_department"):
+        return {
+            "available": False,
+            "conversation": None,
+            "message": _("Chat Channel Account is missing Default Medical Department. Please migrate the site."),
+        }
 
-    row = get_pipeline_map(medical_department=department)
-    return {"available": True, "channel_account": row.get("chat_channel_account"), "pipeline_map": row.get("name")}
+    accounts = frappe.get_all(
+        "Chat Channel Account",
+        filters={
+            "default_medical_department": department,
+            "channel_type": "Interakt",
+            "is_active": 1,
+        },
+        pluck="name",
+        limit_page_length=2,
+    )
+    if not accounts:
+        return {
+            "available": False,
+            "conversation": None,
+            "message": _("No active Interakt account has Default Medical Department {0}.").format(department),
+        }
+    if len(accounts) > 1:
+        return {
+            "available": False,
+            "conversation": None,
+            "message": _("Multiple active Interakt accounts have Default Medical Department {0}. Keep only one.").format(department),
+        }
+    return {"available": True, "channel_account": accounts[0], "pipeline_map": None}
 
 
 def _whatsapp_recent_messages(conversation: str) -> list[dict[str, Any]]:
