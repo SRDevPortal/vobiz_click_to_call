@@ -102,7 +102,28 @@ class TestWebhookStatusMapping(unittest.TestCase):
 
     def test_completed_with_talk_time_is_analytics_connected(self):
         self.assertEqual(_analytics_bucket({"status": "Completed", "billsec": 12}), "connected")
-        self.assertEqual(_analytics_bucket({"status": "Completed", "recording_duration": 12}), "connected")
+
+    def test_recording_alone_does_not_make_call_connected(self):
+        self.assertEqual(_analytics_bucket({"status": "Completed", "recording_duration": 12}), "no_answer")
+
+    def test_missed_status_overrides_short_recording(self):
+        for status, expected_bucket in (("No Answer", "no_answer"), ("Busy", "busy")):
+            with self.subTest(status=status):
+                self.assertEqual(
+                    _analytics_bucket(
+                        {
+                            "direction": "Incoming",
+                            "call_flow": "Customer First",
+                            "status": status,
+                            "call_status": "ringing",
+                            "billsec": 0,
+                            "duration": 0,
+                            "recording_duration": 12,
+                            "answer_time": None,
+                        }
+                    ),
+                    expected_bucket,
+                )
 
     def test_talk_time_starts_from_customer_answer_for_customer_first_calls(self):
         self.assertEqual(

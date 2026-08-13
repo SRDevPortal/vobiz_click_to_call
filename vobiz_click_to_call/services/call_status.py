@@ -87,7 +87,7 @@ def status_from_provider(
 def status_bucket(row: dict[str, Any] | None) -> str:
     row = row or {}
     status = str(row.get("status") or "").strip()
-    if billable_talk_seconds(row) > 0:
+    if frappe.utils.cint(row.get("billsec")) > 0:
         return "connected"
 
     signal = call_signal(row)
@@ -97,12 +97,12 @@ def status_bucket(row: dict[str, Any] | None) -> str:
         return "no_answer"
     if "fail" in signal or "error" in signal:
         return "failed"
-    if talk_seconds(row) > 0:
-        return "connected"
     if "cancel" in signal or "reject" in signal or "decline" in signal:
         return "cancelled"
     if status in MISSED_STATUSES:
         return "missed"
+    if talk_seconds(row) > 0:
+        return "connected"
     if status in CONNECTED_STATUSES:
         return "no_answer"
     return "other"

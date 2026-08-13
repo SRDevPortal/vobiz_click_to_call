@@ -11,6 +11,7 @@
   "queue_source",
   "agent_mobile",
   "caller_id",
+  "whatsapp_channel_account",
   "patient_routing_section",
   "sr_medical_department",
   "sr_medical_departments",
@@ -84,6 +85,15 @@
    "in_list_view": 1,
    "label": "Vobiz Number",
    "options": ""
+  },
+  {
+   "description": "Optional. When set, this active Interakt account is used to initiate WhatsApp chats for both CRM Leads and Patients. When blank, existing pipeline and medical-department routing remains active.",
+   "fieldname": "whatsapp_channel_account",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Interakt Channel Account",
+   "options": "Chat Channel Account"
   },
   {
    "collapsible": 1,

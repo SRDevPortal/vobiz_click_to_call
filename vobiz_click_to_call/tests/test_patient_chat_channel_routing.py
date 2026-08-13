@@ -20,6 +20,7 @@ class TestPatientChatChannelRouting(unittest.TestCase):
         self.assertIn('"default_medical_department": department', patient_route)
         self.assertIn('"channel_type": "Interakt"', patient_route)
         self.assertIn('"is_active": 1', patient_route)
+        self.assertIn('account_filters["enable_patient_department_routing"] = 1', patient_route)
         self.assertNotIn("get_pipeline_map", patient_route)
 
     def test_crm_lead_pipeline_routing_remains_unchanged(self):
@@ -35,6 +36,29 @@ class TestPatientChatChannelRouting(unittest.TestCase):
         )
         self.assertIn("get_or_create_patient_conversation_for_channel_account", self.source)
         self.assertIn('route_status.get("channel_account")', self.source)
+
+    def test_user_mapping_channel_overrides_lead_and_patient_routing(self):
+        start = self.source.index("\ndef _whatsapp_route_status(")
+        end = self.source.index("\ndef _whatsapp_route_status_for_lead(", start)
+        route = self.source[start:end]
+
+        self.assertIn("_mapped_agent_whatsapp_channel()", route)
+        self.assertIn('"routing_source": "Vobiz User Mapping"', route)
+
+    def test_existing_conversation_lookup_is_scoped_to_mapped_channel(self):
+        start = self.source.index("\ndef _conversation_for_reference_phone(")
+        end = self.source.index("\ndef _reference_phone_for_whatsapp(", start)
+        lookup = self.source[start:end]
+
+        self.assertIn('conversation_filters["channel_account"] = channel_account', lookup)
+
+    def test_missing_user_channel_preserves_existing_fallback(self):
+        start = self.source.index("\ndef get_whatsapp_conversation(")
+        end = self.source.index("\ndef get_whatsapp_messages(", start)
+        method = self.source[start:end]
+
+        self.assertIn("if not mapped_channel:", method)
+        self.assertIn("_conversation_for_reference_phone(reference_doctype, reference_name)", method)
 
 
 if __name__ == "__main__":

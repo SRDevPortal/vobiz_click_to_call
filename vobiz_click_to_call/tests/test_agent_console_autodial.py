@@ -271,7 +271,8 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         end = source.index("\ndef _analytics_recording_duration_sql(", start)
         bucket_source = source[start:end]
 
-        self.assertIn("coalesce(`billsec`, 0) > 0 then 'connected'", bucket_source)
+        self.assertIn("coalesce(`billsec`, 0) > 0", bucket_source)
+        self.assertNotIn("recording_duration", bucket_source)
         self.assertNotIn("`status` in ('Connected', 'Completed') then 'connected'", bucket_source)
 
     def test_agent_analytics_talk_time_starts_from_customer_answer(self):

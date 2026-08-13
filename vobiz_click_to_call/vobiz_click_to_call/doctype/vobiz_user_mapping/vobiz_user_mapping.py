@@ -18,6 +18,16 @@ class VobizUserMapping(Document):
             if self.caller_id not in get_caller_ids(settings):
                 frappe.throw(_("Vobiz Number must be one of the Caller IDs configured in Vobiz Settings."))
 
+        if self.get("whatsapp_channel_account"):
+            channel = frappe.db.get_value(
+                "Chat Channel Account",
+                self.whatsapp_channel_account,
+                ["channel_type", "is_active"],
+                as_dict=True,
+            )
+            if not channel or channel.channel_type != "Interakt" or not channel.is_active:
+                frappe.throw(_("Interakt Channel Account must be an active Interakt account."))
+
         self.availability_status = self.availability_status or "Available"
         self.queue_source = self.queue_source or "CRM Lead"
         if self.queue_source not in {"CRM Lead", "Patient", "CRM Lead and Patient", "Patient Encounter", "Issue", "Discontinued"}:

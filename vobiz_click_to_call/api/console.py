@@ -495,13 +495,26 @@ def get_whatsapp_conversation(reference_doctype: str, reference_name: str) -> di
     if reference_doctype == "Patient" and not _has_mapped_patient_access(reference_doctype, reference_name):
         frappe.throw(_("This Patient is not assigned to your Medical Department."), frappe.PermissionError)
 
-    conversation = _conversation_for_reference_phone(reference_doctype, reference_name)
-    if conversation:
-        return {"success": True, "conversation": conversation}
+    mapped_channel = _mapped_agent_whatsapp_channel()
+    if not mapped_channel:
+        # Preserve the existing fallback exactly when the agent has no channel mapping.
+        conversation = _conversation_for_reference_phone(reference_doctype, reference_name)
+        if conversation:
+            return {"success": True, "conversation": conversation}
 
     route_status = _whatsapp_route_status(reference_doctype, reference_name)
     if not route_status.get("available"):
         return route_status
+
+    channel_account = route_status.get("channel_account")
+    if mapped_channel:
+        conversation = _conversation_for_reference_phone(
+            reference_doctype,
+            reference_name,
+            channel_account=channel_account,
+        )
+        if conversation:
+            return {"success": True, "conversation": conversation}
 
     if reference_doctype == "Patient":
         try:
@@ -509,7 +522,7 @@ def get_whatsapp_conversation(reference_doctype: str, reference_name: str) -> di
 
             result = get_or_create_patient_conversation_for_channel_account(
                 doc,
-                route_status.get("channel_account"),
+                channel_account,
             ) or {}
             if result.get("conversation"):
                 return {
@@ -528,7 +541,7 @@ def get_whatsapp_conversation(reference_doctype: str, reference_name: str) -> di
             result = get_conversation_for_reference(
                 reference_doctype,
                 reference_name,
-                channel_account=route_status.get("channel_account"),
+                channel_account=channel_account,
             ) or {}
             if result.get("success") and result.get("conversation"):
                 return {
@@ -1127,17 +1140,16 @@ def _apply_patient_department_analytics_filter(
 
 def _analytics_bucket_sql() -> str:
     signal = "lower(concat_ws(' ', coalesce(`status`, ''), coalesce(`call_status`, ''), coalesce(`dial_status`, ''), coalesce(`hangup_cause`, '')))"
-    recording = _analytics_recording_duration_sql()
     talk = _analytics_talk_sql()
     return f"""
         case
-            when {recording} > 0 or coalesce(`billsec`, 0) > 0 then 'connected'
+            when coalesce(`billsec`, 0) > 0 then 'connected'
             when {signal} like '%%busy%%' then 'busy'
             when {signal} like '%%no-answer%%' or {signal} like '%%no answer%%' or {signal} like '%%timeout%%' or {signal} like '%%unanswered%%' then 'no_answer'
             when {signal} like '%%fail%%' or {signal} like '%%error%%' then 'failed'
-            when {talk} > 0 then 'connected'
             when {signal} like '%%cancel%%' or {signal} like '%%reject%%' or {signal} like '%%decline%%' then 'cancelled'
             when `status` in ('Failed', 'Busy', 'No Answer', 'Cancelled', 'Canceled') then 'missed'
+            when {talk} > 0 then 'connected'
             when `status` in ('Connected', 'Completed') then 'no_answer'
             else 'other'
         end
@@ -2823,6 +2835,7 @@ def _agent_context() -> dict[str, Any]:
     if meta.has_field("queue_source") and frappe.db.has_column("Vobiz User Mapping", "queue_source"):
         fields.append("queue_source")
     for fieldname in (
+        "whatsapp_channel_account",
         "sr_medical_department",
         "sr_medical_departments",
         "sr_followup_id",
@@ -4123,6 +4136,15 @@ def _whatsapp_preview(reference_doctype: str, reference_name: str) -> dict[str, 
 
 def _whatsapp_route_status(reference_doctype: str, reference_name: str) -> dict[str, Any]:
     try:
+        mapped_channel = _mapped_agent_whatsapp_channel()
+        if mapped_channel:
+            return {
+                "available": True,
+                "channel_account": mapped_channel,
+                "pipeline_map": None,
+                "routing_source": "Vobiz User Mapping",
+            }
+
         doc = frappe.get_doc(reference_doctype, reference_name)
         if reference_doctype == "CRM Lead":
             return _whatsapp_route_status_for_lead(doc)
@@ -4134,6 +4156,22 @@ def _whatsapp_route_status(reference_doctype: str, reference_name: str) -> dict[
         return {"available": False, "conversation": None, "message": _("WhatsApp routing is not configured for this record.")}
     except Exception as exc:
         return {"available": False, "conversation": None, "message": str(exc)}
+
+
+def _mapped_agent_whatsapp_channel() -> str | None:
+    agent = _agent_context()
+    channel_account = (agent.get("whatsapp_channel_account") or "").strip()
+    if not channel_account:
+        return None
+    channel = frappe.db.get_value(
+        "Chat Channel Account",
+        channel_account,
+        ["channel_type", "is_active"],
+        as_dict=True,
+    )
+    if not channel or channel.get("channel_type") != "Interakt" or not channel.get("is_active"):
+        frappe.throw(_("Your mapped Interakt Channel Account is missing or inactive."))
+    return channel_account
 
 
 def _whatsapp_route_status_for_lead(lead) -> dict[str, Any]:
@@ -4202,13 +4240,16 @@ def _whatsapp_route_status_for_patient(patient) -> dict[str, Any]:
             "message": _("Chat Channel Account is missing Default Medical Department. Please migrate the site."),
         }
 
+    account_filters = {
+        "default_medical_department": department,
+        "channel_type": "Interakt",
+        "is_active": 1,
+    }
+    if account_meta.has_field("enable_patient_department_routing"):
+        account_filters["enable_patient_department_routing"] = 1
     accounts = frappe.get_all(
         "Chat Channel Account",
-        filters={
-            "default_medical_department": department,
-            "channel_type": "Interakt",
-            "is_active": 1,
-        },
+        filters=account_filters,
         pluck="name",
         limit_page_length=2,
     )
@@ -4216,7 +4257,7 @@ def _whatsapp_route_status_for_patient(patient) -> dict[str, Any]:
         return {
             "available": False,
             "conversation": None,
-            "message": _("No active Interakt account has Default Medical Department {0}.").format(department),
+            "message": _("No active Interakt account has Patient Department Routing enabled for Medical Department {0}.").format(department),
         }
     if len(accounts) > 1:
         return {
@@ -4318,7 +4359,11 @@ def _create_defaults(reference_doctype: str, reference_name: str, doc, patient: 
     }
 
 
-def _conversation_for_reference_phone(reference_doctype: str, reference_name: str) -> str | None:
+def _conversation_for_reference_phone(
+    reference_doctype: str,
+    reference_name: str,
+    channel_account: str | None = None,
+) -> str | None:
     phone = _reference_phone_for_whatsapp(reference_doctype, reference_name)
     last10 = _last_10_digits(phone)
     if not last10 or not frappe.db.exists("DocType", "Chat Contact") or not frappe.db.exists("DocType", "Chat Conversation"):
@@ -4334,9 +4379,12 @@ def _conversation_for_reference_phone(reference_doctype: str, reference_name: st
     for contact in contacts:
         if _last_10_digits(contact.get("phone_number")) != last10:
             continue
+        conversation_filters = {"contact": contact.name}
+        if channel_account:
+            conversation_filters["channel_account"] = channel_account
         conversation = frappe.db.get_value(
             "Chat Conversation",
-            {"contact": contact.name},
+            conversation_filters,
             "name",
             order_by="modified desc",
         )
