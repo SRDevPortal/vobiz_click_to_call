@@ -53,6 +53,28 @@ class TestInboundFallbackAvailability(unittest.TestCase):
         self.assertIn("is_agent_console_online(user)", helper)
         self.assertIn("get_mapping_unavailable_reason(mapping)", helper)
 
+    def test_ai_agent_end_fallback_bypasses_only_ai_availability(self):
+        app = Path(__file__).resolve().parents[1]
+        source = (app / "api" / "inbound.py").read_text(encoding="utf-8")
+        mapping_json = (
+            app
+            / "vobiz_click_to_call"
+            / "doctype"
+            / "vobiz_user_mapping"
+            / "vobiz_user_mapping.json"
+        ).read_text(encoding="utf-8")
+
+        start = source.index("def _ai_agent_end_fallback_target")
+        end = source.index("\ndef _mapping_can_receive", start)
+        helper = source[start:end]
+
+        self.assertIn('"fieldname": "ai_agent_end_fallback"', mapping_json)
+        self.assertIn("ai_mapping = get_user_mapping(ai_user)", helper)
+        self.assertIn('ai_mobile = _mapping_mobile(ai_mapping, "")', helper)
+        self.assertIn('"is_mapped_agent": False', helper)
+        self.assertNotIn("_mapping_can_receive(ai_user", helper)
+        self.assertIn("_mapping_can_receive(fallback_user, fallback_mapping)", source)
+
     def test_logout_marks_the_mapping_offline(self):
         app = Path(__file__).resolve().parents[1]
         hooks = (app / "hooks.py").read_text(encoding="utf-8")

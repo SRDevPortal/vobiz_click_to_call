@@ -114,7 +114,8 @@ class TestIncomingMappingSource(unittest.TestCase):
 
     def test_existing_patient_overrides_lead_owner_and_routes_by_department_followup(self):
         source = self.inbound_source
-        existing_start = source.index("existing = find_existing_reference(customer_number)")
+        route_unknown_start = source.index("def route_unknown_inbound")
+        existing_start = source.index("existing = find_existing_reference(customer_number)", route_unknown_start)
         patient_index = source.index('existing.get("doctype") == "Patient"', existing_start)
         lead_index = source.index('existing.get("doctype") == "CRM Lead"', existing_start)
         start = source.index("def resolve_patient_inbound_target")
@@ -133,23 +134,26 @@ class TestIncomingMappingSource(unittest.TestCase):
         self.assertIn('"sr_dpt_languages"', patient_source)
         self.assertIn("patient_matches_mapping(patient, mapping)", patient_source)
 
-    def test_existing_crm_lead_routes_to_lead_owner_fallback_then_end_fallback(self):
+    def test_existing_crm_lead_routes_by_did_mapping_without_requiring_lead_owner(self):
         source = self.inbound_source
+        route_start = source.index("def route():")
+        route_end = source.index("def dial_action(", route_start)
+        route_source = source[route_start:route_end]
         start = source.index("def resolve_lead_owner_inbound_target")
         end = source.index("def create_unknown_inbound_lead", start)
         owner_source = source[start:end]
-        fallback_start = source.index("def _next_inbound_fallback")
-        fallback_end = source.index("def _active_agent_mobile", fallback_start)
-        fallback_source = source[fallback_start:fallback_end]
+        route_existing_start = source.index("def route_existing_crm_lead_inbound")
+        route_existing_end = source.index("def _unknown_inbound_supported", route_existing_start)
+        route_existing_source = source[route_existing_start:route_existing_end]
 
+        self.assertIn('existing.get("doctype") == "CRM Lead"', route_source)
+        self.assertIn("mapping = find_incoming_mapping(did_number)", route_existing_source)
+        self.assertIn("select_incoming_agent(mapping)", route_existing_source)
+        self.assertIn("update_incoming_assignment(mapping, target)", route_existing_source)
+        self.assertIn('call_log.crm_lead = lead.name', route_existing_source)
+        self.assertNotIn("resolve_lead_owner_inbound_target(lead, settings)", route_existing_source)
+        self.assertNotIn('lead.get("lead_owner")', route_existing_source)
         self.assertIn('owner = (lead.get("lead_owner") or "").strip()', owner_source)
-        self.assertIn('"route_type": "lead_owner"', owner_source)
-        self.assertIn("_fallback_users(mapping)", owner_source)
-        self.assertIn('"route_type": "lead_owner_fallback_user"', owner_source)
-        self.assertIn("_end_fallback_mobile(settings)", owner_source)
-        self.assertIn('"route_type": "lead_owner_end_fallback_mobile"', owner_source)
-        self.assertIn('"skip_busy_callback_ai_fallback": True', owner_source)
-        self.assertIn('"" if _request_flag(doc, "skip_busy_callback_ai_fallback") else _busy_callback_ai_fallback_mobile()', fallback_source)
 
     def test_unknown_route_uses_current_console_availability_contract(self):
         source = self.inbound_source
@@ -158,6 +162,21 @@ class TestIncomingMappingSource(unittest.TestCase):
         self.assertIn("mapping = get_user_mapping(user)", source)
         self.assertIn("unavailable_reason = get_mapping_unavailable_reason(mapping)", source)
         self.assertIn("_mark_mapping_busy(target.get(\"user\"), call_log.name)", source)
+
+    def test_incoming_mapping_uses_normal_then_ai_fallback_when_primary_is_offline(self):
+        source = self.inbound_source
+        start = source.index("def select_incoming_agent")
+        end = source.index("def _round_robin_order", start)
+        selector = source[start:end]
+
+        primary_index = selector.index("target = _incoming_agent_target(row)")
+        normal_index = selector.index("for fallback_user in _fallback_users(primary_mapping)")
+        ai_index = selector.index("ai_target = _ai_agent_end_fallback_target(")
+        self.assertLess(primary_index, normal_index)
+        self.assertLess(normal_index, ai_index)
+        self.assertIn("_mapping_can_receive(fallback_user, fallback_mapping)", selector)
+        self.assertIn('"route_type": "incoming_did_mapping_fallback_user"', selector)
+        self.assertIn('route_type="incoming_did_mapping_ai_agent_end_fallback"', selector)
 
     def test_unknown_route_creates_lead_and_publishes_existing_panel_event(self):
         source = self.inbound_source

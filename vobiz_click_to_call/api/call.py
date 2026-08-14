@@ -675,6 +675,7 @@ def get_user_mapping(user: str) -> dict[str, Any] | None:
             "queue_source",
             "fallback_user",
             "fallback_users",
+            "ai_agent_end_fallback",
             "sr_medical_department",
             "sr_medical_departments",
             "sr_followup_id",

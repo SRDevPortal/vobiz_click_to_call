@@ -73,6 +73,8 @@ def route():
     reference_first = bool(
         existing
         and (
+            existing.get("doctype") == "CRM Lead"
+            or
             existing.get("treat_as_new")
             or prefer_current_lead_assignment_for_incoming_calls(settings)
         )
@@ -396,6 +398,8 @@ def create_inbound_call_log(
     )
     _set_request_data(doc, "fallback_origin_user", origin_user or previous.user)
     _set_request_data(doc, "fallback_attempted_users", [target_user or previous.user])
+    if route_type == "ai_agent_end_fallback":
+        _set_request_flag(doc, "ai_agent_end_fallback_attempted", True)
     apply_provider_payload(doc, payload)
     doc.crm_lead = previous.crm_lead
     doc.patient = previous.patient
@@ -496,7 +500,8 @@ def route_unknown_inbound(
         return _xml_response(_hangup_xml())
 
     update_incoming_assignment(mapping, target)
-    _mark_mapping_busy(target.get("user"), call_log.name)
+    if target.get("is_mapped_agent"):
+        _mark_mapping_busy(target.get("user"), call_log.name)
 
     if _is_trunk_notification(payload):
         log_vobiz_event(
@@ -515,7 +520,8 @@ def route_unknown_inbound(
         frappe.db.commit()
         return _plain_response("OK")
 
-    publish_callback_notification(call_log, None, customer_number, did_number, agent_mobile)
+    if target.get("is_mapped_agent"):
+        publish_callback_notification(call_log, None, customer_number, did_number, agent_mobile)
     xml = _dial_agent_xml(call_log, agent_mobile, settings)
     frappe.db.commit()
     return _xml_response(xml)
@@ -537,6 +543,8 @@ def route_existing_patient_inbound(patient_name: str, customer_number: str, did_
         _set_request_data(call_log, "fallback_attempted_users", [call_log.user] if target.get("is_mapped_agent") and call_log.user else [])
         if target.get("skip_busy_callback_ai_fallback"):
             _set_request_flag(call_log, "skip_busy_callback_ai_fallback", True)
+        if target.get("ai_agent_end_fallback"):
+            _set_request_flag(call_log, "ai_agent_end_fallback_attempted", True)
     else:
         call_log = create_existing_patient_inbound_call_log(
             patient,
@@ -587,7 +595,12 @@ def route_existing_patient_inbound(patient_name: str, customer_number: str, did_
 
 def route_existing_crm_lead_inbound(lead_name: str, customer_number: str, did_number: str, payload: dict[str, Any], settings):
     lead = frappe.get_doc("CRM Lead", lead_name)
-    target = resolve_lead_owner_inbound_target(lead, settings)
+    mapping = find_incoming_mapping(did_number)
+    target = (
+        select_incoming_agent(mapping)
+        if mapping
+        else {"reason": "DID has no enabled incoming mapping."}
+    )
     call_log = find_existing_inbound_call(payload)
     if call_log:
         call_log.reference_doctype = "CRM Lead"
@@ -596,11 +609,13 @@ def route_existing_crm_lead_inbound(lead_name: str, customer_number: str, did_nu
         call_log.user = target.get("user") or call_log.user
         call_log.user_mobile = target.get("agent_mobile") or call_log.user_mobile
         call_log.agent_number = target.get("agent_mobile") or call_log.agent_number
-        origin_user = target.get("origin_user") or lead.get("lead_owner") or call_log.user
+        origin_user = target.get("origin_user") or call_log.user
         _set_request_data(call_log, "fallback_origin_user", origin_user)
         _set_request_data(call_log, "fallback_attempted_users", [call_log.user] if target.get("is_mapped_agent") and call_log.user else [])
         if target.get("skip_busy_callback_ai_fallback"):
             _set_request_flag(call_log, "skip_busy_callback_ai_fallback", True)
+        if target.get("ai_agent_end_fallback"):
+            _set_request_flag(call_log, "ai_agent_end_fallback_attempted", True)
     else:
         call_log = create_existing_crm_lead_inbound_call_log(
             lead,
@@ -609,19 +624,23 @@ def route_existing_crm_lead_inbound(lead_name: str, customer_number: str, did_nu
             payload,
             target=target,
         )
+    if mapping:
+        _set_request_data(call_log, "incoming_mapping", mapping.name)
+        _set_request_data(call_log, "incoming_agent_row", target.get("agent_row"))
     update_inbound_call_event(call_log, payload, commit=False)
 
     agent_mobile = target.get("agent_mobile")
     if not agent_mobile:
         mark_inbound_missed(
             call_log,
-            target.get("reason") or "CRM Lead owner and fallback agents were unavailable.",
+            target.get("reason") or "No incoming mapped agent was available.",
             payload,
             commit=False,
         )
         frappe.db.commit()
         return _xml_response(_hangup_xml())
 
+    update_incoming_assignment(mapping, target)
     if target.get("is_mapped_agent"):
         _mark_mapping_busy(target.get("user"), call_log.name)
 
@@ -750,6 +769,43 @@ def select_incoming_agent(mapping) -> dict[str, Any]:
         if target.get("agent_mobile"):
             return target
         unavailable.append(target.get("reason"))
+
+    seen_fallback_users = set()
+    for row in ordered:
+        primary_user = str(row.get("agent_user") or "").strip()
+        primary_mapping = get_user_mapping(primary_user) if primary_user else None
+        for fallback_user in _fallback_users(primary_mapping):
+            if fallback_user in seen_fallback_users:
+                continue
+            seen_fallback_users.add(fallback_user)
+            fallback_mapping = get_user_mapping(fallback_user)
+            fallback_mobile = _mapping_mobile(fallback_mapping, "")
+            if fallback_mapping and fallback_mobile and _mapping_can_receive(fallback_user, fallback_mapping):
+                return {
+                    "user": fallback_user,
+                    "agent_mobile": fallback_mobile,
+                    "mapping_name": fallback_mapping.get("name"),
+                    "agent_row": row.name,
+                    "route_type": "incoming_did_mapping_fallback_user",
+                    "is_mapped_agent": True,
+                    "origin_user": primary_user,
+                    "incoming_primary_user": primary_user,
+                }
+            unavailable.append(f"Incoming fallback user {fallback_user} is unavailable.")
+
+    for row in ordered:
+        primary_user = str(row.get("agent_user") or "").strip()
+        primary_mapping = get_user_mapping(primary_user) if primary_user else None
+        ai_target = _ai_agent_end_fallback_target(
+            primary_mapping,
+            route_type="incoming_did_mapping_ai_agent_end_fallback",
+            origin_user=primary_user,
+            message="Incoming mapped agents and normal fallback users were unavailable; routing to AI agent end fallback.",
+        )
+        if ai_target:
+            ai_target["agent_row"] = row.name
+            ai_target["incoming_primary_user"] = primary_user
+            return ai_target
     return {"reason": "No incoming mapped agent was online and available.", "unavailable": unavailable}
 
 
@@ -788,6 +844,8 @@ def _incoming_agent_target(row) -> dict[str, Any]:
         "mapping_name": mapping.get("name"),
         "agent_row": row.name,
         "route_type": "incoming_did_mapping",
+        "is_mapped_agent": True,
+        "incoming_primary_user": user,
     }
 
 
@@ -841,6 +899,17 @@ def resolve_patient_inbound_target(patient, settings=None) -> dict[str, Any]:
                 }
             unavailable.append(f"Patient fallback user {fallback_user} is unavailable.")
 
+    for mapping in mappings:
+        ai_target = _ai_agent_end_fallback_target(
+            mapping,
+            route_type="patient_ai_agent_end_fallback",
+            origin_user=mapping.get("user"),
+            message="Patient mapped agents and fallback users were unavailable; routing to AI agent end fallback.",
+        )
+        if ai_target:
+            ai_target["skip_busy_callback_ai_fallback"] = True
+            return ai_target
+
     end_mobile = _end_fallback_mobile(settings)
     if end_mobile:
         return {
@@ -876,6 +945,7 @@ def patient_route_mappings(patient) -> list[dict[str, Any]]:
             "queue_source",
             "fallback_user",
             "fallback_users",
+            "ai_agent_end_fallback",
             "sr_medical_department",
             "sr_medical_departments",
             "sr_followup_id",
@@ -947,6 +1017,16 @@ def resolve_lead_owner_inbound_target(lead, settings=None) -> dict[str, Any]:
                 "skip_busy_callback_ai_fallback": True,
             }
         unavailable.append(f"Fallback user {fallback_user} is unavailable.")
+
+    ai_target = _ai_agent_end_fallback_target(
+        mapping,
+        route_type="lead_owner_ai_agent_end_fallback",
+        origin_user=owner,
+        message="CRM Lead owner and fallback users were unavailable; routing to AI agent end fallback.",
+    )
+    if ai_target:
+        ai_target["skip_busy_callback_ai_fallback"] = True
+        return ai_target
 
     end_mobile = _end_fallback_mobile(settings)
     if end_mobile:
@@ -1109,6 +1189,8 @@ def create_existing_crm_lead_inbound_call_log(
     _set_request_data(doc, "fallback_attempted_users", [user] if target.get("is_mapped_agent") and user else [])
     if target.get("skip_busy_callback_ai_fallback"):
         _set_request_flag(doc, "skip_busy_callback_ai_fallback", True)
+    if target.get("ai_agent_end_fallback"):
+        _set_request_flag(doc, "ai_agent_end_fallback_attempted", True)
     apply_provider_payload(doc, payload)
     doc.crm_lead = lead.name
     sync_reference_links(doc)
@@ -1169,6 +1251,8 @@ def create_existing_patient_inbound_call_log(
     _set_request_data(doc, "fallback_attempted_users", [user] if target.get("is_mapped_agent") and user else [])
     if target.get("skip_busy_callback_ai_fallback"):
         _set_request_flag(doc, "skip_busy_callback_ai_fallback", True)
+    if target.get("ai_agent_end_fallback"):
+        _set_request_flag(doc, "ai_agent_end_fallback_attempted", True)
     apply_provider_payload(doc, payload)
     doc.patient = patient.name
     sync_reference_links(doc)
@@ -1234,7 +1318,8 @@ def update_incoming_assignment(mapping, target: dict[str, Any]) -> None:
     if not user:
         return
     now = frappe.utils.now()
-    frappe.db.set_value("Vobiz Incoming Mapping", mapping.name, "last_assigned_agent", user, update_modified=True)
+    assigned_primary = target.get("incoming_primary_user") or user
+    frappe.db.set_value("Vobiz Incoming Mapping", mapping.name, "last_assigned_agent", assigned_primary, update_modified=True)
     if target.get("agent_row"):
         frappe.db.set_value("Vobiz Incoming Mapping Agent", target["agent_row"], "last_assigned_at", now, update_modified=True)
 
@@ -1403,6 +1488,15 @@ def resolve_inbound_target(previous, settings=None) -> dict[str, Any]:
                 "is_mapped_agent": True,
             }
 
+    ai_target = _ai_agent_end_fallback_target(
+        mapping,
+        route_type="ai_agent_end_fallback",
+        origin_user=previous.user,
+        message="Last agent and fallback users were unavailable; routing to AI agent end fallback.",
+    )
+    if ai_target:
+        return ai_target
+
     busy_ai_mobile = _busy_callback_ai_fallback_mobile(settings)
     if busy_ai_mobile:
         return {"user": previous.user, "agent_mobile": busy_ai_mobile, "route_type": "busy_callback_ai_fallback", "is_mapped_agent": False}
@@ -1431,6 +1525,16 @@ def _next_inbound_fallback(doc) -> dict[str, Any]:
                 "is_mapped_agent": True,
                 "message": "Mapped agent did not answer; routing to fallback agent.",
             }
+    ai_target = _ai_agent_end_fallback_target(
+        mapping,
+        route_type="ai_agent_end_fallback",
+        origin_user=origin_user,
+        message="All mapped agents were unavailable; routing to AI agent end fallback.",
+    )
+    if ai_target and not _request_flag(doc, "ai_agent_end_fallback_attempted"):
+        _set_request_flag(doc, "ai_agent_end_fallback_attempted", True)
+        return ai_target
+
     busy_ai_mobile = "" if _request_flag(doc, "skip_busy_callback_ai_fallback") else _busy_callback_ai_fallback_mobile()
     if busy_ai_mobile and not _request_flag(doc, "busy_callback_ai_fallback_attempted"):
         _set_request_flag(doc, "busy_callback_ai_fallback_attempted", True)
@@ -1485,6 +1589,35 @@ def _fallback_users(mapping: dict[str, Any] | None) -> list[str]:
                 values.append(row)
                 seen.add(row)
     return values
+
+
+def _ai_agent_end_fallback_target(
+    mapping: dict[str, Any] | None,
+    *,
+    route_type: str,
+    origin_user: str | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    ai_user = str((mapping or {}).get("ai_agent_end_fallback") or "").strip()
+    if not ai_user:
+        return {}
+
+    ai_mapping = get_user_mapping(ai_user)
+    ai_mobile = _mapping_mobile(ai_mapping, "")
+    if not ai_mapping or not ai_mobile:
+        return {}
+
+    target = {
+        "user": ai_user,
+        "agent_mobile": ai_mobile,
+        "route_type": route_type,
+        "is_mapped_agent": False,
+        "origin_user": origin_user or (mapping or {}).get("user") or "",
+        "ai_agent_end_fallback": True,
+    }
+    if message:
+        target["message"] = message
+    return target
 
 
 def _mapping_can_receive(user: str, mapping: dict[str, Any]) -> bool:

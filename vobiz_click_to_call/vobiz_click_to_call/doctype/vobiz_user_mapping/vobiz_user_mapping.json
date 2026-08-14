@@ -35,6 +35,7 @@
   "routing_section",
   "fallback_user",
   "fallback_users",
+  "ai_agent_end_fallback",
   "team",
   "team_leader",
   "pipeline",
@@ -281,6 +282,13 @@
    "fieldname": "fallback_users",
    "fieldtype": "Small Text",
    "label": "Fallback Users"
+  },
+  {
+   "description": "Final AI agent to dial when this user and all fallback users are unavailable. This AI fallback bypasses availability checks.",
+   "fieldname": "ai_agent_end_fallback",
+   "fieldtype": "Link",
+   "label": "AI Agent End Fallback",
+   "options": "User"
   },
   {
    "fieldname": "notes",
