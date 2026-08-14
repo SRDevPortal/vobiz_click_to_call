@@ -52,14 +52,18 @@ def execute():
     }
     table_columns = set(frappe.db.get_table_columns(DOCTYPE))
 
+    additions = []
     for index_name, columns in INDEXES.items():
         if index_name in existing_indexes or not set(columns).issubset(table_columns):
             continue
         column_sql = ", ".join(f"`{column}`" for column in columns)
+        additions.append(f"add index `{index_name}` ({column_sql})")
+
+    if additions:
         frappe.db.sql(
             f"""
             alter table `{TABLE}`
-            add index `{index_name}` ({column_sql}),
+            {", ".join(additions)},
             algorithm=inplace, lock=none
             """
         )

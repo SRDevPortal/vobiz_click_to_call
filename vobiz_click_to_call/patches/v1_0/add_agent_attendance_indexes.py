@@ -31,13 +31,17 @@ def execute():
             TABLE,
         )
     }
+    additions = []
     for index_name, columns in INDEXES.items():
         if index_name in existing:
             continue
+        additions.append(f"add index `{index_name}` ({columns})")
+
+    if additions:
         frappe.db.sql(
             f"""
             alter table `{TABLE}`
-            add index `{index_name}` ({columns}),
+            {", ".join(additions)},
             algorithm=inplace, lock=none
             """
         )

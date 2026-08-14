@@ -17,6 +17,7 @@ CDR = APP / "services" / "cdr.py"
 DEBUG_LOG = APP / "services" / "debug_log.py"
 PATCHES = APP / "patches.txt"
 INDEX_PATCH = APP / "patches" / "v1_0" / "add_call_log_performance_indexes.py"
+ATTENDANCE_INDEX_PATCH = APP / "patches" / "v1_0" / "add_agent_attendance_indexes.py"
 CLICK_TO_CALL = APP / "public" / "js" / "click_to_call.js"
 AVAILABILITY = APP / "public" / "js" / "availability.js"
 AGENT_CONSOLE = (
@@ -120,6 +121,12 @@ class TestServerSafetyGuards(unittest.TestCase):
         ):
             self.assertIn(index_name, index_patch)
         self.assertIn("algorithm=inplace, lock=none", index_patch)
+        self.assertIn("additions = []", index_patch)
+        self.assertEqual(index_patch.count("alter table"), 1)
+
+        attendance_patch = ATTENDANCE_INDEX_PATCH.read_text(encoding="utf-8")
+        self.assertIn("additions = []", attendance_patch)
+        self.assertEqual(attendance_patch.count("alter table"), 1)
 
     def test_analytics_queries_are_bounded(self):
         console = CONSOLE.read_text(encoding="utf-8")
