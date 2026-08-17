@@ -531,6 +531,12 @@ def remote_get(session: requests.Session, base_url: str, path: str, params: dict
 
 def remote_doc_names(session: requests.Session, base_url: str, doctype: str, page_length: int) -> list[str]:
     names: list[str] = []
+    for page in iter_remote_doc_name_pages(session, base_url, doctype, page_length):
+        names.extend(page)
+    return names
+
+
+def iter_remote_doc_name_pages(session: requests.Session, base_url: str, doctype: str, page_length: int):
     start = 0
     while True:
         payload = remote_get(
@@ -547,11 +553,10 @@ def remote_doc_names(session: requests.Session, base_url: str, doctype: str, pag
         rows = payload.get("data") or []
         if not rows:
             break
-        names.extend(row["name"] for row in rows if row.get("name"))
+        yield [row["name"] for row in rows if row.get("name")]
         if len(rows) < page_length:
             break
         start += page_length
-    return names
 
 
 def remote_doc(session: requests.Session, base_url: str, doctype: str, name: str) -> dict:
@@ -581,47 +586,96 @@ def doc_payload_for_local(remote_doc_data: dict, doctype: str) -> dict:
     return payload
 
 
-def upsert_doc(remote_doc_data: dict, doctype: str, dry_run: bool = False) -> str:
-    name = remote_doc_data.get("name")
-    if not name:
-        return "skipped"
-    payload = doc_payload_for_local(remote_doc_data, doctype)
-    if dry_run:
-        return "updated" if frappe.db.exists(doctype, name) else "inserted"
-    if frappe.db.exists(doctype, name):
-        doc = frappe.get_doc(doctype, name)
-        doc.update(payload)
-        doc.db_update()
-        return "updated"
-    doc = frappe.get_doc(payload)
-    try:
-        doc.db_insert()
-    except Exception as exc:
-        if "Duplicate entry" not in str(exc):
-            raise
-        doc = frappe.get_doc(doctype, name)
-        doc.update(payload)
-        doc.db_update()
-        return "updated"
-    return "inserted"
-
-
 def import_doctype(session: requests.Session, base_url: str, doctype: str, page_length: int, dry_run: bool) -> dict:
     if not frappe.db.exists("DocType", doctype):
         return {"doctype": doctype, "skipped": 1, "reason": "missing_local_doctype"}
-    names = remote_doc_names(session, base_url, doctype, page_length)
-    result = {"doctype": doctype, "remote": len(names), "inserted": 0, "updated": 0, "skipped": 0, "errors": 0}
-    for index, name in enumerate(names, start=1):
+    result = {"doctype": doctype, "remote": 0, "inserted": 0, "updated": 0, "skipped": 0, "errors": 0}
+    processed = 0
+    for names in iter_remote_doc_name_pages(session, base_url, doctype, min(max(int(page_length), 1), 500)):
+        # Finish all network I/O for the page before opening its database write transaction.
+        remote_rows = []
+        for name in names:
+            try:
+                remote_rows.append(remote_doc(session, base_url, doctype, name))
+            except Exception as exc:
+                result["errors"] += 1
+                print(f"{doctype}: failed to fetch {name}: {exc}", file=sys.stderr)
+        result["remote"] += len(names)
+        payloads = [doc_payload_for_local(row, doctype) for row in remote_rows if row.get("name")]
+        if dry_run:
+            existing = set(
+                frappe.get_all(
+                    doctype,
+                    filters={"name": ["in", [row["name"] for row in payloads]]},
+                    pluck="name",
+                    limit_start=0,
+                    limit_page_length=max(1, len(payloads)),
+                )
+            )
+            result["updated"] += sum(1 for row in payloads if row["name"] in existing)
+            result["inserted"] += sum(1 for row in payloads if row["name"] not in existing)
+            processed += len(payloads)
+            continue
         try:
-            action = upsert_doc(remote_doc(session, base_url, doctype, name), doctype, dry_run=dry_run)
-            result[action] = result.get(action, 0) + 1
-            if index % 100 == 0:
-                frappe.db.commit()
-                print(f"{doctype}: {index}/{len(names)}")
+            inserted, updated = _bulk_upsert_parent_rows(doctype, payloads)
+            result["inserted"] += inserted
+            result["updated"] += updated
+            processed += len(payloads)
+            frappe.db.commit()
+            print(f"{doctype}: {processed}/{result['remote']}")
         except Exception as exc:
-            result["errors"] += 1
-            print(f"{doctype}: failed {name}: {exc}", file=sys.stderr)
+            result["errors"] += len(payloads)
+            print(f"{doctype}: failed page ending at {names[-1] if names else '-'}: {exc}", file=sys.stderr)
             frappe.db.rollback()
-    if not dry_run:
-        frappe.db.commit()
     return result
+
+
+def _bulk_upsert_parent_rows(doctype: str, payloads: list[dict]) -> tuple[int, int]:
+    if not payloads:
+        return 0, 0
+    names = [row["name"] for row in payloads]
+    existing = set(
+        frappe.get_all(
+            doctype,
+            filters={"name": ["in", names]},
+            pluck="name",
+            limit_start=0,
+            limit_page_length=len(names),
+        )
+    )
+    updates = {
+        row["name"]: _scalar_parent_values(row)
+        for row in payloads
+        if row["name"] in existing
+    }
+    if updates:
+        frappe.db.bulk_update(doctype, updates, chunk_size=500)
+
+    inserts = [row for row in payloads if row["name"] not in existing]
+    if inserts:
+        value_fields = sorted({field for row in inserts for field in _scalar_parent_values(row)})
+        fields = ["name", "owner", "creation", "modified", "modified_by", "docstatus", "idx", *value_fields]
+        now = frappe.utils.now()
+        values = [
+            [
+                row["name"],
+                frappe.session.user or "Administrator",
+                now,
+                now,
+                frappe.session.user or "Administrator",
+                0,
+                0,
+                *[_scalar_parent_values(row).get(field) for field in value_fields],
+            ]
+            for row in inserts
+        ]
+        frappe.db.bulk_insert(doctype, fields, values, ignore_duplicates=True, chunk_size=500)
+    return len(inserts), len(updates)
+
+
+def _scalar_parent_values(payload: dict) -> dict:
+    return {
+        fieldname: value
+        for fieldname, value in payload.items()
+        if fieldname not in {"doctype", "name"} and not isinstance(value, (list, dict))
+    }

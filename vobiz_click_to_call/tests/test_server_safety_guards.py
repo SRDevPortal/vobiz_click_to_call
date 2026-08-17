@@ -12,12 +12,15 @@ INBOUND = APP / "api" / "inbound.py"
 CONSOLE = APP / "api" / "console.py"
 CALL = APP / "api" / "call.py"
 RECORDING = APP / "api" / "recording.py"
+RECORDING_SERVICE = APP / "services" / "recording.py"
+DELETE_CLEANUP = APP / "services" / "delete_cleanup.py"
 AI = APP / "services" / "ai.py"
 CDR = APP / "services" / "cdr.py"
 DEBUG_LOG = APP / "services" / "debug_log.py"
 PATCHES = APP / "patches.txt"
 INDEX_PATCH = APP / "patches" / "v1_0" / "add_call_log_performance_indexes.py"
 ATTENDANCE_INDEX_PATCH = APP / "patches" / "v1_0" / "add_agent_attendance_indexes.py"
+CHAT_INDEX_PATCH = APP / "patches" / "v1_0" / "add_chat_lookup_indexes.py"
 CLICK_TO_CALL = APP / "public" / "js" / "click_to_call.js"
 AVAILABILITY = APP / "public" / "js" / "availability.js"
 AGENT_CONSOLE = (
@@ -128,6 +131,13 @@ class TestServerSafetyGuards(unittest.TestCase):
         self.assertIn("additions = []", attendance_patch)
         self.assertEqual(attendance_patch.count("alter table"), 1)
 
+        chat_patch = CHAT_INDEX_PATCH.read_text(encoding="utf-8")
+        self.assertIn("vobiz_click_to_call.patches.v1_0.add_chat_lookup_indexes", patches)
+        self.assertIn("idx_chat_conversation_reference_modified", chat_patch)
+        self.assertIn("idx_chat_conversation_crm_lead_modified", chat_patch)
+        self.assertIn("idx_chat_conversation_contact_modified", chat_patch)
+        self.assertIn("algorithm=inplace, lock=none", chat_patch)
+
     def test_analytics_queries_are_bounded(self):
         console = CONSOLE.read_text(encoding="utf-8")
 
@@ -137,6 +147,36 @@ class TestServerSafetyGuards(unittest.TestCase):
         self.assertNotIn("limit_page_length=50000", console)
         self.assertNotIn("limit_page_length=10000", console)
         self.assertNotIn("_visible_crm_lead_names", console)
+
+    def test_status_analytics_avoid_non_indexable_wildcards(self):
+        console = CONSOLE.read_text(encoding="utf-8")
+        start = console.index("\ndef _analytics_bucket_sql(")
+        end = console.index("\ndef _analytics_recording_duration_sql(", start)
+        bucket_sql = console[start:end].lower()
+
+        self.assertNotIn(" like ", bucket_sql)
+        self.assertNotIn("lower(", bucket_sql)
+        self.assertLess(bucket_sql.index("`dial_status` in ('busy'"), bucket_sql.index("`billsec` > 0"))
+
+    def test_runtime_cleanup_uses_set_based_updates(self):
+        console = CONSOLE.read_text(encoding="utf-8")
+        cleanup = DELETE_CLEANUP.read_text(encoding="utf-8")
+        start = console.index("\ndef close_stale_agent_attendance_sessions(")
+        end = console.index("\ndef _close_attendance_row(", start)
+        stale_cleanup = console[start:end]
+
+        self.assertIn("update `tabVobiz Agent Attendance Log`", stale_cleanup)
+        self.assertNotIn("frappe.get_all(", stale_cleanup)
+        self.assertNotIn("frappe.get_all(", cleanup)
+        self.assertIn("update `tabVobiz User Mapping`", cleanup)
+
+    def test_recording_worker_does_not_discard_pending_changes(self):
+        recording = RECORDING_SERVICE.read_text(encoding="utf-8")
+
+        self.assertNotIn("doc.reload()", recording)
+        self.assertIn('"recording_status": "Starting"', recording)
+        self.assertIn("frappe.db.commit()", recording)
+        self.assertLess(recording.index('"recording_status": "Starting"'), recording.index("start_call_recording"))
 
 
 if __name__ == "__main__":

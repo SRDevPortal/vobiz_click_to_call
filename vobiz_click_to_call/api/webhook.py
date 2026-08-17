@@ -656,12 +656,12 @@ def _status_from_hangup(
         return "Cancelled"
     if "fail" in combined or "error" in combined:
         return "Failed"
+    if previous in {"Busy", "No Answer", "Failed", "Cancelled", "Canceled"} and status in {"completed", "hangup"}:
+        return previous
     if _has_billable_talk_time(billsec, duration) and (
         status in {"completed", "hangup"} or cause in {"normal-clearing", "normal clearing"}
     ):
         return "Completed"
-    if previous in {"Busy", "No Answer", "Failed", "Cancelled", "Canceled"} and status in {"completed", "hangup"}:
-        return previous
     if previous in {"Agent Answered", "Customer Answered", "Agent Ringing"} and status in {"completed", "hangup"}:
         return "Cancelled"
     if previous in {"Queued", "Ringing"} and status in {"completed", "hangup"}:

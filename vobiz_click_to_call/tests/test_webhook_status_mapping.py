@@ -7,7 +7,12 @@ from vobiz_click_to_call.api.webhook import _status_from_dial_status, _status_fr
 from vobiz_click_to_call.api.console import _analytics_bucket
 from vobiz_click_to_call.services.call_log_update import save_doc_latest
 from vobiz_click_to_call.services import call_log_update
-from vobiz_click_to_call.services.call_status import is_inbound_missed_call, status_bucket, talk_seconds
+from vobiz_click_to_call.services.call_status import (
+    is_inbound_missed_call,
+    status_bucket,
+    status_from_provider,
+    talk_seconds,
+)
 from vobiz_click_to_call.services.disposition import call_next_action_label
 
 
@@ -173,6 +178,33 @@ class TestWebhookStatusMapping(unittest.TestCase):
         self.assertEqual(_status_from_hangup("completed", "busy", previous="Agent Ringing"), "Busy")
         self.assertEqual(_status_from_hangup("completed", "no-answer", previous="Customer Answered"), "No Answer")
         self.assertEqual(_status_from_hangup("completed", "failed", previous="Ringing"), "Failed")
+
+    def test_agent_first_b_leg_outcome_wins_over_a_leg_billsec(self):
+        for status, expected_status, expected_bucket in (
+            ("busy", "Busy", "busy"),
+            ("no-answer", "No Answer", "no_answer"),
+        ):
+            with self.subTest(status=status):
+                row = {
+                    "status": expected_status,
+                    "dial_status": status,
+                    "call_status": "completed",
+                    "call_flow": "Agent First",
+                    "billsec": 60,
+                    "duration": 0,
+                }
+                self.assertEqual(status_from_provider(row), expected_status)
+                self.assertEqual(status_bucket(row), expected_bucket)
+
+    def test_generic_hangup_preserves_b_leg_failure_despite_a_leg_billsec(self):
+        self.assertEqual(
+            _status_from_hangup("completed", "NORMAL_CLEARING", previous="Busy", billsec=60),
+            "Busy",
+        )
+        self.assertEqual(
+            _status_from_hangup("completed", "NORMAL_CLEARING", previous="No Answer", billsec=60),
+            "No Answer",
+        )
 
     def test_dial_hangup_before_connect_is_terminal_cancelled(self):
         self.assertEqual(_status_from_dial_status("hangup", previous="Customer Answered"), "Cancelled")

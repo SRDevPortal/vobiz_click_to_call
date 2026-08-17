@@ -271,7 +271,11 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         end = source.index("\ndef _analytics_recording_duration_sql(", start)
         bucket_source = source[start:end]
 
-        self.assertIn("coalesce(`billsec`, 0) > 0", bucket_source)
+        self.assertIn("when `billsec` > 0 then 'connected'", bucket_source)
+        self.assertLess(bucket_source.index("when `dial_status` in ('busy'"), bucket_source.index("when `billsec` > 0"))
+        self.assertLess(bucket_source.index("when `dial_status` in ('no-answer'"), bucket_source.index("when `billsec` > 0"))
+        self.assertNotIn(" like ", bucket_source.lower())
+        self.assertNotIn("lower(", bucket_source.lower())
         self.assertNotIn("recording_duration", bucket_source)
         self.assertNotIn("`status` in ('Connected', 'Completed') then 'connected'", bucket_source)
 

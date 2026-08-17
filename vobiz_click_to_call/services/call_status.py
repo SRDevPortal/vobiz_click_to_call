@@ -15,6 +15,13 @@ def call_signal(row: dict[str, Any] | None, *extra_fields: str) -> str:
     return " ".join(str(row.get(fieldname) or "") for fieldname in fields).strip().lower().replace("_", "-")
 
 
+def provider_outcome_signal(row: dict[str, Any] | None) -> str:
+    """Return provider/B-leg outcomes without the locally derived status."""
+    row = row or {}
+    fields = ("call_status", "dial_status", "hangup_cause", "error_message")
+    return " ".join(str(row.get(fieldname) or "") for fieldname in fields).strip().lower().replace("_", "-")
+
+
 def talk_seconds(row: dict[str, Any] | None) -> int:
     row = row or {}
     call_flow = str(row.get("call_flow") or "").strip()
@@ -61,18 +68,22 @@ def status_from_provider(
 ) -> str:
     row = row or {}
     signal = call_signal(row)
+    outcome_signal = provider_outcome_signal(row)
     previous = str(previous or "").strip()
 
+    if "busy" in outcome_signal:
+        return "Busy"
+    if "no-answer" in outcome_signal or "no answer" in outcome_signal or "timeout" in outcome_signal or "unanswered" in outcome_signal:
+        return "No Answer"
+    if "cancel" in outcome_signal or "reject" in outcome_signal or "decline" in outcome_signal:
+        return "Cancelled"
+    if "fail" in outcome_signal or "error" in outcome_signal:
+        return "Failed"
+    # In Agent First calls, billsec can belong to the answered agent leg even
+    # when the customer B-leg is busy or unanswered.  Provider outcome signals
+    # must therefore win over billable time.
     if connected_on_talk_time and has_talk_time(row):
         return "Completed"
-    if "busy" in signal:
-        return "Busy"
-    if "no-answer" in signal or "no answer" in signal or "timeout" in signal or "unanswered" in signal:
-        return "No Answer"
-    if "cancel" in signal or "reject" in signal or "decline" in signal:
-        return "Cancelled"
-    if "fail" in signal or "error" in signal:
-        return "Failed"
     if "answered" in signal or "connected" in signal or "in-progress" in signal or "in progress" in signal:
         return "Connected"
     if "completed" in signal or "hangup" in signal or "normal-clearing" in signal or "normal clearing" in signal:
@@ -87,18 +98,26 @@ def status_from_provider(
 def status_bucket(row: dict[str, Any] | None) -> str:
     row = row or {}
     status = str(row.get("status") or "").strip()
+    outcome_signal = provider_outcome_signal(row)
+    if "busy" in outcome_signal:
+        return "busy"
+    if "no-answer" in outcome_signal or "no answer" in outcome_signal or "timeout" in outcome_signal or "unanswered" in outcome_signal:
+        return "no_answer"
+    if "fail" in outcome_signal or "error" in outcome_signal:
+        return "failed"
+    if "cancel" in outcome_signal or "reject" in outcome_signal or "decline" in outcome_signal:
+        return "cancelled"
+    # A positive billsec may only describe the Agent First A-leg.  Check the
+    # final B-leg outcome above before treating it as a connected customer call.
     if frappe.utils.cint(row.get("billsec")) > 0:
         return "connected"
-
     signal = call_signal(row)
-    if "busy" in signal:
+    if status == "Busy":
         return "busy"
-    if "no-answer" in signal or "no answer" in signal or "timeout" in signal or "unanswered" in signal:
+    if status == "No Answer":
         return "no_answer"
-    if "fail" in signal or "error" in signal:
+    if status == "Failed":
         return "failed"
-    if "cancel" in signal or "reject" in signal or "decline" in signal:
-        return "cancelled"
     if status in MISSED_STATUSES:
         return "missed"
     if talk_seconds(row) > 0:

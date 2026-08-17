@@ -1139,16 +1139,25 @@ def _apply_patient_department_analytics_filter(
 
 
 def _analytics_bucket_sql() -> str:
-    signal = "lower(concat_ws(' ', coalesce(`status`, ''), coalesce(`call_status`, ''), coalesce(`dial_status`, ''), coalesce(`hangup_cause`, '')))"
     talk = _analytics_talk_sql()
     return f"""
         case
-            when coalesce(`billsec`, 0) > 0 then 'connected'
-            when {signal} like '%%busy%%' then 'busy'
-            when {signal} like '%%no-answer%%' or {signal} like '%%no answer%%' or {signal} like '%%timeout%%' or {signal} like '%%unanswered%%' then 'no_answer'
-            when {signal} like '%%fail%%' or {signal} like '%%error%%' then 'failed'
-            when {signal} like '%%cancel%%' or {signal} like '%%reject%%' or {signal} like '%%decline%%' then 'cancelled'
-            when `status` in ('Failed', 'Busy', 'No Answer', 'Cancelled', 'Canceled') then 'missed'
+            when `dial_status` in ('busy', 'Busy') then 'busy'
+            when `call_status` in ('busy', 'Busy') then 'busy'
+            when `hangup_cause` in ('USER_BUSY', 'user-busy', 'busy', 'Busy') then 'busy'
+            when `dial_status` in ('no-answer', 'no answer', 'timeout', 'unanswered') then 'no_answer'
+            when `call_status` in ('no-answer', 'no answer', 'timeout', 'unanswered') then 'no_answer'
+            when `hangup_cause` in ('NO_ANSWER', 'no-answer', 'timeout', 'unanswered') then 'no_answer'
+            when `dial_status` in ('failed', 'error') then 'failed'
+            when `call_status` in ('failed', 'error') then 'failed'
+            when `dial_status` in ('cancel', 'canceled', 'cancelled', 'reject', 'decline') then 'cancelled'
+            when `call_status` in ('cancel', 'canceled', 'cancelled', 'reject', 'decline') then 'cancelled'
+            when `hangup_cause` in ('ORIGINATOR_CANCEL', 'CALL_REJECTED', 'originator-cancel') then 'cancelled'
+            when `status` = 'Busy' then 'busy'
+            when `status` = 'No Answer' then 'no_answer'
+            when `status` = 'Failed' then 'failed'
+            when `status` in ('Cancelled', 'Canceled') then 'cancelled'
+            when `billsec` > 0 then 'connected'
             when {talk} > 0 then 'connected'
             when `status` in ('Connected', 'Completed') then 'no_answer'
             else 'other'
@@ -2219,27 +2228,45 @@ def close_stale_agent_attendance_sessions() -> dict[str, int | bool]:
     if not _agent_attendance_log_enabled():
         return {"closed": 0, "disabled": True}
     now = _now_ist()
-    rows = frappe.get_all(
-        AGENT_ATTENDANCE_DOCTYPE,
-        filters={"status": "Open", "source": ["in", ACTIVITY_ATTENDANCE_SOURCES]},
-        fields=["name", "agent_user", "online_from", "last_seen_at", "source"],
-        limit_page_length=1000,
-    )
     closed = 0
-    for row in rows:
-        last_seen = frappe.utils.get_datetime(row.last_seen_at or row.online_from)
-        stale_seconds = (
-            DESK_ACTIVITY_STALE_SECONDS
-            if row.source == "Desk Activity"
-            else CONSOLE_SESSION_TTL_SECONDS
-        )
-        stale_at = last_seen + timedelta(seconds=stale_seconds)
-        if stale_at < now:
-            _close_attendance_row(row.name, row.online_from, stale_at)
-            closed += 1
+    for source, stale_seconds in (
+        ("Desk Activity", DESK_ACTIVITY_STALE_SECONDS),
+        ("Agent Console", CONSOLE_SESSION_TTL_SECONDS),
+    ):
+        closed += _bulk_close_stale_attendance_source(source, stale_seconds, now)
     if closed:
         frappe.db.commit()
     return {"closed": closed, "disabled": False}
+
+
+def _bulk_close_stale_attendance_source(source: str, stale_seconds: int, now) -> int:
+    """Close stale sessions with two indexable updates instead of per-row writes."""
+    cutoff = frappe.utils.add_to_date(now, seconds=-int(stale_seconds))
+    closed = 0
+    for timestamp_field in ("last_seen_at", "online_from"):
+        null_guard = "and `last_seen_at` is null" if timestamp_field == "online_from" else ""
+        frappe.db.sql(
+            f"""
+            update `tabVobiz Agent Attendance Log`
+            set `status` = 'Closed',
+                `offline_at` = date_add(`{timestamp_field}`, interval %(stale_seconds)s second),
+                `duration_seconds` = greatest(
+                    0,
+                    timestampdiff(
+                        second,
+                        `online_from`,
+                        date_add(`{timestamp_field}`, interval %(stale_seconds)s second)
+                    )
+                )
+            where `status` = 'Open'
+              and `source` = %(source)s
+              and `{timestamp_field}` < %(cutoff)s
+              {null_guard}
+            """,
+            {"source": source, "stale_seconds": int(stale_seconds), "cutoff": cutoff},
+        )
+        closed += max(0, frappe.db._cursor.rowcount)
+    return closed
 
 
 def _close_attendance_row(name: str, online_from, offline_at) -> None:
@@ -4202,6 +4229,7 @@ def _interakt_account_for_outbound_pipeline(pipeline: str) -> str | None:
         "Chat Channel Account Pipeline",
         filters={"pipeline": pipeline, "parenttype": "Chat Channel Account"},
         pluck="parent",
+        limit_start=0,
         limit_page_length=2,
     )
     if not mapped_accounts:
@@ -4214,6 +4242,7 @@ def _interakt_account_for_outbound_pipeline(pipeline: str) -> str | None:
             "is_active": 1,
         },
         pluck="name",
+        limit_start=0,
         limit_page_length=2,
     )
     if len(accounts) > 1:
@@ -4251,6 +4280,7 @@ def _whatsapp_route_status_for_patient(patient) -> dict[str, Any]:
         "Chat Channel Account",
         filters=account_filters,
         pluck="name",
+        limit_start=0,
         limit_page_length=2,
     )
     if not accounts:
