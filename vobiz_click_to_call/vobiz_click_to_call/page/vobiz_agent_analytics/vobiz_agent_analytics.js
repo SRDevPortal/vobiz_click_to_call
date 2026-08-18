@@ -669,7 +669,11 @@ class VobizAgentAnalytics {
 			this.render_agent_chart(this.state.agents || []);
 		});
 		$main.on('change', '[data-role="from-date"], [data-role="to-date"], [data-role="status-filter"], [data-role="queue-source"], [data-role="department"]', () => this.schedule_load());
-		$main.on('input', '[data-role="agent-filter-search"]', (e) => this.filter_checkbox_dropdown_options('agent', ($(e.currentTarget).val() || '').trim()));
+		$main.on('input', '.vobiz-checkbox-search input', (e) => {
+			const dropdown_role = $(e.currentTarget).closest('.vobiz-checkbox-dropdown').data('role') || '';
+			const role = dropdown_role.replace(/-dropdown$/, '');
+			this.filter_checkbox_dropdown_options(role, ($(e.currentTarget).val() || '').trim());
+		});
 		$main.on('change', '[data-filter-role="agent"], [data-filter-role="lead-owner"], [data-filter-role="team"]', (e) => {
 			const role = $(e.currentTarget).data('filter-role');
 			this.update_checkbox_dropdown_label(
@@ -1045,13 +1049,15 @@ class VobizAgentAnalytics {
 			'team',
 			data.team_options || [],
 			this.filter_values(data.team || this.state.team),
-			__('All Teams')
+			__('All Teams'),
+			{ searchable: true }
 		);
 		this.render_checkbox_dropdown(
 			'lead-owner',
 			data.lead_owner_options || [],
 			this.filter_values(data.lead_owner || this.state.lead_owner),
-			__('All Lead Owners')
+			__('All Lead Owners'),
+			{ searchable: true }
 		);
 		const departments = data.department_options || [];
 		const $department = this.page.main.find('[data-role="department"]');
