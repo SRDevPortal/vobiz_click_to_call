@@ -126,7 +126,8 @@ class TestIncomingMappingSource(unittest.TestCase):
         self.assertIn("patient_route_mappings(patient)", patient_source)
         self.assertIn('"route_type": "patient_mapping"', patient_source)
         self.assertIn('"route_type": "patient_mapping_fallback_user"', patient_source)
-        self.assertIn('"route_type": "patient_end_fallback_mobile"', patient_source)
+        self.assertIn('route_type="patient_ai_agent_end_fallback"', patient_source)
+        self.assertNotIn('"route_type": "patient_end_fallback_mobile"', patient_source)
         self.assertIn("_patient_mapping_matches(row, patient)", patient_source)
         self.assertIn('"sr_medical_departments"', patient_source)
         self.assertIn('"sr_followup_ids"', patient_source)
@@ -134,7 +135,18 @@ class TestIncomingMappingSource(unittest.TestCase):
         self.assertIn('"sr_dpt_languages"', patient_source)
         self.assertIn("patient_matches_mapping(patient, mapping)", patient_source)
 
-    def test_existing_crm_lead_routes_by_did_mapping_without_requiring_lead_owner(self):
+        chain_start = source.index("def resolve_patient_then_lead_inbound_target")
+        chain_end = source.index("def resolve_patient_primary_inbound_target", chain_start)
+        chain_source = source[chain_start:chain_end]
+        self.assertIn("resolve_patient_primary_inbound_target(patient)", chain_source)
+        self.assertIn("find_latest_crm_lead_by_phone(customer_number)", chain_source)
+        self.assertIn('lead.get("lead_owner")', chain_source)
+        self.assertIn('"patient_to_lead_owner"', chain_source)
+        self.assertIn('"patient_to_lead_owner_fallback_user"', chain_source)
+        self.assertIn('"patient_to_lead_owner_ai_agent_end_fallback"', chain_source)
+        self.assertNotIn("find_incoming_mapping", chain_source)
+
+    def test_existing_crm_lead_routes_to_owner_without_did_mapping(self):
         source = self.inbound_source
         route_start = source.index("def route():")
         route_end = source.index("def dial_action(", route_start)
@@ -147,13 +159,26 @@ class TestIncomingMappingSource(unittest.TestCase):
         route_existing_source = source[route_existing_start:route_existing_end]
 
         self.assertIn('existing.get("doctype") == "CRM Lead"', route_source)
-        self.assertIn("mapping = find_incoming_mapping(did_number)", route_existing_source)
-        self.assertIn("select_incoming_agent(mapping)", route_existing_source)
-        self.assertIn("update_incoming_assignment(mapping, target)", route_existing_source)
+        self.assertIn("resolve_lead_owner_inbound_target(lead, settings)", route_existing_source)
+        self.assertNotIn("find_incoming_mapping", route_existing_source)
+        self.assertNotIn("select_incoming_agent", route_existing_source)
+        self.assertNotIn("update_incoming_assignment", route_existing_source)
         self.assertIn('call_log.crm_lead = lead.name', route_existing_source)
-        self.assertNotIn("resolve_lead_owner_inbound_target(lead, settings)", route_existing_source)
-        self.assertNotIn('lead.get("lead_owner")', route_existing_source)
         self.assertIn('owner = (lead.get("lead_owner") or "").strip()', owner_source)
+
+    def test_patient_dial_failure_uses_ordered_lead_chain_before_ai(self):
+        source = self.inbound_source
+        start = source.index("def _next_inbound_fallback")
+        end = source.index("def _active_agent_mobile", start)
+        fallback_source = source[start:end]
+
+        strict_index = fallback_source.index('if _request_flag(doc, "strict_ordered_fallback"):')
+        human_index = fallback_source.index('for user in _request_data(doc, "ordered_fallback_users") or []:')
+        ai_index = fallback_source.index('ai_user = str(_request_data(doc, "ordered_ai_user") or "").strip()')
+        legacy_index = fallback_source.index("mapping = get_user_mapping(origin_user)")
+        self.assertLess(strict_index, human_index)
+        self.assertLess(human_index, ai_index)
+        self.assertLess(ai_index, legacy_index)
 
     def test_unknown_route_uses_current_console_availability_contract(self):
         source = self.inbound_source
