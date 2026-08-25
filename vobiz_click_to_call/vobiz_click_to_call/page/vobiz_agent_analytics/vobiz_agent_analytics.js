@@ -38,13 +38,14 @@ class VobizAgentAnalytics {
 			status_filter: 'total',
 			queue_source: 'CRM Lead and Patient',
 			agent_user: [],
-			lead_owner: [],
 			team: [],
 			department: '',
 			agents: [],
 			agent_status_filter: 'all',
 			agent_search: '',
 			agent_sort: 'total',
+			agent_page: 1,
+			agent_page_size: 10,
 			selected_agent_user: '',
 			agent_calls: {},
 			attendance_log_visible: {},
@@ -111,16 +112,6 @@ class VobizAgentAnalytics {
 									<i class="fa fa-angle-down"></i>
 								</button>
 								<div class="vobiz-checkbox-dropdown-menu" data-role="agent-menu"></div>
-							</div>
-						</div>
-						<div>
-							<label>${__('Lead Owner')}</label>
-							<div class="vobiz-checkbox-dropdown" data-role="lead-owner-dropdown">
-								<button type="button" class="form-control input-sm vobiz-checkbox-dropdown-toggle" data-action="toggle-checkbox-dropdown" data-target-role="lead-owner">
-									<span data-role="lead-owner-label">${__('All Lead Owners')}</span>
-									<i class="fa fa-angle-down"></i>
-								</button>
-								<div class="vobiz-checkbox-dropdown-menu" data-role="lead-owner-menu"></div>
 							</div>
 						</div>
 						<div>
@@ -222,6 +213,16 @@ class VobizAgentAnalytics {
 										<option value="rejected">${__('Rejected Calls')}</option>
 									</select>
 								</div>
+								<div class="vobiz-agent-page-size">
+									<span>${__('Show')}:</span>
+									<select class="form-control input-sm" data-role="agent-page-size">
+										<option value="10">10</option>
+										<option value="25">25</option>
+										<option value="50">50</option>
+										<option value="100">100</option>
+									</select>
+									<span>${__('agents')}</span>
+								</div>
 							</div>
 						</div>
 						<div data-role="agent-chart"></div>
@@ -281,7 +282,7 @@ class VobizAgentAnalytics {
 				.vobiz-checkbox-dropdown-toggle span { color: #344054; display: block; font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; text-transform: none; white-space: nowrap; }
 				.vobiz-checkbox-dropdown-toggle i { color: #667085; flex: 0 0 auto; }
 				.vobiz-checkbox-dropdown-menu { background: #fff; border: 1px solid #d9e2ee; border-radius: 6px; box-shadow: 0 12px 28px rgba(15, 23, 42, .12); display: none; left: 0; max-height: 230px; min-width: 260px; overflow-x: hidden; overflow-y: auto; padding: 6px; position: absolute; top: calc(100% + 4px); width: max(100%, 260px); z-index: 20; }
-				[data-role="agent-menu"], [data-role="lead-owner-menu"] { width: min(350px, calc(100vw - 48px)); }
+				[data-role="agent-menu"] { width: min(350px, calc(100vw - 48px)); }
 				.vobiz-checkbox-dropdown.open .vobiz-checkbox-dropdown-menu { display: block; }
 				.vobiz-checkbox-search { background: #fff; padding: 4px 4px 8px; position: sticky; top: -6px; z-index: 1; }
 				.vobiz-checkbox-search input { height: 28px; }
@@ -541,6 +542,10 @@ class VobizAgentAnalytics {
 				.vobiz-agent-sort span i { color: #94a3b8; margin-right: 7px; }
 				.vobiz-agent-sort select { appearance: auto; background-color: #fff; border: 1px solid #d9e2ee; border-radius: 6px; box-shadow: none !important; color: #0f172a; font-size: 14px; height: 38px; line-height: 20px; min-width: 175px; padding: 8px 12px; transition: border-color .15s ease; }
 				.vobiz-agent-sort select:focus { border-color: #c7d2e2; box-shadow: none !important; outline: 0; }
+				.vobiz-agent-page-size { align-items: center; color: #64748b; display: flex; font-size: 14px; gap: 7px; white-space: nowrap; }
+				.vobiz-agent-page-size select { height: 38px; min-width: 72px; }
+				.vobiz-agent-pagination { align-items: center; display: flex; gap: 8px; justify-content: space-between; padding-top: 14px; }
+				.vobiz-agent-pagination-actions { display: flex; gap: 6px; }
 				.vobiz-agent-empty { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; color: #64748b; font-size: 13px; font-weight: 700; padding: 24px; text-align: center; }
 				.vobiz-breakdown { display: grid; gap: 10px; }
 				.vobiz-breakdown-row { align-items: center; display: grid; gap: 10px; grid-template-columns: 110px minmax(0, 1fr) 44px; }
@@ -600,7 +605,7 @@ class VobizAgentAnalytics {
 					.vobiz-pie-chart { grid-template-columns: 1fr; justify-items: center; }
 					.vobiz-pie-legend { width: 100%; }
 					.vobiz-pie-svg { height: 210px; }
-					.vobiz-agent-search, .vobiz-agent-sort, .vobiz-agent-sort select { width: 100%; }
+					.vobiz-agent-search, .vobiz-agent-sort, .vobiz-agent-sort select, .vobiz-agent-page-size { width: 100%; }
 				}
 			</style>
 		`);
@@ -662,25 +667,41 @@ class VobizAgentAnalytics {
 		$(document).off('click.vobiz-agent-analytics').on('click.vobiz-agent-analytics', () => this.close_checkbox_dropdowns());
 		$main.on('input', '[data-role="agent-search"]', (e) => {
 			this.state.agent_search = ($(e.currentTarget).val() || '').trim();
+			this.state.agent_page = 1;
 			this.render_agent_chart(this.state.agents || []);
 		});
 		$main.on('change', '[data-role="agent-sort"]', (e) => {
 			this.state.agent_sort = ($(e.currentTarget).val() || 'total').trim();
+			this.state.agent_page = 1;
 			this.render_agent_chart(this.state.agents || []);
 		});
-		$main.on('change', '[data-role="from-date"], [data-role="to-date"], [data-role="status-filter"], [data-role="queue-source"], [data-role="department"]', () => this.schedule_load());
+		$main.on('change', '[data-role="agent-page-size"]', (e) => {
+			this.state.agent_page_size = Number($(e.currentTarget).val()) || 10;
+			this.state.agent_page = 1;
+			this.render_agent_chart(this.state.agents || []);
+		});
+		$main.on('click', '[data-action="agent-page"]', (e) => {
+			e.preventDefault();
+			this.state.agent_page = Math.max(1, Number($(e.currentTarget).data('page')) || 1);
+			this.render_agent_chart(this.state.agents || []);
+		});
+		$main.on('change', '[data-role="from-date"], [data-role="to-date"], [data-role="status-filter"], [data-role="queue-source"], [data-role="department"]', () => {
+			this.state.agent_page = 1;
+			this.schedule_load();
+		});
 		$main.on('input', '.vobiz-checkbox-search input', (e) => {
 			const dropdown_role = $(e.currentTarget).closest('.vobiz-checkbox-dropdown').data('role') || '';
 			const role = dropdown_role.replace(/-dropdown$/, '');
 			this.filter_checkbox_dropdown_options(role, ($(e.currentTarget).val() || '').trim());
 		});
-		$main.on('change', '[data-filter-role="agent"], [data-filter-role="lead-owner"], [data-filter-role="team"]', (e) => {
+		$main.on('change', '[data-filter-role="agent"], [data-filter-role="team"]', (e) => {
 			const role = $(e.currentTarget).data('filter-role');
 			this.update_checkbox_dropdown_label(
 				role,
 				this.selected_values(role),
 				this.checkbox_empty_label(role)
 			);
+			this.state.agent_page = 1;
 			this.schedule_load();
 		});
 		$(document)
@@ -713,12 +734,12 @@ class VobizAgentAnalytics {
 
 	checkbox_empty_label(role) {
 		if (role === 'agent') return __('All Agents');
-		if (role === 'team') return __('All Teams');
-		return __('All Lead Owners');
+		return __('All Teams');
 	}
 
 	set_agent_status_filter(filter) {
 		this.state.agent_status_filter = filter || 'all';
+		this.state.agent_page = 1;
 		this.render_agent_chart(this.state.agents || []);
 	}
 
@@ -863,10 +884,10 @@ class VobizAgentAnalytics {
 			status_filter: 'total',
 			queue_source: 'CRM Lead and Patient',
 			agent_user: '',
-			lead_owner: [],
 			team: [],
 			department: '',
 			selected_agent_user: '',
+			agent_page: 1,
 			agent_calls: {},
 			attendance_log_visible: {},
 			selected_call_status: '',
@@ -878,7 +899,6 @@ class VobizAgentAnalytics {
 		this.page.main.find('[data-role="status-filter"]').val('total');
 		this.page.main.find('[data-role="queue-source"]').val('CRM Lead');
 		this.set_checkbox_dropdown_selection('agent', []);
-		this.set_checkbox_dropdown_selection('lead-owner', []);
 		this.set_checkbox_dropdown_selection('team', []);
 		this.page.main.find('[data-role="department"]').val('');
 		this.load();
@@ -910,7 +930,6 @@ class VobizAgentAnalytics {
 				this.state = Object.assign({}, this.state, filters, {
 					queue_source: data.queue_source || filters.queue_source,
 					agent_user: data.agent_user || filters.agent_user || '',
-					lead_owner: this.filter_values(data.lead_owner || filters.lead_owner),
 					team: this.filter_values(data.team || filters.team),
 					department: data.department || filters.department || ''
 				});
@@ -969,7 +988,6 @@ class VobizAgentAnalytics {
 			status_filter: (this.page.main.find('[data-role="status-filter"]').val() || 'total').trim(),
 			queue_source: (this.page.main.find('[data-role="queue-source"]').val() || this.state.queue_source || 'CRM Lead and Patient').trim(),
 			agent_user: JSON.stringify(this.selected_values('agent')),
-			lead_owner: JSON.stringify(this.selected_values('lead-owner')),
 			team: JSON.stringify(this.selected_values('team')),
 			department: (this.page.main.find('[data-role="department"]').val() || '').trim()
 		};
@@ -1022,7 +1040,6 @@ class VobizAgentAnalytics {
 			this.state = Object.assign({}, this.state, filters, {
 				queue_source: data.queue_source || filters.queue_source,
 				agent_user: this.filter_values(data.agent_user || filters.agent_user),
-				lead_owner: this.filter_values(data.lead_owner || filters.lead_owner),
 				team: this.filter_values(data.team || filters.team),
 				department: data.department || filters.department || ''
 			});
@@ -1050,13 +1067,6 @@ class VobizAgentAnalytics {
 			data.team_options || [],
 			this.filter_values(data.team || this.state.team),
 			__('All Teams'),
-			{ searchable: true }
-		);
-		this.render_checkbox_dropdown(
-			'lead-owner',
-			data.lead_owner_options || [],
-			this.filter_values(data.lead_owner || this.state.lead_owner),
-			__('All Lead Owners'),
 			{ searchable: true }
 		);
 		const departments = data.department_options || [];
@@ -1558,9 +1568,26 @@ class VobizAgentAnalytics {
 		if (this.state.selected_agent_user && !rows.some(row => row.user === this.state.selected_agent_user)) {
 			this.state.selected_agent_user = '';
 		}
+		const pageSize = [10, 25, 50, 100].includes(Number(this.state.agent_page_size))
+			? Number(this.state.agent_page_size)
+			: 10;
+		const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+		const currentPage = Math.min(Math.max(1, Number(this.state.agent_page) || 1), totalPages);
+		this.state.agent_page = currentPage;
+		this.state.agent_page_size = pageSize;
+		const start = (currentPage - 1) * pageSize;
+		const pageRows = rows.slice(start, start + pageSize);
 		this.page.main.find('[data-role="agent-chart"]').html(`
 			<div class="vobiz-agent-grid">
-				${rows.map(row => this.agent_card_html(row)).join('')}
+				${pageRows.map(row => this.agent_card_html(row)).join('')}
+			</div>
+			<div class="vobiz-agent-pagination">
+				<span class="text-muted">${__('Showing {0}-{1} of {2} agents', [start + 1, Math.min(start + pageSize, rows.length), rows.length])}</span>
+				<div class="vobiz-agent-pagination-actions">
+					<button class="btn btn-default btn-sm" data-action="agent-page" data-page="${currentPage - 1}" ${currentPage <= 1 ? 'disabled' : ''}>${__('Previous')}</button>
+					<span class="btn btn-default btn-sm disabled">${__('Page {0} of {1}', [currentPage, totalPages])}</span>
+					<button class="btn btn-default btn-sm" data-action="agent-page" data-page="${currentPage + 1}" ${currentPage >= totalPages ? 'disabled' : ''}>${__('Next')}</button>
+				</div>
 			</div>
 		`);
 		this.start_attendance_timer();
@@ -1665,6 +1692,7 @@ class VobizAgentAnalytics {
 		this.page.main.find(`[data-agent-filter="${this.escape(this.state.agent_status_filter || 'all')}"]`).addClass('active');
 		this.page.main.find('[data-role="agent-search"]').val(this.state.agent_search || '');
 		this.page.main.find('[data-role="agent-sort"]').val(this.state.agent_sort || 'total');
+		this.page.main.find('[data-role="agent-page-size"]').val(String(this.state.agent_page_size || 10));
 	}
 
 	filtered_agent_rows(agents) {

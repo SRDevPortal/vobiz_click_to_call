@@ -882,6 +882,7 @@ def _analytics_data(
     team_values = _analytics_filter_values(team)
     lead_owner = lead_owner_values[0] if len(lead_owner_values) == 1 else ""
     team = team_values[0] if len(team_values) == 1 else ""
+    selected_team_users = _analytics_team_member_users(team_values) if is_crm_lead_queue and team_values else None
     department = (department or "").strip()
     if is_crm_lead_queue:
         _apply_crm_lead_analytics_filters(
@@ -1004,7 +1005,7 @@ def _analytics_data(
             is_admin,
             team_scope=team_scope,
             queue_source=queue_source,
-            team=team,
+            team=team_values,
             visible_leads=visible_crm_leads,
         ),
         "is_admin": is_admin,
@@ -1022,6 +1023,7 @@ def _analytics_data(
             agent_user=agent_user_values,
             lead_owner=lead_owner_values,
             team_scope=team_scope,
+            selected_team_users=selected_team_users,
         ),
         "calls": [_performance_call_row(row) for row in call_slice],
         "calls_loaded": include_call_rows,
@@ -1417,6 +1419,7 @@ def _analytics_agents_sql(
     agent_user: str | list[str] | None = None,
     lead_owner: str | None = None,
     team_scope: list[str] | None = None,
+    selected_team_users: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     bucket_expr = _analytics_bucket_sql()
     bucket_filter = _analytics_bucket_filter_sql(status_filter)
@@ -1497,6 +1500,9 @@ def _analytics_agents_sql(
         lead_owner=lead_owner,
         team_scope=team_scope,
     )
+    if selected_team_users is not None:
+        allowed_users = set(selected_team_users)
+        data = [row for row in data if row.get("user") in allowed_users]
     _attach_agent_availability(data)
     return sorted(data, key=lambda row: row["total"], reverse=True)
 
@@ -2553,11 +2559,13 @@ def _analytics_agent_options(
     is_admin: bool,
     team_scope: list[str] | None = None,
     queue_source: str | None = None,
-    team: str | None = None,
+    team: str | list[str] | None = None,
     visible_leads: list[str] | None = None,
 ) -> list[str]:
+    selected_teams = _analytics_filter_values(team)
+    selected_team_users = set(_analytics_team_member_users(selected_teams)) if selected_teams else None
     if team_scope:
-        return team_scope
+        return [user for user in team_scope if selected_team_users is None or user in selected_team_users]
     if not is_admin:
         return [frappe.session.user]
 
@@ -2590,10 +2598,52 @@ def _analytics_agent_options(
     seen = set()
     for value in values:
         value = (value or "").strip()
-        if value and value not in seen and not _is_demo_analytics_user(value):
+        if (
+            value
+            and value not in seen
+            and not _is_demo_analytics_user(value)
+            and (selected_team_users is None or value in selected_team_users)
+        ):
             cleaned.append(value)
             seen.add(value)
     return cleaned
+
+
+def _analytics_team_member_users(team: str | list[str] | None = None) -> list[str]:
+    teams = _analytics_filter_values(team)
+    if not teams:
+        return []
+
+    users: list[str] = []
+    if frappe.db.exists("DocType", "Team"):
+        users.extend(
+            frappe.get_all(
+                "Team",
+                filters={"name": ["in", teams], "is_active": 1},
+                pluck="team_lead",
+                limit_page_length=500,
+            )
+        )
+    if frappe.db.exists("DocType", "Team User"):
+        users.extend(
+            frappe.get_all(
+                "Team User",
+                filters={"parent": ["in", teams], "is_active": 1},
+                pluck="user",
+                limit_page_length=2000,
+            )
+        )
+    if frappe.db.exists("DocType", "Vobiz User Mapping"):
+        users.extend(
+            frappe.get_all(
+                "Vobiz User Mapping",
+                filters={"team": ["in", teams], "enabled": 1},
+                pluck="user",
+                limit_page_length=2000,
+            )
+        )
+
+    return list(dict.fromkeys(user.strip() for user in users if (user or "").strip()))
 
 
 def _analytics_lead_owner_options(queue_source: str | None = None, team: str | list[str] | None = None, visible_leads: list[str] | None = None) -> list[str]:
