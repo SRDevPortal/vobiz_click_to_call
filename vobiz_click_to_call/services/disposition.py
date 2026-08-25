@@ -100,6 +100,12 @@ def save_call_disposition(
         lead_sync = patient_sync
     else:
         lead_sync = sync_call_disposition_safely(doc, disposition, lead_status) if (disposition or lead_status) else {"synced": False, "reason": "No CRM status or disposition provided."}
+        if doc.reference_doctype == "CRM Lead" and (disposition or lead_status) and not lead_sync.get("synced"):
+            frappe.throw(
+                _("Could not update CRM Lead status and disposition: {0}").format(
+                    lead_sync.get("reason") or _("Unknown error")
+                )
+            )
     update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
     sync_linked_summaries(doc)
     add_disposition_comment(doc)

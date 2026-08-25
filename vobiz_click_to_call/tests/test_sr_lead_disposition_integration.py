@@ -54,6 +54,16 @@ class TestSRLeadDispositionIntegration(unittest.TestCase):
         self.assertIn('notes: str = ""', self.disposition_api)
         self.assertIn('notes: str = ""', self.disposition)
         self.assertIn("lead_sync", self.disposition)
+        self.assertIn('doc.reference_doctype == "CRM Lead"', self.disposition)
+        self.assertIn("Could not update CRM Lead status and disposition", self.disposition)
+
+    def test_crm_lead_sync_bypasses_hooks_notifies_and_uses_correct_link_value(self):
+        self.assertIn("frappe.db.set_value(CRM_LEAD", self.lead_disposition)
+        self.assertIn("lead.notify_update()", self.lead_disposition)
+        self.assertNotIn("lead.save(ignore_permissions=True)", self.lead_disposition)
+        self.assertIn('field.fieldtype == "Link"', self.lead_disposition)
+        self.assertIn("field.options == SR_LEAD_DISPOSITION", self.lead_disposition)
+        self.assertIn('sr_disposition.get("name")', self.lead_disposition)
 
     def test_vobiz_settings_ai_options_sync_from_sr_lead_disposition(self):
         self.assertIn("self.sync_ai_disposition_options()", self.vobiz_settings)
