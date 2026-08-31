@@ -13,7 +13,7 @@ from vobiz_click_to_call.api.recording import recording_proxy_url
 from vobiz_click_to_call.services.attendance import agent_attendance_enabled
 from vobiz_click_to_call.services.call_log_update import save_doc_latest, snapshot_doc
 from vobiz_click_to_call.services.client import VobizClient, extract_provider_id
-from vobiz_click_to_call.services.call_status import status_from_provider
+from vobiz_click_to_call.services.call_status import has_confirmed_customer_connection, status_from_provider
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
 from vobiz_click_to_call.services.disposition import update_reference_call_metrics
 from vobiz_click_to_call.services.numbers import mask_phone, normalize_phone_number, numbers_match
@@ -504,8 +504,9 @@ def cancel_call(call_log: str) -> dict[str, Any]:
         log_vobiz_event("Cancel skipped provider hangup; no UUID", call_log=doc.name, severity="Warning", payload=response)
 
     before = snapshot_doc(doc)
-    doc.status = "Cancelled"
-    doc.error_message = "Call cancelled by user."
+    was_connected = has_confirmed_customer_connection(doc.as_dict())
+    doc.status = "Completed" if was_connected else "Cancelled"
+    doc.error_message = "Connected call ended by user." if was_connected else "Call cancelled by user."
     doc.end_time = doc.end_time or frappe.utils.now()
     doc.response_json = merge_json(doc.response_json, {"cancel_response": response})
     doc = save_doc_latest(doc, before)

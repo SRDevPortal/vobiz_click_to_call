@@ -419,6 +419,16 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         self.assertIn("get_lead_disposition_context_api", dialog_source)
         self.assertIn("save_disposition", dialog_source)
 
+    def test_server_stop_call_completes_an_already_connected_call(self):
+        call_api = (Path(__file__).resolve().parents[1] / "api" / "call.py").read_text(encoding="utf-8")
+        start = call_api.index("\ndef cancel_call(")
+        end = call_api.index("\ndef get_my_availability(", start)
+        cancel = call_api[start:end]
+
+        self.assertIn("has_confirmed_customer_connection(doc.as_dict())", cancel)
+        self.assertIn('"Completed" if was_connected else "Cancelled"', cancel)
+        self.assertIn("Connected call ended by user.", cancel)
+
     def test_workdesk_heavy_tabs_are_lazy_loaded(self):
         load_tab_source = self.method_source("load_workdesk_tab", "workdesk_lead_html")
 

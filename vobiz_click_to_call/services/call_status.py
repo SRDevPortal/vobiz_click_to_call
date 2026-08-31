@@ -18,7 +18,9 @@ def call_signal(row: dict[str, Any] | None, *extra_fields: str) -> str:
 def provider_outcome_signal(row: dict[str, Any] | None) -> str:
     """Return provider/B-leg outcomes without the locally derived status."""
     row = row or {}
-    fields = ("call_status", "dial_status", "hangup_cause", "error_message")
+    # error_message also stores local UI actions such as "Call cancelled by
+    # user". It is not a reliable provider/B-leg outcome.
+    fields = ("call_status", "dial_status", "hangup_cause")
     return " ".join(str(row.get(fieldname) or "") for fieldname in fields).strip().lower().replace("_", "-")
 
 
@@ -58,6 +60,12 @@ def _answered_duration_seconds(row: dict[str, Any]) -> int:
 def has_talk_time(row: dict[str, Any] | None) -> bool:
     row = row or {}
     return talk_seconds(row) > 0 or billable_talk_seconds(row) > 0
+
+
+def has_confirmed_customer_connection(row: dict[str, Any] | None) -> bool:
+    row = row or {}
+    status = str(row.get("status") or "").strip()
+    return status in CONNECTED_STATUSES or talk_seconds(row) > 0 or frappe.utils.cint(row.get("recording_duration")) > 0
 
 
 def status_from_provider(
@@ -107,7 +115,7 @@ def status_bucket(row: dict[str, Any] | None) -> str:
         return "failed"
     if "cancel" in outcome_signal or "reject" in outcome_signal or "decline" in outcome_signal:
         return "cancelled"
-    # A positive billsec may only describe the Agent First A-leg.  Check the
+    # A positive billsec may only describe the Agent First A-leg. Check the
     # final B-leg outcome above before treating it as a connected customer call.
     if frappe.utils.cint(row.get("billsec")) > 0:
         return "connected"
