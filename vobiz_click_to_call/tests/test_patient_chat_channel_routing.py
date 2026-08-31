@@ -31,7 +31,7 @@ class TestPatientChatChannelRouting(unittest.TestCase):
 
     def test_patient_access_and_new_conversation_use_department_routing(self):
         self.assertIn(
-            'reference_doctype == "Patient" and not _has_mapped_patient_access',
+            'and not _has_mapped_patient_access(reference_doctype, reference_name)',
             self.source,
         )
         self.assertIn("get_or_create_patient_conversation_for_channel_account", self.source)
@@ -59,6 +59,48 @@ class TestPatientChatChannelRouting(unittest.TestCase):
 
         self.assertIn("if not mapped_channel:", method)
         self.assertIn("_conversation_for_reference_phone(reference_doctype, reference_name)", method)
+
+    def test_mapped_channel_creates_separate_lead_and_patient_conversations(self):
+        start = self.source.index("\ndef get_whatsapp_conversation(")
+        end = self.source.index("\ndef get_whatsapp_messages(", start)
+        method = self.source[start:end]
+
+        self.assertIn("get_or_create_lead_conversation_for_channel_account", method)
+        self.assertIn("get_or_create_patient_conversation_for_channel_account", method)
+        self.assertIn("channel_account=channel_account", method)
+
+    def test_mapped_channel_bypasses_department_gate(self):
+        start = self.source.index("\ndef get_whatsapp_conversation(")
+        end = self.source.index("\ndef get_whatsapp_messages(", start)
+        method = self.source[start:end]
+
+        self.assertIn("not mapped_channel", method)
+        self.assertIn("not _has_mapped_patient_access", method)
+
+    def test_workdesk_access_is_scoped_to_mapped_channel(self):
+        start = self.source.index("\ndef _ensure_whatsapp_conversation_read(")
+        end = self.source.index("\ndef _create_defaults(", start)
+        access = self.source[start:end]
+
+        self.assertIn("conversation_channel == mapped_channel", access)
+        self.assertIn("different Channel Account", access)
+        self.assertIn("ensure_can_read_conversation(conversation)", access)
+
+    def test_template_lookup_uses_already_authorized_channel(self):
+        start = self.source.index("\ndef get_whatsapp_templates(")
+        end = self.source.index("\ndef send_whatsapp_template(", start)
+        templates = self.source[start:end]
+
+        self.assertIn("get_interakt_templates(channel_account=channel_account", templates)
+        self.assertNotIn("get_interakt_templates(conversation=conversation", templates)
+
+    def test_workdesk_preview_is_scoped_to_mapped_channel(self):
+        start = self.source.index("\ndef _whatsapp_preview(")
+        end = self.source.index("\ndef _whatsapp_route_status(", start)
+        preview = self.source[start:end]
+
+        self.assertIn("mapped_channel = _mapped_agent_whatsapp_channel()", preview)
+        self.assertIn("channel_account=mapped_channel", preview)
 
 
 if __name__ == "__main__":

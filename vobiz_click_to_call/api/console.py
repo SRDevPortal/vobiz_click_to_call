@@ -491,11 +491,15 @@ def get_whatsapp_conversation(reference_doctype: str, reference_name: str) -> di
     if not reference_doctype or not reference_name or not frappe.db.exists(reference_doctype, reference_name):
         frappe.throw(_("Reference not found."))
 
+    mapped_channel = _mapped_agent_whatsapp_channel()
     doc = frappe.get_doc(reference_doctype, reference_name)
-    if reference_doctype == "Patient" and not _has_mapped_patient_access(reference_doctype, reference_name):
+    if (
+        not mapped_channel
+        and reference_doctype == "Patient"
+        and not _has_mapped_patient_access(reference_doctype, reference_name)
+    ):
         frappe.throw(_("This Patient is not assigned to your Medical Department."), frappe.PermissionError)
 
-    mapped_channel = _mapped_agent_whatsapp_channel()
     if not mapped_channel:
         # Preserve the existing fallback exactly when the agent has no channel mapping.
         conversation = _conversation_for_reference_phone(reference_doctype, reference_name)
@@ -515,6 +519,35 @@ def get_whatsapp_conversation(reference_doctype: str, reference_name: str) -> di
         )
         if conversation:
             return {"success": True, "conversation": conversation}
+
+        # A mapped account is an explicit Workdesk route. Create a separate
+        # conversation on that account instead of opening/reusing one from a
+        # different account or applying CRM Lead owner/pipeline permissions.
+        if reference_doctype == "CRM Lead":
+            from wa_chat_hub.channel_resolver import get_or_create_lead_conversation_for_channel_account
+
+            result = get_or_create_lead_conversation_for_channel_account(doc, channel_account) or {}
+            if result.get("conversation"):
+                return {
+                    "success": True,
+                    "conversation": result.get("conversation"),
+                    "created": bool(result.get("created")),
+                }
+
+        patient_name = _resolve_patient(reference_doctype, reference_name, doc)
+        if patient_name and frappe.db.exists("Patient", patient_name):
+            from wa_chat_hub.channel_resolver import get_or_create_patient_conversation_for_channel_account
+
+            result = get_or_create_patient_conversation_for_channel_account(
+                frappe.get_doc("Patient", patient_name),
+                channel_account,
+            ) or {}
+            if result.get("conversation"):
+                return {
+                    "success": True,
+                    "conversation": result.get("conversation"),
+                    "created": bool(result.get("created")),
+                }
 
     if reference_doctype == "Patient":
         try:
@@ -636,7 +669,10 @@ def get_whatsapp_templates(conversation: str, force_refresh: int | str = 0) -> d
     try:
         from wa_chat_hub.api.runtime import get_interakt_templates
 
-        response = get_interakt_templates(conversation=conversation, force_refresh=force_refresh)
+        # Workdesk already authorized the mapped account above. Passing the
+        # account directly avoids the WA Hub's CRM Lead permission path.
+        channel_account = frappe.db.get_value("Chat Conversation", conversation, "channel_account")
+        response = get_interakt_templates(channel_account=channel_account, force_refresh=force_refresh)
         result = response.get("result") or {}
         return {
             "success": True,
@@ -3976,6 +4012,9 @@ def _resolve_patient(
     doc,
     allow_phone_lookup: bool = True,
 ) -> str | None:
+    if reference_doctype == "Patient":
+        return reference_name
+
     meta = frappe.get_meta(reference_doctype)
     for fieldname in ("sr_source_patient", "patient"):
         if meta.has_field(fieldname) and doc.get(fieldname):
@@ -4192,7 +4231,12 @@ def _whatsapp_preview(reference_doctype: str, reference_name: str) -> dict[str, 
     if not frappe.db.exists("DocType", "Chat Conversation"):
         return {"available": False, "message": _("WA Chat Hub is not installed.")}
 
-    conversation = _conversation_for_reference_phone(reference_doctype, reference_name)
+    mapped_channel = _mapped_agent_whatsapp_channel()
+    conversation = _conversation_for_reference_phone(
+        reference_doctype,
+        reference_name,
+        channel_account=mapped_channel,
+    )
 
     if conversation:
         fields = _existing_fields(frappe.get_meta("Chat Conversation"), (
@@ -4395,6 +4439,17 @@ def _whatsapp_messages_page(conversation: str, limit: int | str = 30, before: st
 def _ensure_whatsapp_conversation_read(conversation: str) -> None:
     if not conversation or not frappe.db.exists("Chat Conversation", conversation):
         frappe.throw(_("WhatsApp conversation not found."))
+
+    mapped_channel = _mapped_agent_whatsapp_channel()
+    if mapped_channel:
+        conversation_channel = frappe.db.get_value("Chat Conversation", conversation, "channel_account")
+        if conversation_channel == mapped_channel:
+            return
+        frappe.throw(
+            _("This WhatsApp conversation belongs to a different Channel Account."),
+            frappe.PermissionError,
+        )
+
     try:
         from wa_chat_hub.permissions import ensure_can_read_conversation
 
