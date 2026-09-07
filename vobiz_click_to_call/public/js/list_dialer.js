@@ -95,6 +95,14 @@
                 const message = r.message || {};
                 $(document).trigger("vobiz_refresh_availability");
                 $(document).trigger("vobiz_list_call_started", [message.call_log]);
+                if (message.confirmation_pending) {
+                    frappe.msgprint({
+                        title: __("Vobiz confirmation pending"),
+                        message: __(message.user_message || "Vobiz response is delayed. The call may still start; please do not try again while we confirm it."),
+                        indicator: "orange",
+                    });
+                    return;
+                }
                 frappe.show_alert({
                     message: __("Call started: {0}", [message.call_log || "Vobiz"]),
                     indicator: "green",

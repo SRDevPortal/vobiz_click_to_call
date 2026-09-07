@@ -97,7 +97,15 @@ def status_from_provider(
     if "completed" in signal or "hangup" in signal or "normal-clearing" in signal or "normal clearing" in signal:
         if previous in CONNECTED_STATUSES or previous == "Connected":
             return "No Answer"
-        if previous in {"Agent Answered", "Customer Answered", "Agent Ringing", "Queued", "Ringing"}:
+        if previous in {
+            "Agent Answered",
+            "Customer Answered",
+            "Agent Ringing",
+            "Queued",
+            "Ringing",
+            "Confirmation Pending",
+            "Provider Unconfirmed",
+        }:
             return "Cancelled"
         return previous or "No Answer"
     return previous or ""

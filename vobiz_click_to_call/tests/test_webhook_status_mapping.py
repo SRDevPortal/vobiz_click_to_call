@@ -63,7 +63,15 @@ class TestWebhookStatusMapping(unittest.TestCase):
         self.assertEqual(latest.recording_url, "https://recording.example/file.mp3")
 
     def test_pre_bridge_hangup_is_terminal_cancelled(self):
-        for previous in ("Queued", "Ringing", "Customer Answered", "Agent Answered", "Agent Ringing"):
+        for previous in (
+            "Queued",
+            "Ringing",
+            "Customer Answered",
+            "Agent Answered",
+            "Agent Ringing",
+            "Confirmation Pending",
+            "Provider Unconfirmed",
+        ):
             with self.subTest(previous=previous):
                 self.assertEqual(_status_from_hangup("completed", "", previous=previous), "Cancelled")
                 self.assertEqual(_status_from_hangup("hangup", "", previous=previous), "Cancelled")

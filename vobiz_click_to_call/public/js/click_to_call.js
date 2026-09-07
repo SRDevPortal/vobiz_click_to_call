@@ -14,7 +14,7 @@
 
     const DEFAULT_DOCTYPES = ["CRM Lead", "Contact", "Patient", "Customer"];
     let DOCTYPES = DEFAULT_DOCTYPES.slice();
-    const TERMINAL_STATUSES = ["Completed", "Failed", "Busy", "No Answer", "Cancelled"];
+    const TERMINAL_STATUSES = ["Completed", "Failed", "Busy", "No Answer", "Cancelled", "Provider Unconfirmed"];
     let currentPoller = null;
     let statusPollInFlight = false;
     const registeredDoctypes = new Set();
@@ -289,6 +289,14 @@
                 const message = r.message || {};
                 $(document).trigger("vobiz_refresh_availability");
                 showLivePanel(message.call_log, frm);
+                if (message.confirmation_pending) {
+                    frappe.msgprint({
+                        title: __("Vobiz confirmation pending"),
+                        message: __(message.user_message || "Vobiz response is delayed. The call may still start; please do not try again while we confirm it."),
+                        indicator: "orange",
+                    });
+                    return;
+                }
                 frappe.show_alert({
                     message: __("Call started: {0}", [message.call_log || "Vobiz"]),
                     indicator: "green",
@@ -410,7 +418,7 @@
                 $(document).trigger("vobiz_refresh_availability");
                 if (frm) renderCallHistory(frm);
                 notifyCompletion(data.status);
-                if (!data.disposition && !$panel.data("disposition-opened")) {
+                if (data.status !== "Provider Unconfirmed" && !data.disposition && !$panel.data("disposition-opened")) {
                     $panel.data("disposition-opened", true);
                     openDispositionDialog(callLog, data.status, frm);
                 }
@@ -515,6 +523,8 @@
             Connected: __("Connected"),
             Completed: __("Call completed"),
             Failed: __("Call failed"),
+            "Confirmation Pending": __("Vobiz response delayed. Confirming call..."),
+            "Provider Unconfirmed": __("Vobiz did not confirm the call. Check call history before retrying."),
             Busy: __("Busy"),
             "No Answer": __("No answer"),
             Cancelled: __("Cancelled"),

@@ -59,7 +59,7 @@ def ring(call_log: str | None = None, token: str | None = None):
     _log_webhook_event("ring received", doc, payload)
     before = snapshot_doc(doc)
     _apply_common_payload(doc, payload)
-    if doc.status == "Queued":
+    if doc.status in {"Queued", "Confirmation Pending", "Provider Unconfirmed"}:
         doc.status = "Ringing"
     if not doc.start_time:
         doc.start_time = frappe.utils.now()
@@ -491,11 +491,9 @@ def _append_callback_if_enabled(call_log: str, event: str, payload: dict) -> Non
             queue="short",
             timeout=120,
             enqueue_after_commit=True,
-            kwargs={
-                "call_log": call_log,
-                "event": event,
-                "payload": _bounded_payload(payload),
-            },
+            call_log=call_log,
+            event=event,
+            payload=_bounded_payload(payload),
         )
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Vobiz callback payload append failed")
@@ -664,7 +662,10 @@ def _status_from_hangup(
         return "Completed"
     if previous in {"Agent Answered", "Customer Answered", "Agent Ringing"} and status in {"completed", "hangup"}:
         return "Cancelled"
-    if previous in {"Queued", "Ringing"} and status in {"completed", "hangup"}:
+    if previous in {"Queued", "Ringing", "Confirmation Pending", "Provider Unconfirmed"} and status in {
+        "completed",
+        "hangup",
+    }:
         return "Cancelled"
     if previous == "Connected":
         return "No Answer"
