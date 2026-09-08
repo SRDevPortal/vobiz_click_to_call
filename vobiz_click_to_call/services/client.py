@@ -33,7 +33,7 @@ class VobizClient:
         url = f"{self.base_url}/Account/{self.auth_id}/Call/{call_uuid}/Record/"
         return self._post(url, payload, "Vobiz recording request failed")
 
-    def hangup_call(self, call_uuid: str) -> dict[str, Any]:
+    def hangup_call(self, call_uuid: str, *, allow_missing: bool = False) -> dict[str, Any]:
         if not self.auth_id or not self.auth_token:
             frappe.throw(_("Vobiz Auth ID/Auth Token are not configured."))
         if not call_uuid:
@@ -58,6 +58,11 @@ class VobizClient:
         except Exception:
             data = {"raw_response": response.text}
         message = _bounded_error_message(data.get("message") or data.get("error") or response.text or response.reason)
+        # Browser SDK hangup can win the race with this REST request. Opt in only
+        # where the caller retains the reservation and reconciles final state.
+        if allow_missing and response.status_code in (400, 404, 410) and message.strip().lower() == "call not found":
+            return {"message": "Call no longer found; confirm final state", "status_code": response.status_code,
+                    "call_missing": True}
         frappe.throw(_("Vobiz hangup request failed: {0}").format(message))
 
     def search_cdrs(self, params: dict[str, Any] | None = None) -> dict[str, Any]:

@@ -405,6 +405,7 @@ def get_call_status(call_log: str, sync_provider: int | str = 1) -> dict[str, An
 
     return {
         "name": doc.name,
+        "direction": doc.direction,
         "status": doc.status,
         "reference_doctype": doc.reference_doctype,
         "reference_name": doc.reference_name,
