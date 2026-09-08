@@ -36,13 +36,19 @@ def recover_stale_ringing_calls() -> dict:
     calls = frappe.get_all(
         "Vobiz Call Log",
         filters={"name": ["in", call_names], "status": ["in", list(STALE_RINGING_STATUSES)]},
-        fields=["name", "status", "start_time", "creation", "answer_time"],
+        fields=["name", "status", "start_time", "creation", "answer_time", "request_json"],
         order_by="name asc",
         limit_page_length=STALE_RINGING_RECOVERY_LIMIT,
     )
     now = frappe.utils.now_datetime()
     stale_names = []
     for call in calls:
+        try:
+            request = json.loads(call.get("request_json") or "{}")
+        except (ValueError, TypeError):
+            request = {}
+        if isinstance(request, dict) and request.get("source") == "vobiz_system_call":
+            continue  # Only provider-aware recovery may release browser calls.
         if call.answer_time:
             continue
         started_at = call.start_time or call.creation

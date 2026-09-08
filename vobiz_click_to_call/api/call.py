@@ -885,9 +885,16 @@ def is_active_call_log(call_log: str | None) -> bool:
     if not call_log or not frappe.db.exists("Vobiz Call Log", call_log):
         return False
 
-    row = frappe.db.get_value("Vobiz Call Log", call_log, ["status", "modified"], as_dict=True)
+    row = frappe.db.get_value("Vobiz Call Log", call_log, ["status", "modified", "request_json"], as_dict=True)
     if not row or row.status in TERMINAL_STATUSES:
         return False
+    # Browser calls have provider-aware recovery in vobiz_system_call.
+    try:
+        request = json.loads(row.get("request_json") or "{}")
+    except (ValueError, TypeError):
+        request = {}
+    if isinstance(request, dict) and request.get("source") == "vobiz_system_call":
+        return True
     if row.status == "Confirmation Pending" and row.modified:
         age_seconds = (frappe.utils.now_datetime() - frappe.utils.get_datetime(row.modified)).total_seconds()
         return age_seconds < CONFIRMATION_PENDING_SECONDS
