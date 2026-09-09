@@ -487,12 +487,12 @@ def _append_callback_if_enabled(call_log: str, event: str, payload: dict) -> Non
         if not get_settings().store_raw_payloads:
             return
         frappe.enqueue(
-            "vobiz_ai.api.call_log.append_callback",
+            "vobiz_click_to_call.services.callback_logging.append_callback_job",
             queue="short",
             timeout=120,
             enqueue_after_commit=True,
             call_log=call_log,
-            event=event,
+            event_type=event,
             payload=_bounded_payload(payload),
         )
     except Exception:

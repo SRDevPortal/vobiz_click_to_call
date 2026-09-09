@@ -13,7 +13,7 @@ app_include_js = [
     "/assets/vobiz_click_to_call/js/click_to_call.js",
     "/assets/vobiz_click_to_call/js/list_dialer.js",
     "/assets/vobiz_click_to_call/js/call_log.js",
-    "/assets/vobiz_click_to_call/js/availability.js?v=20260723.3",
+    "/assets/vobiz_click_to_call/js/availability.js?v=20260909.2",
 ]
 
 doctype_js = {

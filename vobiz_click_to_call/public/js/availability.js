@@ -1,5 +1,5 @@
 (function () {
-    const AGENT_CONSOLE_PAGE_CACHE_VERSION = "20260723.3";
+    const AGENT_CONSOLE_PAGE_CACHE_VERSION = "20260909.2";
     const AGENT_CONSOLE_PAGE_CACHE_VERSION_KEY = "vobiz_agent_console_page_cache_version";
     try {
         if (window.localStorage) {
@@ -44,6 +44,7 @@
     let trackingActivity = false;
     let idleInactive = false;
     let lastRouteKey = "";
+    let navbarObserver = null;
 
     function currentRoute() {
         if (!window.frappe || !frappe.get_route) return [];
@@ -58,13 +59,21 @@
         if (!(window.location && window.location.pathname && window.location.pathname.indexOf("/app") === 0)) {
             return false;
         }
-        const route = currentRoute();
-        return route[0] !== "vobiz-agent-console";
+        return true;
     }
 
     function init() {
         if (!window.frappe || !frappe.session || frappe.session.user === "Guest") return;
         bindBreakSyncEvents();
+        if (!navbarObserver && window.MutationObserver && document.body) {
+            navbarObserver = new MutationObserver(() => {
+                if (currentAvailability && currentAvailability.is_mapped
+                    && $(".navbar .navbar-nav").length && !$("#vobiz-availability-control").length) {
+                    renderControl(currentAvailability);
+                }
+            });
+            navbarObserver.observe(document.body, { childList: true, subtree: true });
+        }
         if (!shouldLoadAvailability()) {
             stopActivityTracking(true);
             return;
@@ -567,6 +576,11 @@
     }
 
     function startActivityTracking() {
+        // The console owns its attendance heartbeat; the navbar still renders there.
+        if (currentRoute()[0] === "vobiz-agent-console") {
+            stopActivityTracking(false);
+            return;
+        }
         if (!currentAvailability || !currentAvailability.is_mapped || !shouldLoadAvailability()) return;
         bindActivityEvents();
         const wasTracking = trackingActivity;
@@ -772,13 +786,12 @@
     $(document).on("vobiz_refresh_availability", refresh);
     $(document).on("page-change route-change", handleRouteChange);
 
-    if (frappe.ready) {
-        frappe.ready(init);
-    } else {
-        $(init);
-    }
+    if (frappe.ready) frappe.ready(init);
+    // Desk does not always run the website-ready callback queue.
+    $(init);
 
     window.vobiz_click_to_call = window.vobiz_click_to_call || {};
+    window.vobiz_click_to_call.refresh_availability = init;
     window.vobiz_click_to_call.get_availability = function () {
         return currentAvailability;
     };
