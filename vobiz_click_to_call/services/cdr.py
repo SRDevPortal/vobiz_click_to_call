@@ -381,8 +381,9 @@ def _normalize_cdr_phone(value: str | None) -> str:
 
 def build_cdr_search_params(doc) -> dict[str, Any]:
     params: dict[str, Any] = {}
-    if doc.call_uuid:
-        params["call_uuid"] = doc.call_uuid
+    lookup_uuid = doc.call_uuid or doc.get("recording_call_uuid")
+    if lookup_uuid:
+        params["call_uuid"] = lookup_uuid
     if doc.request_uuid:
         params["request_uuid"] = doc.request_uuid
     if doc.customer_number:
@@ -401,7 +402,15 @@ def find_matching_cdr(doc, response: dict) -> dict | None:
     if not candidates:
         return None
 
-    provider_ids = {value for value in (doc.call_uuid, doc.request_uuid, doc.a_leg_uuid, doc.b_leg_uuid) if value}
+    provider_ids = {
+        value for value in (
+            doc.call_uuid,
+            doc.get("recording_call_uuid"),
+            doc.request_uuid,
+            doc.a_leg_uuid,
+            doc.b_leg_uuid,
+        ) if value
+    }
     for cdr in candidates:
         values = {str(value) for value in cdr.values() if value}
         if provider_ids.intersection(values):
@@ -450,7 +459,10 @@ def apply_cdr_to_call_log(doc, cdr: dict, raw_response: dict) -> None:
     doc.currency = cdr.get("currency") or doc.currency or "INR"
     doc.hangup_cause = cdr.get("hangup_cause") or cdr.get("hangup_cause_name") or doc.hangup_cause
     doc.call_status = cdr.get("status") or cdr.get("call_status") or doc.call_status
-    doc.recording_url = cdr.get("recording_url") or cdr.get("record_url") or doc.recording_url
+    recording_url = cdr.get("recording_url") or cdr.get("record_url") or doc.recording_url
+    doc.recording_url = recording_url
+    if recording_url and doc.recording_status != "Completed":
+        doc.recording_status = "Completed"
     doc.status = status_from_cdr(cdr, doc.status)
     doc.save(ignore_permissions=True)
     update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
