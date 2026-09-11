@@ -646,6 +646,7 @@ def send_whatsapp_reply(conversation: str, body: str) -> dict[str, Any]:
     convo = frappe.get_doc("Chat Conversation", conversation)
     contact_phone = frappe.db.get_value("Chat Contact", convo.contact, "phone_number")
     result = append_message({
+        "conversation": conversation,
         "channel_account": convo.channel_account,
         "phone_number": contact_phone,
         "direction": "Outbound",
@@ -730,6 +731,7 @@ def send_whatsapp_template(
     contact_phone = frappe.db.get_value("Chat Contact", convo.contact, "phone_number")
     body_text = (body_preview or "").strip() or _("Template: {0}").format(template_name)
     result = append_message({
+        "conversation": conversation,
         "channel_account": convo.channel_account,
         "phone_number": contact_phone,
         "direction": "Outbound",
@@ -4499,33 +4501,14 @@ def _conversation_for_reference_phone(
     reference_name: str,
     channel_account: str | None = None,
 ) -> str | None:
+    from wa_chat_hub.services import find_conversation_for_phone
+
     phone = _reference_phone_for_whatsapp(reference_doctype, reference_name)
     last10 = _last_10_digits(phone)
     if not last10 or not frappe.db.exists("DocType", "Chat Contact") or not frappe.db.exists("DocType", "Chat Conversation"):
         return None
 
-    contacts = frappe.get_all(
-        "Chat Contact",
-        filters={"phone_number": ["in", _whatsapp_phone_candidates(phone)]},
-        fields=["name", "phone_number", "modified"],
-        order_by="modified desc",
-        limit_page_length=20,
-    )
-    for contact in contacts:
-        if _last_10_digits(contact.get("phone_number")) != last10:
-            continue
-        conversation_filters = {"contact": contact.name}
-        if channel_account:
-            conversation_filters["channel_account"] = channel_account
-        conversation = frappe.db.get_value(
-            "Chat Conversation",
-            conversation_filters,
-            "name",
-            order_by="modified desc",
-        )
-        if conversation:
-            return conversation
-    return None
+    return find_conversation_for_phone(phone, channel_account=channel_account)
 
 
 def _reference_phone_for_whatsapp(reference_doctype: str, reference_name: str) -> str | None:
