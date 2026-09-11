@@ -50,7 +50,7 @@ class TestPatientChatChannelRouting(unittest.TestCase):
         end = self.source.index("\ndef _reference_phone_for_whatsapp(", start)
         lookup = self.source[start:end]
 
-        self.assertIn('conversation_filters["channel_account"] = channel_account', lookup)
+        self.assertIn('find_conversation_for_phone(phone, channel_account=channel_account)', lookup)
 
     def test_missing_user_channel_preserves_existing_fallback(self):
         start = self.source.index("\ndef get_whatsapp_conversation(")
