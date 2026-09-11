@@ -153,10 +153,12 @@ def get_manual_disposition_options(
         from vobiz_click_to_call.services.lead_disposition import get_lead_disposition_options
 
         options = get_lead_disposition_options(reference_doctype, reference_name, lead_status)
-        if options:
+        if options or reference_doctype == "CRM Lead":
             return options
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Vobiz manual SR Lead Disposition options failed")
+        if reference_doctype == "CRM Lead":
+            raise
 
     settings = settings or get_settings()
     raw = settings.manual_disposition_options or (

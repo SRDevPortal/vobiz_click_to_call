@@ -96,6 +96,20 @@ class TestServerSafetyGuards(unittest.TestCase):
         self.assertIn("this.load_in_flight", agent_console)
         self.assertIn('route[0] !== "vobiz-agent-console"', availability)
 
+    def test_read_timeout_is_confirmation_pending_without_automatic_retry(self):
+        call_api = CALL.read_text(encoding="utf-8")
+        webhook = WEBHOOK.read_text(encoding="utf-8")
+        click_to_call = CLICK_TO_CALL.read_text(encoding="utf-8")
+
+        self.assertIn("except ReadTimeout as exc:", call_api)
+        self.assertIn("SET `status` = 'Confirmation Pending'", call_api)
+        self.assertIn("CONFIRMATION_PENDING_SECONDS = 60", call_api)
+        self.assertIn('doc.status = "Provider Unconfirmed"', call_api)
+        self.assertIn("FOR UPDATE", call_api)
+        self.assertNotIn("except ReadTimeout as exc:\n        response = VobizClient", call_api)
+        self.assertIn('"Confirmation Pending", "Provider Unconfirmed"', webhook)
+        self.assertIn("message.confirmation_pending", click_to_call)
+
     def test_cdr_jobs_are_bounded_and_deduplicated(self):
         cdr = CDR.read_text(encoding="utf-8")
         ai = AI.read_text(encoding="utf-8")

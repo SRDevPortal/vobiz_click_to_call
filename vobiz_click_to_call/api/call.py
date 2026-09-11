@@ -7,13 +7,14 @@ from zoneinfo import ZoneInfo
 
 import frappe
 from frappe import _
+from requests.exceptions import ReadTimeout
 
 from vobiz_ai.api.call_log import create_outbound_call_log, sync_linked_summaries
 from vobiz_click_to_call.api.recording import recording_proxy_url
 from vobiz_click_to_call.services.attendance import agent_attendance_enabled
 from vobiz_click_to_call.services.call_log_update import save_doc_latest, snapshot_doc
 from vobiz_click_to_call.services.client import VobizClient, extract_provider_id
-from vobiz_click_to_call.services.call_status import status_from_provider
+from vobiz_click_to_call.services.call_status import has_confirmed_customer_connection, status_from_provider
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
 from vobiz_click_to_call.services.disposition import update_reference_call_metrics
 from vobiz_click_to_call.services.numbers import mask_phone, normalize_phone_number, numbers_match
@@ -49,7 +50,7 @@ PREFERRED_PHONE_FIELDS = (
     "alternate_phone",
 )
 
-TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
+TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled", "Provider Unconfirmed"}
 USER_SET_AVAILABILITY_STATUSES = {"Available", "Away", "Offline"}
 AGENT_ATTENDANCE_DOCTYPE = "Vobiz Agent Attendance Log"
 AVAILABILITY_ATTENDANCE_SOURCE = "Availability"
@@ -57,6 +58,7 @@ AVAILABILITY_ATTENDANCE_TAB = "__availability__"
 AGENT_ATTENDANCE_TZ = ZoneInfo("Asia/Kolkata")
 STALE_STARTUP_STATUSES = {"Queued", "Initiated", "Dialing", "Ringing", "Connecting"}
 STALE_STARTUP_CALL_SECONDS = 10 * 60
+CONFIRMATION_PENDING_SECONDS = 60
 IDLE_AUTO_OFFLINE_EXEMPT_ROLES = {
     "System Manager",
     "Manager",
@@ -187,6 +189,10 @@ def start_call(
     mapping = get_user_mapping(frappe.session.user)
     if not mapping:
         frappe.throw(_("No active Vobiz user mapping found for your user."))
+    _lock_user_mapping(mapping["name"])
+    mapping = get_user_mapping(frappe.session.user)
+    if not mapping:
+        frappe.throw(_("No active Vobiz user mapping found for your user."))
     unavailable_reason = get_mapping_unavailable_reason(mapping)
     if unavailable_reason:
         frappe.throw(unavailable_reason)
@@ -266,6 +272,11 @@ def start_call(
 
     try:
         response = VobizClient(settings).make_call(payload)
+    except ReadTimeout as exc:
+        confirmation_pending = _mark_confirmation_pending(call_log, exc)
+        return _call_start_result(
+            call_log, call_flow, customer_number, user_mobile, confirmation_pending=confirmation_pending
+        )
     except Exception as exc:
         if _is_unowned_from_number_error(exc) and default_caller_id and caller_id != default_caller_id:
             caller_id = default_caller_id
@@ -303,13 +314,28 @@ def start_call(
     log_vobiz_event("Provider make_call response received", call_log=call_log.name, payload=response)
     frappe.db.commit()
 
-    return {
+    return _call_start_result(call_log, call_flow, customer_number, user_mobile)
+
+
+def _call_start_result(call_log, call_flow: str, customer_number: str, user_mobile: str, *, confirmation_pending=False):
+    result = {
         "call_log": call_log.name,
         "status": call_log.status,
         "call_flow": call_flow,
         "customer_number": customer_number,
         "agent_mobile_display": mask_phone(user_mobile),
     }
+    if confirmation_pending:
+        result.update(
+            {
+                "confirmation_pending": True,
+                "retry_after_seconds": CONFIRMATION_PENDING_SECONDS,
+                "user_message": _(
+                    "Vobiz response is delayed. The call may still start; please do not try again while we confirm it."
+                ),
+            }
+        )
+    return result
 
 
 def _is_unowned_from_number_error(exc: Exception) -> bool:
@@ -333,6 +359,36 @@ def _fail_provider_call(call_log, exc: Exception) -> None:
     )
 
 
+def _mark_confirmation_pending(call_log, exc: ReadTimeout) -> bool:
+    # A webhook may win the race while the synchronous request is timing out.
+    # Only unresolved startup rows may be moved to the uncertain state.
+    frappe.db.sql(
+        """
+        UPDATE `tabVobiz Call Log`
+        SET `status` = 'Confirmation Pending',
+            `error_message` = %(error)s,
+            `modified` = NOW(6),
+            `modified_by` = %(modified_by)s
+        WHERE `name` = %(name)s
+          AND `status` IN ('Queued', 'Initiated')
+          AND COALESCE(`call_uuid`, '') = ''
+        """,
+        {"name": call_log.name, "error": str(exc), "modified_by": frappe.session.user},
+    )
+    frappe.db.commit()
+    call_log.reload()
+    if call_log.status != "Confirmation Pending":
+        return False
+    log_vobiz_event(
+        "Provider make_call confirmation pending",
+        call_log=call_log.name,
+        severity="Warning",
+        payload={"error": str(exc), "retry_after_seconds": CONFIRMATION_PENDING_SECONDS},
+        traceback=frappe.get_traceback(),
+    )
+    return True
+
+
 @frappe.whitelist()
 def get_call_status(call_log: str, sync_provider: int | str = 1) -> dict[str, Any]:
     if frappe.session.user == "Guest":
@@ -342,11 +398,14 @@ def get_call_status(call_log: str, sync_provider: int | str = 1) -> dict[str, An
     if "System Manager" not in frappe.get_roles() and doc.user != frappe.session.user:
         frappe.throw(_("Not permitted."))
 
+    _expire_confirmation_pending(doc)
+
     if frappe.utils.cint(sync_provider):
         sync_live_call_if_finished(doc)
 
     return {
         "name": doc.name,
+        "direction": doc.direction,
         "status": doc.status,
         "reference_doctype": doc.reference_doctype,
         "reference_name": doc.reference_name,
@@ -379,6 +438,23 @@ def get_call_status(call_log: str, sync_provider: int | str = 1) -> dict[str, An
         "billsec": doc.billsec,
         "can_cancel": doc.status not in TERMINAL_STATUSES,
     }
+
+
+def _expire_confirmation_pending(doc) -> None:
+    if doc.status != "Confirmation Pending" or not doc.modified:
+        return
+    age_seconds = (frappe.utils.now_datetime() - frappe.utils.get_datetime(doc.modified)).total_seconds()
+    if age_seconds < CONFIRMATION_PENDING_SECONDS:
+        return
+
+    before = snapshot_doc(doc)
+    doc.status = "Provider Unconfirmed"
+    doc.error_message = _(
+        "Vobiz did not confirm this request within {0} seconds. Verify the provider call history before retrying."
+    ).format(CONFIRMATION_PENDING_SECONDS)
+    doc = save_doc_latest(doc, before)
+    restore_mapping_after_call(doc.name)
+    frappe.db.commit()
 
 
 def sync_live_call_if_finished(doc) -> None:
@@ -504,8 +580,9 @@ def cancel_call(call_log: str) -> dict[str, Any]:
         log_vobiz_event("Cancel skipped provider hangup; no UUID", call_log=doc.name, severity="Warning", payload=response)
 
     before = snapshot_doc(doc)
-    doc.status = "Cancelled"
-    doc.error_message = "Call cancelled by user."
+    was_connected = has_confirmed_customer_connection(doc.as_dict())
+    doc.status = "Completed" if was_connected else "Cancelled"
+    doc.error_message = "Connected call ended by user." if was_connected else "Call cancelled by user."
     doc.end_time = doc.end_time or frappe.utils.now()
     doc.response_json = merge_json(doc.response_json, {"cancel_response": response})
     doc = save_doc_latest(doc, before)
@@ -646,6 +723,14 @@ def _record_availability_attendance(user: str, status: str) -> None:
             "source": AVAILABILITY_ATTENDANCE_SOURCE,
         }
     ).insert(ignore_permissions=True)
+
+
+def _lock_user_mapping(mapping_name: str) -> None:
+    """Serialize call starts for one agent until mark_mapping_busy is committed."""
+    frappe.db.sql(
+        "SELECT `name` FROM `tabVobiz User Mapping` WHERE `name` = %s FOR UPDATE",
+        mapping_name,
+    )
 
 
 def get_user_mapping(user: str) -> dict[str, Any] | None:
@@ -801,9 +886,19 @@ def is_active_call_log(call_log: str | None) -> bool:
     if not call_log or not frappe.db.exists("Vobiz Call Log", call_log):
         return False
 
-    row = frappe.db.get_value("Vobiz Call Log", call_log, ["status", "modified"], as_dict=True)
+    row = frappe.db.get_value("Vobiz Call Log", call_log, ["status", "modified", "request_json"], as_dict=True)
     if not row or row.status in TERMINAL_STATUSES:
         return False
+    # Browser calls have provider-aware recovery in vobiz_system_call.
+    try:
+        request = json.loads(row.get("request_json") or "{}")
+    except (ValueError, TypeError):
+        request = {}
+    if isinstance(request, dict) and request.get("source") == "vobiz_system_call":
+        return True
+    if row.status == "Confirmation Pending" and row.modified:
+        age_seconds = (frappe.utils.now_datetime() - frappe.utils.get_datetime(row.modified)).total_seconds()
+        return age_seconds < CONFIRMATION_PENDING_SECONDS
     if row.status in STALE_STARTUP_STATUSES and row.modified:
         age_seconds = (frappe.utils.now_datetime() - frappe.utils.get_datetime(row.modified)).total_seconds()
         if age_seconds > STALE_STARTUP_CALL_SECONDS:

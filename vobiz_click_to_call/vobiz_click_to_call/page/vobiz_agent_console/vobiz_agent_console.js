@@ -2198,7 +2198,7 @@ class VobizAgentConsole {
 		const firstNumber = flow === 'Agent First' ? call.agent_mobile_display : call.customer_number_display;
 		const secondNumber = flow === 'Agent First' ? call.customer_number_display : call.agent_mobile_display;
 		const status = call.status || '';
-		const terminal = ['Completed', 'Failed', 'Busy', 'No Answer', 'Cancelled', 'Canceled'].includes(status);
+		const terminal = ['Completed', 'Failed', 'Busy', 'No Answer', 'Cancelled', 'Canceled', 'Provider Unconfirmed'].includes(status);
 		const answeredFirst = Boolean(call.answer_time) || ['Agent Answered', 'Customer Answered', 'Agent Ringing', 'Connected', 'Completed'].includes(status);
 		const connected = ['Connected', 'Completed'].includes(status);
 
@@ -3329,6 +3329,15 @@ class VobizAgentConsole {
 				this.update_workdesk_primary_action(row);
 				this.refresh_workdesk_live_call();
 			}
+			if (message.confirmation_pending) {
+				frappe.msgprint({
+					title: __('Vobiz confirmation pending'),
+					message: __(message.user_message || 'Vobiz response is delayed. The call may still start; please do not try again while we confirm it.'),
+					indicator: 'orange'
+				});
+				this.load();
+				return message;
+			}
 			frappe.show_alert({ message: __('Call started: {0}', [message.call_log || 'Vobiz']), indicator: 'green' });
 			this.load();
 			return message;
@@ -3524,7 +3533,7 @@ class VobizAgentConsole {
 		const current = session.current || {};
 		if (!current.call_log || session.polling_current) return;
 		const active = this.state.active_call || {};
-		const terminal = ['Completed', 'Failed', 'Busy', 'No Answer', 'Cancelled', 'Canceled'];
+		const terminal = ['Completed', 'Failed', 'Busy', 'No Answer', 'Cancelled', 'Canceled', 'Provider Unconfirmed'];
 
 		if (!force && active.name === current.call_log && !terminal.includes(active.status)) {
 			current.status = active.status || current.status;
@@ -3554,7 +3563,11 @@ class VobizAgentConsole {
 			this.render_auto_call_dialog();
 
 			if (terminal.includes(call.status)) {
-				this.finish_auto_dial_call(call);
+				if (call.status === 'Provider Unconfirmed') {
+					this.stop_auto_dial_after_unconfirmed(call);
+				} else {
+					this.finish_auto_dial_call(call);
+				}
 			} else {
 				this.add_auto_event(__('Call update'), `${latestCurrent.lead} • ${call.status || __('Active')}`, 'active');
 			}
@@ -3566,6 +3579,36 @@ class VobizAgentConsole {
 			const latest = this.state.auto_dial || {};
 			latest.polling_current = false;
 			this.state.auto_dial = latest;
+		});
+	}
+
+	stop_auto_dial_after_unconfirmed(call) {
+		const session = this.state.auto_dial || {};
+		const current = session.current || {};
+		session.results = session.results || [];
+		session.results.push({
+			lead: current.lead,
+			title: current.title,
+			phone: current.phone,
+			call_log: call.name,
+			status: __('Provider Unconfirmed'),
+			duration: this.call_duration_label(call),
+			time: frappe.datetime.now_datetime()
+		});
+		session.current = null;
+		session.in_flight = false;
+		this.state.auto_dial = session;
+		this.clear_tracked_live_call(call.name);
+		this.stop_auto_dial();
+		this.add_auto_event(
+			__('Auto dial stopped'),
+			__('Vobiz did not confirm the call. Check provider history before retrying.'),
+			'failed'
+		);
+		frappe.msgprint({
+			title: __('Vobiz confirmation required'),
+			message: __('Auto dial was stopped. Check provider call history before retrying.'),
+			indicator: 'orange'
 		});
 	}
 
@@ -3688,7 +3731,7 @@ class VobizAgentConsole {
 	}
 
 	is_terminal_status(status) {
-		return ['Completed', 'Failed', 'Busy', 'No Answer', 'Cancelled', 'Canceled'].includes(status || '');
+		return ['Completed', 'Failed', 'Busy', 'No Answer', 'Cancelled', 'Canceled', 'Provider Unconfirmed'].includes(status || '');
 	}
 
 	clear_tracked_live_call(callLog) {
@@ -3781,6 +3824,7 @@ class VobizAgentConsole {
 
 	maybe_prompt_workdesk_disposition(call) {
 		if (!call || !call.name || !this.is_terminal_status(call.status)) return;
+		if (call.status === 'Provider Unconfirmed') return;
 		if (this.should_skip_post_call_disposition(call, this.state.active_workdesk_row || this.state.selected || {})) return;
 		if (this.state.ai_disposition_enabled) return;
 		if (this.state.disposition_prompted_call_log === call.name) return;

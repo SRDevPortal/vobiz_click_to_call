@@ -63,7 +63,15 @@ class TestWebhookStatusMapping(unittest.TestCase):
         self.assertEqual(latest.recording_url, "https://recording.example/file.mp3")
 
     def test_pre_bridge_hangup_is_terminal_cancelled(self):
-        for previous in ("Queued", "Ringing", "Customer Answered", "Agent Answered", "Agent Ringing"):
+        for previous in (
+            "Queued",
+            "Ringing",
+            "Customer Answered",
+            "Agent Answered",
+            "Agent Ringing",
+            "Confirmation Pending",
+            "Provider Unconfirmed",
+        ):
             with self.subTest(previous=previous):
                 self.assertEqual(_status_from_hangup("completed", "", previous=previous), "Cancelled")
                 self.assertEqual(_status_from_hangup("hangup", "", previous=previous), "Cancelled")
@@ -195,6 +203,31 @@ class TestWebhookStatusMapping(unittest.TestCase):
                 }
                 self.assertEqual(status_from_provider(row), expected_status)
                 self.assertEqual(status_bucket(row), expected_bucket)
+
+    def test_locally_cancelled_agent_first_call_with_customer_talk_is_connected(self):
+        row = {
+            "status": "Cancelled",
+            "dial_status": "hangup",
+            "error_message": "Call cancelled by user.",
+            "call_flow": "Agent First",
+            "duration": 1377,
+            "billsec": 1380,
+            "recording_duration": 1376,
+        }
+
+        self.assertEqual(status_bucket(row), "connected")
+
+    def test_explicit_customer_rejection_still_wins_over_talk_fields(self):
+        row = {
+            "status": "Cancelled",
+            "dial_status": "reject",
+            "call_flow": "Agent First",
+            "duration": 1377,
+            "billsec": 1380,
+            "recording_duration": 1376,
+        }
+
+        self.assertEqual(status_bucket(row), "cancelled")
 
     def test_generic_hangup_preserves_b_leg_failure_despite_a_leg_billsec(self):
         self.assertEqual(

@@ -72,7 +72,7 @@ def save_call_disposition(
         reference_name=doc.reference_name,
         lead_status=lead_status,
     )
-    if doc.reference_doctype != "Patient" and disposition and allowed_dispositions and disposition not in allowed_dispositions:
+    if doc.reference_doctype != "Patient" and disposition and (allowed_dispositions or doc.reference_doctype == "CRM Lead") and disposition not in allowed_dispositions:
         frappe.throw(_("Invalid disposition."))
 
     doc.disposition = disposition

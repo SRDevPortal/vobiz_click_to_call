@@ -1143,17 +1143,11 @@ def create_unknown_inbound_lead(customer_number: str, did_number: str, mapping, 
 
 
 def unknown_inbound_lead_defaults(mapping) -> dict[str, str]:
-    ai_settings = None
-    if frappe.db.exists("DocType", "Vobiz AI Settings"):
-        try:
-            ai_settings = get_ai_settings()
-        except Exception:
-            ai_settings = None
-
+    # The DID mapping is the explicit source of truth; never choose an arbitrary pipeline.
     return {
         "status": mapping.get("default_lead_status") or "Select Option",
-        "pipeline": mapping.get("default_pipeline") or getattr(ai_settings, "default_pipeline", None) or _first_doc("SR Lead Pipeline"),
-        "platform": mapping.get("default_platform") or getattr(ai_settings, "default_platform", None) or _first_doc("SR Lead Platform"),
+        "pipeline": mapping.get("default_pipeline") or "",
+        "platform": mapping.get("default_platform") or "",
         "source": mapping.get("default_source") or "",
     }
 
