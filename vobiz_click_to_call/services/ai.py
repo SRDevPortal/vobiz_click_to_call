@@ -220,6 +220,8 @@ def on_vobiz_call_log_update(doc, method: str | None = None) -> None:
         sync_provider_update_to_click_to_call_log(doc)
         restore_mapping_for_terminal_call(doc)
         maybe_enqueue_from_vobiz_ai_update(doc)
+    except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
+        raise
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Vobiz click-to-call AI disposition hook failed")
 
@@ -324,6 +326,8 @@ def restore_mapping_for_call_log(call_log: str) -> None:
         from vobiz_click_to_call.api.call import restore_mapping_after_call
 
         restore_mapping_after_call(call_log)
+    except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
+        raise
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Vobiz click-to-call mapping restore failed")
 

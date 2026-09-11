@@ -43,21 +43,22 @@ class TestServerSafetyGuards(unittest.TestCase):
                 "vobiz_click_to_call.api.console.close_stale_agent_attendance_sessions",
             ],
         )
+        self.assertEqual(
+            app_hooks.scheduler_events["cron"]["* * * * *"],
+            ["vobiz_click_to_call.services.cdr.recover_stale_ringing_calls"],
+        )
 
-    def test_stale_ringing_recovery_is_bounded_and_bulk(self):
-        cdr = CDR.read_text(encoding="utf-8")
+    def test_stale_ringing_recovery_queues_guarded_work(self):
+        from unittest.mock import patch
+        from vobiz_click_to_call.services import cdr, mapping_recovery
 
         self.assertIn(
             "vobiz_click_to_call.services.cdr.recover_stale_ringing_calls",
             app_hooks.scheduler_events["cron"]["* * * * *"],
         )
-        self.assertIn("STALE_RINGING_TIMEOUT_SECONDS = 60", cdr)
-        self.assertIn('"Agent Ringing"', cdr)
-        self.assertIn("STALE_RINGING_TIMEOUT", cdr)
-        self.assertIn("stale-local-timeout", cdr)
-        self.assertIn("limit_page_length=STALE_RINGING_RECOVERY_LIMIT", cdr)
-        self.assertIn("UPDATE `tabVobiz Call Log`", cdr)
-        self.assertIn("UPDATE `tabVobiz User Mapping`", cdr)
+        with patch.object(mapping_recovery, "enqueue_pending_recovery", return_value={"queued": 2}) as enqueue:
+            self.assertEqual(cdr.recover_stale_ringing_calls(), {"queued": 2})
+        enqueue.assert_called_once_with()
 
     def test_guest_callbacks_are_rate_limited_and_fail_closed(self):
         webhook = WEBHOOK.read_text(encoding="utf-8")

@@ -289,6 +289,25 @@ class TestIncomingMappingSource(unittest.TestCase):
         self.assertIn('status_from_cdr(cdr, "No Answer")', cdr)
         self.assertIn("def _normalize_cdr_phone", cdr)
 
+    def test_stale_active_call_recovery_is_bounded_and_resumable(self):
+        from unittest.mock import MagicMock, patch
+        import frappe
+        from vobiz_click_to_call.services import mapping_recovery
+
+        cache = MagicMock()
+        cache.get_value.return_value = "MAP-0"
+        mappings = [frappe._dict(name="MAP-1", current_call_log="CALL-1")]
+        with (
+            patch.object(frappe, "cache", return_value=cache),
+            patch.object(frappe, "get_all", return_value=mappings) as get_all,
+            patch.object(mapping_recovery, "enqueue_recovery") as enqueue,
+        ):
+            self.assertEqual(mapping_recovery.enqueue_pending_recovery(), {"checked": 1, "queued": 1})
+        self.assertEqual(get_all.call_args.kwargs["filters"]["name"], [">", "MAP-0"])
+        self.assertEqual(get_all.call_args.kwargs["limit_page_length"], mapping_recovery.RECOVERY_BATCH_SIZE)
+        enqueue.assert_called_once_with("CALL-1", "MAP-1")
+        self.assertEqual(cache.set_value.call_args.args[1], "")
+
 
 if __name__ == "__main__":
     unittest.main()

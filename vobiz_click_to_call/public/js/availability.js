@@ -45,6 +45,7 @@
     let idleInactive = false;
     let lastRouteKey = "";
     let navbarObserver = null;
+    let recoveryEventsBound = false;
 
     function currentRoute() {
         if (!window.frappe || !frappe.get_route) return [];
@@ -64,6 +65,15 @@
 
     function init() {
         if (!window.frappe || !frappe.session || frappe.session.user === "Guest") return;
+        if (!recoveryEventsBound && frappe.realtime) {
+            frappe.realtime.on("vobiz_mapping_recovered", () => {
+                const request = refresh();
+                if (request && request.then) {
+                    request.then((r) => $(document).trigger("vobiz_availability_changed", [r.message || {}]));
+                }
+            });
+            recoveryEventsBound = true;
+        }
         bindBreakSyncEvents();
         if (!navbarObserver && window.MutationObserver && document.body) {
             navbarObserver = new MutationObserver(() => {

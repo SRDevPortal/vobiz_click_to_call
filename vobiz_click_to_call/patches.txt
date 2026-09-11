@@ -11,3 +11,4 @@ vobiz_click_to_call.patches.v1_0.add_agent_attendance_indexes
 vobiz_click_to_call.patches.v1_0.add_call_log_performance_indexes
 vobiz_click_to_call.patches.v1_0.add_chat_lookup_indexes
 vobiz_click_to_call.patches.v1_0.remove_runtime_call_log_disposition_property_setters
+vobiz_click_to_call.patches.v1_0.replace_unsafe_stale_cleanup

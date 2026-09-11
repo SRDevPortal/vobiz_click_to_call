@@ -7,6 +7,10 @@ from frappe.model.document import Document
 from vobiz_click_to_call.services.numbers import normalize_phone_number
 from vobiz_click_to_call.services.settings import get_caller_ids, get_settings
 
+TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
+STALE_STARTUP_STATUSES = {"Queued", "Initiated", "Dialing", "Ringing", "Connecting"}
+STALE_STARTUP_CALL_SECONDS = 10 * 60
+
 
 class VobizUserMapping(Document):
     def validate(self):
@@ -17,7 +21,6 @@ class VobizUserMapping(Document):
             self.caller_id = normalize_phone_number(self.caller_id, default_country_code=default_country_code)
             if self.caller_id not in get_caller_ids(settings):
                 frappe.throw(_("Vobiz Number must be one of the Caller IDs configured in Vobiz Settings."))
-
         if self.get("whatsapp_channel_account"):
             channel = frappe.db.get_value(
                 "Chat Channel Account",
@@ -77,6 +80,7 @@ class VobizUserMapping(Document):
             self.accept_calls = 1
         if self.auto_available_after_call is None:
             self.auto_available_after_call = 1
+        self._reconcile_current_call_state()
         if not self.last_status_at:
             self.last_status_at = frappe.utils.now()
         if self.enforce_working_hours and not (self.working_hours_start and self.working_hours_end):
@@ -87,6 +91,22 @@ class VobizUserMapping(Document):
 
     def on_update(self):
         sync_reciprocal_fallback_users(self)
+
+    def _reconcile_current_call_state(self) -> None:
+        if not self.current_call_log:
+            return
+
+        if _mapping_call_is_active(self.current_call_log):
+            if self.availability_status not in {"Offline", "Away"}:
+                self.availability_status = "Busy"
+            self.accept_calls = 0
+            return
+
+        self.current_call_log = ""
+        if self.availability_status == "Busy":
+            auto_available = frappe.utils.cint(self.auto_available_after_call)
+            self.availability_status = "Available" if auto_available else "Away"
+            self.accept_calls = 1 if auto_available else 0
 
 
 def mark_user_offline_on_logout(login_manager=None) -> None:
@@ -118,6 +138,17 @@ def _split_values(value: str | None, first: str | None = None) -> list[str]:
                 values.append(row)
                 seen.add(row)
     return values
+
+
+def _mapping_call_is_active(call_log: str | None) -> bool:
+    if not call_log or not frappe.db.exists("Vobiz Call Log", call_log):
+        return False
+
+    row = frappe.db.get_value("Vobiz Call Log", call_log, ["status", "modified"], as_dict=True)
+    if not row or row.status in TERMINAL_STATUSES:
+        return False
+    # Only confirmed terminal/missing calls may be cleared when editing a mapping.
+    return True
 
 
 def sync_reciprocal_fallback_users(doc: VobizUserMapping) -> None:

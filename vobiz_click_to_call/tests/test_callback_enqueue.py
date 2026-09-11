@@ -33,7 +33,7 @@ class TestCallbackEnqueue(unittest.TestCase):
         from vobiz_click_to_call.services.callback_logging import append_callback_job
         bound = inspect.signature(enqueue).bind("method", event_type="ring", call_log="CALL", payload={})
         worker_args = bound.arguments["kwargs"]
-        with patch("vobiz_ai.api.call_log.append_callback") as append:
+        with patch("vobiz_click_to_call.services.callback_logging.append_callback") as append:
             append_callback_job(**worker_args)
         append.assert_called_once_with(call_log="CALL", event="ring", payload={})
 

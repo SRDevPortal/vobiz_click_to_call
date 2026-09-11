@@ -21,89 +21,13 @@ STALE_RINGING_RECOVERY_LIMIT = 1000
 
 
 def recover_stale_ringing_calls() -> dict:
-    """Release mappings held by pre-bridge calls that never reached a terminal callback."""
-    mappings = frappe.get_all(
-        "Vobiz User Mapping",
-        filters={"enabled": 1, "current_call_log": ["is", "set"]},
-        fields=["name", "current_call_log"],
-        order_by="name asc",
-        limit_page_length=STALE_RINGING_RECOVERY_LIMIT,
-    )
-    call_names = list(dict.fromkeys(row.current_call_log for row in mappings if row.current_call_log))
-    if not call_names:
-        return {"checked": 0, "recovered": 0}
+    """Queue guarded recovery; elapsed ringing time alone cannot prove hangup."""
+    from vobiz_click_to_call.services.mapping_recovery import enqueue_pending_recovery
 
-    calls = frappe.get_all(
-        "Vobiz Call Log",
-        filters={"name": ["in", call_names], "status": ["in", list(STALE_RINGING_STATUSES)]},
-        fields=["name", "status", "start_time", "creation", "answer_time", "request_json"],
-        order_by="name asc",
-        limit_page_length=STALE_RINGING_RECOVERY_LIMIT,
-    )
-    now = frappe.utils.now_datetime()
-    stale_names = []
-    for call in calls:
-        try:
-            request = json.loads(call.get("request_json") or "{}")
-        except (ValueError, TypeError):
-            request = {}
-        if isinstance(request, dict) and request.get("source") == "vobiz_system_call":
-            continue  # Only provider-aware recovery may release browser calls.
-        if call.answer_time:
-            continue
-        started_at = call.start_time or call.creation
-        if started_at and (now - frappe.utils.get_datetime(started_at)).total_seconds() >= STALE_RINGING_TIMEOUT_SECONDS:
-            stale_names.append(call.name)
-
-    if not stale_names:
-        return {"checked": len(calls), "recovered": 0}
-
-    frappe.db.sql(
-        """
-        UPDATE `tabVobiz Call Log`
-        SET `status` = 'No Answer',
-            `call_status` = 'stale-local-timeout',
-            `hangup_cause` = 'STALE_RINGING_TIMEOUT',
-            `end_time` = COALESCE(`end_time`, NOW(6)),
-            `modified` = NOW(6),
-            `modified_by` = %(modified_by)s
-        WHERE `name` IN %(names)s
-          AND `status` IN %(statuses)s
-          AND `answer_time` IS NULL
-        """,
-        {"names": tuple(stale_names), "statuses": STALE_RINGING_STATUSES, "modified_by": "Administrator"},
-    )
-    recovered = frappe.get_all(
-        "Vobiz Call Log",
-        filters={
-            "name": ["in", stale_names],
-            "status": "No Answer",
-            "hangup_cause": "STALE_RINGING_TIMEOUT",
-        },
-        fields=["name"],
-        limit_page_length=len(stale_names),
-    )
-    recovered_names = tuple(row.name for row in recovered)
-    if recovered_names:
-        frappe.db.sql(
-            """
-            UPDATE `tabVobiz User Mapping`
-            SET `availability_status` = CASE WHEN COALESCE(`auto_available_after_call`, 0) = 1 THEN 'Available' ELSE 'Away' END,
-                `accept_calls` = CASE WHEN COALESCE(`auto_available_after_call`, 0) = 1 THEN 1 ELSE 0 END,
-                `current_call_log` = '',
-                `last_status_at` = NOW(6),
-                `modified` = NOW(6),
-                `modified_by` = %(modified_by)s
-            WHERE `enabled` = 1
-              AND `current_call_log` IN %(names)s
-            """,
-            {"names": recovered_names, "modified_by": "Administrator"},
-        )
-    frappe.db.commit()
-    return {"checked": len(calls), "recovered": len(recovered_names)}
+    return enqueue_pending_recovery()
 
 
-def sync_call_log_cdr(call_log: str, ignore_permissions: bool = False) -> dict:
+def sync_call_log_cdr(call_log: str, ignore_permissions: bool = False, *, strict_match: bool = False) -> dict:
     settings = get_settings()
     if not settings.enabled or not settings.enable_cdr_sync:
         frappe.throw(_("Vobiz CDR Sync is disabled."))
@@ -112,9 +36,14 @@ def sync_call_log_cdr(call_log: str, ignore_permissions: bool = False) -> dict:
     if not ignore_permissions and "System Manager" not in frappe.get_roles() and doc.user != frappe.session.user:
         frappe.throw(_("Not permitted."))
 
+    if strict_match and not any(doc.get(key) for key in (
+        "call_uuid", "recording_call_uuid", "request_uuid", "a_leg_uuid", "b_leg_uuid",
+    )):
+        return {"status": "Awaiting Provider ID", "call_log": doc.name}
+
     params = build_cdr_search_params(doc)
     response = VobizClient(settings).search_cdrs(params)
-    cdr = find_matching_cdr(doc, response)
+    cdr = find_matching_cdr(doc, response, strict_match=strict_match)
     if not cdr:
         doc.cdr_sync_status = "Not Found"
         doc.cdr_synced_at = frappe.utils.now()
@@ -122,6 +51,9 @@ def sync_call_log_cdr(call_log: str, ignore_permissions: bool = False) -> dict:
         doc.save(ignore_permissions=True)
         frappe.db.commit()
         return {"status": "Not Found", "call_log": doc.name}
+
+    if strict_match and not _terminal_cdr(cdr):
+        return {"status": "Provider Active", "call_log": doc.name}
 
     apply_cdr_to_call_log(doc, cdr, response)
     frappe.db.commit()
@@ -397,7 +329,7 @@ def build_cdr_search_params(doc) -> dict[str, Any]:
     return params
 
 
-def find_matching_cdr(doc, response: dict) -> dict | None:
+def find_matching_cdr(doc, response: dict, *, strict_match: bool = False) -> dict | None:
     candidates = extract_cdr_rows(response)
     if not candidates:
         return None
@@ -412,9 +344,15 @@ def find_matching_cdr(doc, response: dict) -> dict | None:
         ) if value
     }
     for cdr in candidates:
-        values = {str(value) for value in cdr.values() if value}
+        values = {str(cdr[key]) for key in (
+            "uuid", "call_uuid", "CallUUID", "request_uuid", "request_id",
+            "a_leg_uuid", "b_leg_uuid", "ALegUUID", "BLegUUID",
+        ) if cdr.get(key)}
         if provider_ids.intersection(values):
             return cdr
+
+    if strict_match or provider_ids:
+        return None  # Never substitute another call to the same phone number.
 
     if doc.customer_number:
         customer = "".join(ch for ch in doc.customer_number if ch.isdigit())
@@ -430,6 +368,18 @@ def find_matching_cdr(doc, response: dict) -> dict | None:
                 return cdr
 
     return None
+
+
+def _terminal_cdr(cdr: dict) -> bool:
+    if cdr.get("end_time") or cdr.get("EndTime"):
+        return True
+    states = {str(cdr.get(key) or "").lower().replace("_", "-") for key in (
+        "status", "call_status", "dial_status", "b_leg_status",
+    )}
+    return bool(states.intersection({
+        "completed", "hangup", "ended", "failed", "busy", "no-answer", "no answer",
+        "cancelled", "canceled", "timeout",
+    }))
 
 
 def extract_cdr_rows(response: dict) -> list[dict]:

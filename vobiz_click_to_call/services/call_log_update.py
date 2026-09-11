@@ -27,11 +27,19 @@ def save_doc_latest(doc, before: dict[str, Any] | None = None, *, ignore_permiss
             if doc.get(fieldname) != old_value
         }
         if not changed_values:
-            return frappe.get_doc(doc.doctype, doc.name)
+            return frappe.get_doc(doc.doctype, doc.name, for_update=True)
 
         for _attempt in range(3):
-            latest = frappe.get_doc(doc.doctype, doc.name)
-            for fieldname, value in changed_values.items():
+            # A plain read may keep returning the old REPEATABLE READ snapshot.
+            latest = frappe.get_doc(doc.doctype, doc.name, for_update=True)
+            updates = dict(changed_values)
+            terminal = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
+            if (doc.doctype == "Vobiz Call Log" and latest.get("status") in terminal
+                    and "status" in updates and updates["status"] not in terminal):
+                # A delayed ring/answer must not reopen a call already ended.
+                for fieldname in ("status", "call_status", "dial_status", "hangup_cause", "end_time"):
+                    updates.pop(fieldname, None)
+            for fieldname, value in updates.items():
                 latest.set(fieldname, value)
             try:
                 latest.save(ignore_permissions=ignore_permissions)

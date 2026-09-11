@@ -297,6 +297,12 @@ def start_call(
             frappe.db.commit()
             try:
                 response = VobizClient(settings).make_call(payload)
+            except ReadTimeout as retry_exc:
+                confirmation_pending = _mark_confirmation_pending(call_log, retry_exc)
+                return _call_start_result(
+                    call_log, call_flow, customer_number, user_mobile,
+                    confirmation_pending=confirmation_pending,
+                )
             except Exception as retry_exc:
                 _fail_provider_call(call_log, retry_exc)
                 raise
@@ -840,30 +846,11 @@ def _split_mapping_values(value: str | None, first: str | None = None) -> list[s
 def get_mapping_unavailable_reason(mapping: dict[str, Any]) -> str:
     current_call_log = mapping.get("current_call_log")
     if current_call_log and not is_active_call_log(current_call_log):
-        if frappe.db.exists("Vobiz Call Log", current_call_log):
-            restore_mapping_after_call(current_call_log)
-        else:
-            auto_available = frappe.utils.cint(mapping.get("auto_available_after_call"))
-            frappe.db.set_value(
-                "Vobiz User Mapping",
-                mapping["name"],
-                {
-                    "availability_status": "Available" if auto_available else "Away",
-                    "accept_calls": 1 if auto_available else 0,
-                    "current_call_log": "",
-                    "last_status_at": frappe.utils.now(),
-                },
-                update_modified=True,
-            )
+        from vobiz_click_to_call.services.mapping_recovery import enqueue_recovery
+
+        enqueue_recovery(current_call_log, mapping["name"])
         frappe.db.commit()
-        if frappe.utils.cint(mapping.get("auto_available_after_call")):
-            mapping["availability_status"] = "Available"
-            mapping["accept_calls"] = 1
-            mapping["current_call_log"] = ""
-        else:
-            mapping["availability_status"] = "Away"
-            mapping["accept_calls"] = 0
-            mapping["current_call_log"] = ""
+        return _("Your previous call is being reconciled. Please try again shortly.")
 
     status = mapping.get("availability_status") or "Available"
     if status != "Available":
@@ -889,20 +876,8 @@ def is_active_call_log(call_log: str | None) -> bool:
     row = frappe.db.get_value("Vobiz Call Log", call_log, ["status", "modified", "request_json"], as_dict=True)
     if not row or row.status in TERMINAL_STATUSES:
         return False
-    # Browser calls have provider-aware recovery in vobiz_system_call.
-    try:
-        request = json.loads(row.get("request_json") or "{}")
-    except (ValueError, TypeError):
-        request = {}
-    if isinstance(request, dict) and request.get("source") == "vobiz_system_call":
-        return True
-    if row.status == "Confirmation Pending" and row.modified:
-        age_seconds = (frappe.utils.now_datetime() - frappe.utils.get_datetime(row.modified)).total_seconds()
-        return age_seconds < CONFIRMATION_PENDING_SECONDS
-    if row.status in STALE_STARTUP_STATUSES and row.modified:
-        age_seconds = (frappe.utils.now_datetime() - frappe.utils.get_datetime(row.modified)).total_seconds()
-        if age_seconds > STALE_STARTUP_CALL_SECONDS:
-            return False
+    # Recovery must confirm the provider outcome; age alone must not allow a
+    # second call while the first one may still be ringing or connected.
     return True
 
 
@@ -921,33 +896,11 @@ def mark_mapping_busy(mapping_name: str, call_log: str) -> None:
 
 
 def restore_mapping_after_call(call_log: str) -> None:
-    if not frappe.db.exists("Vobiz Call Log", call_log):
-        return
+    # Callers may hold a call-log write lock (including on_update hooks).
+    # Acquiring a mapping lock here would invert the browser lifecycle order.
+    from vobiz_click_to_call.services.mapping_recovery import enqueue_recovery
 
-    user = frappe.db.get_value("Vobiz Call Log", call_log, "user")
-    if not user:
-        return
-
-    mapping = get_user_mapping(user)
-    if not mapping:
-        return
-
-    current_call_log = mapping.get("current_call_log")
-    if current_call_log and current_call_log != call_log:
-        return
-
-    auto_available = frappe.utils.cint(mapping.get("auto_available_after_call"))
-    frappe.db.set_value(
-        "Vobiz User Mapping",
-        mapping["name"],
-        {
-            "availability_status": "Available" if auto_available else "Away",
-            "accept_calls": 1 if auto_available else 0,
-            "current_call_log": "",
-            "last_status_at": frappe.utils.now(),
-        },
-        update_modified=True,
-    )
+    enqueue_recovery(call_log)
 
 
 def create_call_log(
