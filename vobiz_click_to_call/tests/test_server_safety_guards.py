@@ -45,7 +45,8 @@ class TestServerSafetyGuards(unittest.TestCase):
         )
         self.assertEqual(
             app_hooks.scheduler_events["cron"]["* * * * *"],
-            ["vobiz_click_to_call.services.cdr.recover_stale_ringing_calls"],
+            ["vobiz_click_to_call.services.cdr.recover_stale_ringing_calls",
+             "vobiz_click_to_call.services.cancellation.recover_pending_cancellations"],
         )
 
     def test_stale_ringing_recovery_queues_guarded_work(self):

@@ -41,3 +41,8 @@ class PendingCancellationTests(unittest.TestCase):
     def test_corrupt_or_absent_intent_is_not_a_cancellation(self):
         for value in ("bad", "[]", "{}", None):
             self.assertFalse(cancellation.cancellation_requested(self.doc(response_json=value)))
+
+    def test_queue_outage_does_not_abort_call_save(self):
+        with patch.object(frappe, "enqueue", side_effect=RuntimeError("offline")), patch.object(frappe, "log_error") as log, patch.object(frappe, "get_traceback", return_value="offline"):
+            cancellation.queue_pending_cancel(self.doc())
+        log.assert_called_once()

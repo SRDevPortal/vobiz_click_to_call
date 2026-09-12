@@ -19,9 +19,13 @@ def queue_pending_cancel(doc, method=None):
         return
     if not (doc.call_uuid or doc.a_leg_uuid or doc.b_leg_uuid):
         return
-    frappe.enqueue("vobiz_click_to_call.services.cancellation.cancel_pending",
-                   call_log=doc.name, queue="short", timeout=120, enqueue_after_commit=True,
-                   job_id="vctc-cancel-" + doc.name, deduplicate=True)
+    try:
+        frappe.enqueue("vobiz_click_to_call.services.cancellation.cancel_pending",
+                       call_log=doc.name, queue="short", timeout=120, enqueue_after_commit=True,
+                       job_id="vctc-cancel-" + doc.name, deduplicate=True)
+    except Exception:
+        # Preserve the call update and intent; the scheduler retries later.
+        frappe.log_error(title="Vobiz cancellation queue unavailable", message=frappe.get_traceback())
 
 
 def cancel_pending(call_log):
