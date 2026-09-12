@@ -35,6 +35,10 @@ def answer(call_log: str | None = None, token: str | None = None):
     _append_callback_if_enabled(doc.name, "answer", payload)
     frappe.db.commit()
 
+    from vobiz_click_to_call.services.cancellation import cancellation_requested
+    if cancellation_requested(doc):
+        return _xml_response(_hangup_xml())
+
     if not doc.user_mobile:
         before = snapshot_doc(doc)
         doc.status = "Failed"

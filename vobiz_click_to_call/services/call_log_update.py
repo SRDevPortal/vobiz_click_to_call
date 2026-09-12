@@ -14,6 +14,10 @@ def snapshot_doc(doc) -> dict[str, Any]:
 
 
 def save_doc_latest(doc, before: dict[str, Any] | None = None, *, ignore_permissions: bool = True):
+    from vobiz_click_to_call.services.cancellation import cancellation_requested
+    if (doc.doctype == "Vobiz Call Log" and cancellation_requested(doc)
+            and doc.status not in {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}):
+        doc.call_status = "cancellation-requested"
     try:
         doc.save(ignore_permissions=ignore_permissions)
         return doc
@@ -33,6 +37,14 @@ def save_doc_latest(doc, before: dict[str, Any] | None = None, *, ignore_permiss
             # A plain read may keep returning the old REPEATABLE READ snapshot.
             latest = frappe.get_doc(doc.doctype, doc.name, for_update=True)
             updates = dict(changed_values)
+            if doc.doctype == "Vobiz Call Log" and cancellation_requested(latest):
+                import json
+                if "response_json" in updates:
+                    response = json.loads(updates["response_json"] or "{}")
+                    response["cancel_requested"] = True
+                    updates["response_json"] = json.dumps(response)
+                if updates.get("status", latest.status) not in {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}:
+                    updates["call_status"] = "cancellation-requested"
             terminal = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
             if (doc.doctype == "Vobiz Call Log" and latest.get("status") in terminal
                     and "status" in updates and updates["status"] not in terminal):

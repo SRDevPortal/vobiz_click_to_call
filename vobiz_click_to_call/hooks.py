@@ -34,6 +34,7 @@ doc_events = {
         "on_update": [
             "vobiz_click_to_call.services.ai.on_vobiz_call_log_update",
             "vobiz_click_to_call.services.realtime.publish_call_disconnected",
+            "vobiz_click_to_call.services.cancellation.queue_pending_cancel",
         ],
     },
 }
@@ -42,6 +43,7 @@ scheduler_events = {
     "cron": {
         "* * * * *": [
             "vobiz_click_to_call.services.cdr.recover_stale_ringing_calls",
+            "vobiz_click_to_call.services.cancellation.recover_pending_cancellations",
         ],
     },
     "hourly": [

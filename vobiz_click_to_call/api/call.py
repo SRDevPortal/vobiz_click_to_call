@@ -310,10 +310,11 @@ def start_call(
             _fail_provider_call(call_log, exc)
             raise
 
+    call_log = frappe.get_doc("Vobiz Call Log", call_log.name, for_update=True)
     before = snapshot_doc(call_log)
-    call_log.response_json = json.dumps(response, indent=2, default=str)
+    call_log.response_json = merge_json(call_log.response_json, response)
     call_log.request_uuid = extract_provider_id(response, "request_uuid", "requestUUID", "request_id", "requestId")
-    call_log.call_uuid = extract_provider_id(response, "call_uuid", "callUUID", "uuid", "CallUUID")
+    call_log.call_uuid = call_log.call_uuid or extract_provider_id(response, "call_uuid", "callUUID", "uuid", "CallUUID")
     call_log = save_doc_latest(call_log, before)
     update_reference_call_metrics(reference_doctype, reference_name)
     sync_linked_summaries(call_log)
@@ -581,9 +582,13 @@ def cancel_call(call_log: str) -> dict[str, Any]:
             message = _("Provider call was already ended. Local call was cleared.")
             log_vobiz_event("Provider hangup call not found; cancelled locally", call_log=doc.name, severity="Warning", payload=response)
     else:
-        response = {"skipped_provider_cancel": True, "reason": "Provider call UUID was not available."}
-        message = _("Queued call cleared locally.")
-        log_vobiz_event("Cancel skipped provider hangup; no UUID", call_log=doc.name, severity="Warning", payload=response)
+        before = snapshot_doc(doc)
+        doc.response_json = merge_json(doc.response_json, {"cancel_requested": True})
+        doc.call_status = "cancellation-requested"
+        save_doc_latest(doc, before)
+        frappe.db.commit()
+        return {"status": doc.status, "pending_provider": True,
+                "message": _("Cancellation pending: waiting for the provider call identifier.")}
 
     before = snapshot_doc(doc)
     was_connected = has_confirmed_customer_connection(doc.as_dict())
