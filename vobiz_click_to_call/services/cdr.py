@@ -15,6 +15,7 @@ from vobiz_click_to_call.services.numbers import normalize_phone_number
 from vobiz_click_to_call.services.settings import get_settings
 
 CDR_BATCH_SIZE = 10
+CDR_PROVIDER_ID_FIELDS = ("call_uuid", "recording_call_uuid", "request_uuid", "a_leg_uuid", "b_leg_uuid")
 STALE_RINGING_TIMEOUT_SECONDS = 60
 STALE_RINGING_STATUSES = ("Queued", "Initiated", "Dialing", "Ringing", "Connecting", "Agent Ringing")
 STALE_RINGING_RECOVERY_LIMIT = 1000
@@ -36,9 +37,9 @@ def sync_call_log_cdr(call_log: str, ignore_permissions: bool = False, *, strict
     if not ignore_permissions and "System Manager" not in frappe.get_roles() and doc.user != frappe.session.user:
         frappe.throw(_("Not permitted."))
 
-    if strict_match and not any(doc.get(key) for key in (
-        "call_uuid", "recording_call_uuid", "request_uuid", "a_leg_uuid", "b_leg_uuid",
-    )):
+    # Every sync path, including the hourly batch, requires provider identity.
+    # The same customer can have several unrelated calls within the search window.
+    if not _provider_ids(doc):
         return {"status": "Awaiting Provider ID", "call_log": doc.name}
 
     params = build_cdr_search_params(doc)
@@ -329,44 +330,29 @@ def build_cdr_search_params(doc) -> dict[str, Any]:
     return params
 
 
+def _provider_ids(doc) -> set[str]:
+    return {str(doc.get(key)).strip() for key in CDR_PROVIDER_ID_FIELDS
+            if doc.get(key) and str(doc.get(key)).strip()}
+
+
 def find_matching_cdr(doc, response: dict, *, strict_match: bool = False) -> dict | None:
     candidates = extract_cdr_rows(response)
     if not candidates:
         return None
 
-    provider_ids = {
-        value for value in (
-            doc.call_uuid,
-            doc.get("recording_call_uuid"),
-            doc.request_uuid,
-            doc.a_leg_uuid,
-            doc.b_leg_uuid,
-        ) if value
-    }
+    provider_ids = _provider_ids(doc)
+    if not provider_ids:
+        return None
     for cdr in candidates:
-        values = {str(cdr[key]) for key in (
+        values = {str(cdr[key]).strip() for key in (
             "uuid", "call_uuid", "CallUUID", "request_uuid", "request_id",
             "a_leg_uuid", "b_leg_uuid", "ALegUUID", "BLegUUID",
         ) if cdr.get(key)}
         if provider_ids.intersection(values):
             return cdr
 
-    if strict_match or provider_ids:
-        return None  # Never substitute another call to the same phone number.
-
-    if doc.customer_number:
-        customer = "".join(ch for ch in doc.customer_number if ch.isdigit())
-        for cdr in candidates:
-            numbers = [
-                cdr.get("to"),
-                cdr.get("from"),
-                cdr.get("destination_number"),
-                cdr.get("caller_id_number"),
-                cdr.get("callee_id_number"),
-            ]
-            if any(customer and customer in "".join(ch for ch in str(number or "") if ch.isdigit()) for number in numbers):
-                return cdr
-
+    # Phone numbers, timestamps and browser-supplied event UUIDs alone are not
+    # trusted call identity. Do not fall back to a different call for that number.
     return None
 
 
@@ -399,6 +385,8 @@ def extract_cdr_rows(response: dict) -> list[dict]:
 
 
 def apply_cdr_to_call_log(doc, cdr: dict, raw_response: dict) -> None:
+    if find_matching_cdr(doc, {"data": [cdr]}) is None:
+        frappe.throw(_("CDR does not match this call's provider identifiers."))
     doc.cdr_json = _bounded_json({"matched_cdr": cdr, "raw_response": raw_response})
     doc.cdr_sync_status = "Synced"
     doc.cdr_synced_at = frappe.utils.now()
