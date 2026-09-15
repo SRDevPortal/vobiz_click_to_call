@@ -1855,6 +1855,10 @@ class VobizAgentConsole {
 		});
 		dialog.show();
 		const $body = dialog.get_field('details').$wrapper;
+		$body.attr('data-wa-reference', '1').data('whatsapp-reference', {
+			reference_doctype: row.doctype,
+			reference_name: row.name
+		});
 		this.state.active_workdesk_body = $body;
 		const render = (tab) => {
 			$body.find('[data-detail-tab]').removeClass('active');
@@ -2836,6 +2840,7 @@ class VobizAgentConsole {
 
 	refresh_inline_whatsapp($body, conversation) {
 		frappe.call('vobiz_click_to_call.api.console.get_whatsapp_messages', {
+			...$body.data('whatsapp-reference'),
 			conversation,
 			limit: VOBIZ_WHATSAPP_PAGE_SIZE
 		}).then((r) => {
@@ -2874,6 +2879,7 @@ class VobizAgentConsole {
 		$list.attr('data-loading', '1');
 		$list.find('[data-wa-loader]').text(__('Loading older messages...'));
 		frappe.call('vobiz_click_to_call.api.console.get_whatsapp_messages', {
+			...$list.closest('[data-wa-reference]').data('whatsapp-reference'),
 			conversation,
 			limit: VOBIZ_WHATSAPP_PAGE_SIZE,
 			before
@@ -2906,7 +2912,7 @@ class VobizAgentConsole {
 		$button.prop('disabled', true);
 		frappe.call({
 			method: 'vobiz_click_to_call.api.console.send_whatsapp_reply',
-			args: { conversation, body },
+			args: { conversation, body, ...$body.data('whatsapp-reference') },
 			type: 'POST'
 		}).then((r) => {
 			$input.val('');
@@ -3001,6 +3007,7 @@ class VobizAgentConsole {
 		}
 
 		frappe.call('vobiz_click_to_call.api.console.get_whatsapp_templates', {
+			...$body.data('whatsapp-reference'),
 			conversation
 		}).then((r) => {
 			const response = r.message || {};
@@ -3060,6 +3067,7 @@ class VobizAgentConsole {
 				frappe.call({
 					method: 'vobiz_click_to_call.api.console.send_whatsapp_template',
 					args: {
+						...$body.data('whatsapp-reference'),
 						conversation,
 						template_name: template.name,
 						language_code: template.language_code,

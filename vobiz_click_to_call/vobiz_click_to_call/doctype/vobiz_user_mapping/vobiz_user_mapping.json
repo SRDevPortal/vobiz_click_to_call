@@ -88,7 +88,7 @@
    "options": ""
   },
   {
-   "description": "Optional. When set, this active Interakt account is used to initiate WhatsApp chats for both CRM Leads and Patients. When blank, existing pipeline and medical-department routing remains active.",
+   "description": "Optional. Patients and CRM Leads continue in their most recently updated WhatsApp chat. When no chat exists, this active Interakt account is used to initiate one. When blank, existing pipeline and medical-department routing remains active.",
    "fieldname": "whatsapp_channel_account",
    "fieldtype": "Link",
    "in_list_view": 1,
