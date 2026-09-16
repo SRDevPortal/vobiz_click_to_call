@@ -104,9 +104,9 @@ class TestServerSafetyGuards(unittest.TestCase):
         click_to_call = CLICK_TO_CALL.read_text(encoding="utf-8")
 
         self.assertIn("except ReadTimeout as exc:", call_api)
-        self.assertIn("SET `status` = 'Confirmation Pending'", call_api)
+        self.assertIn("SET `status` = 'Queued'", call_api)
         self.assertIn("CONFIRMATION_PENDING_SECONDS = 60", call_api)
-        self.assertIn('doc.status = "Provider Unconfirmed"', call_api)
+        self.assertNotIn('doc.status = "Provider Unconfirmed"', call_api)
         self.assertIn("FOR UPDATE", call_api)
         self.assertNotIn("except ReadTimeout as exc:\n        response = VobizClient", call_api)
         self.assertIn('"Confirmation Pending", "Provider Unconfirmed"', webhook)

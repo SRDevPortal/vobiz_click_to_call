@@ -30,6 +30,7 @@ doc_events = {
         "on_trash": "vobiz_click_to_call.services.delete_cleanup.cleanup_issue_call_log_links",
     },
     "Vobiz Call Log": {
+        "before_validate": "vobiz_click_to_call.services.confirmation.normalize_legacy_status",
         "on_trash": "vobiz_click_to_call.services.delete_cleanup.cleanup_call_log_reverse_links",
         "on_update": [
             "vobiz_click_to_call.services.ai.on_vobiz_call_log_update",

@@ -2244,7 +2244,7 @@ class VobizAgentConsole {
 		const firstNumber = flow === 'Agent First' ? call.agent_mobile_display : call.customer_number_display;
 		const secondNumber = flow === 'Agent First' ? call.customer_number_display : call.agent_mobile_display;
 		const status = call.status || '';
-		const terminal = ['Completed', 'Failed', 'Busy', 'No Answer', 'Cancelled', 'Canceled', 'Provider Unconfirmed'].includes(status);
+		const terminal = ['Completed', 'Failed', 'Busy', 'No Answer', 'Cancelled', 'Canceled'].includes(status);
 		const answeredFirst = Boolean(call.answer_time) || ['Agent Answered', 'Customer Answered', 'Agent Ringing', 'Connected', 'Completed'].includes(status);
 		const connected = ['Connected', 'Completed'].includes(status);
 
@@ -4324,7 +4324,7 @@ class VobizAgentConsole {
 		const current = session.current || {};
 		if (!current.call_log || session.polling_current) return;
 		const active = this.state.active_call || {};
-		const terminal = ['Completed', 'Failed', 'Busy', 'No Answer', 'Cancelled', 'Canceled', 'Provider Unconfirmed'];
+		const terminal = ['Completed', 'Failed', 'Busy', 'No Answer', 'Cancelled', 'Canceled'];
 
 		if (!force && active.name === current.call_log && !terminal.includes(active.status)) {
 			current.status = active.status || current.status;
@@ -4522,7 +4522,7 @@ class VobizAgentConsole {
 	}
 
 	is_terminal_status(status) {
-		return ['Completed', 'Failed', 'Busy', 'No Answer', 'Cancelled', 'Canceled', 'Provider Unconfirmed'].includes(status || '');
+		return ['Completed', 'Failed', 'Busy', 'No Answer', 'Cancelled', 'Canceled'].includes(status || '');
 	}
 
 	clear_tracked_live_call(callLog) {

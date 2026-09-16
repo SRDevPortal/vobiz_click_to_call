@@ -7,7 +7,7 @@ import json
 import frappe
 
 TERMINAL_STATUSES = frozenset({
-    "Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled", "Provider Unconfirmed",
+    "Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled",
 })
 RECOVERY_BATCH_SIZE = 100
 

@@ -9,6 +9,8 @@ import frappe
 from frappe import _
 from requests.exceptions import ReadTimeout
 
+from vobiz_click_to_call.services.confirmation import confirmation_pending, normalize_existing
+
 from vobiz_ai.api.call_log import create_outbound_call_log, sync_linked_summaries
 from vobiz_click_to_call.api.recording import recording_proxy_url
 from vobiz_click_to_call.services.attendance import agent_attendance_enabled
@@ -50,7 +52,7 @@ PREFERRED_PHONE_FIELDS = (
     "alternate_phone",
 )
 
-TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled", "Provider Unconfirmed"}
+TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
 USER_SET_AVAILABILITY_STATUSES = {"Available", "Away", "Offline"}
 AGENT_ATTENDANCE_DOCTYPE = "Vobiz Agent Attendance Log"
 AVAILABILITY_ATTENDANCE_SOURCE = "Availability"
@@ -372,7 +374,9 @@ def _mark_confirmation_pending(call_log, exc: ReadTimeout) -> bool:
     frappe.db.sql(
         """
         UPDATE `tabVobiz Call Log`
-        SET `status` = 'Confirmation Pending',
+        SET `status` = 'Queued',
+            `call_status` = CASE WHEN `call_status` = 'cancellation-requested'
+                                THEN `call_status` ELSE 'provider-confirmation-pending' END,
             `error_message` = %(error)s,
             `modified` = NOW(6),
             `modified_by` = %(modified_by)s
@@ -384,7 +388,7 @@ def _mark_confirmation_pending(call_log, exc: ReadTimeout) -> bool:
     )
     frappe.db.commit()
     call_log.reload()
-    if call_log.status != "Confirmation Pending":
+    if not confirmation_pending(call_log):
         return False
     log_vobiz_event(
         "Provider make_call confirmation pending",
@@ -405,7 +409,7 @@ def get_call_status(call_log: str, sync_provider: int | str = 1) -> dict[str, An
     if "System Manager" not in frappe.get_roles() and doc.user != frappe.session.user:
         frappe.throw(_("Not permitted."))
 
-    _expire_confirmation_pending(doc)
+    normalize_existing(doc)
 
     if frappe.utils.cint(sync_provider):
         sync_live_call_if_finished(doc)
@@ -444,24 +448,8 @@ def get_call_status(call_log: str, sync_provider: int | str = 1) -> dict[str, An
         "duration": doc.duration,
         "billsec": doc.billsec,
         "can_cancel": doc.status not in TERMINAL_STATUSES,
+        "confirmation_pending": confirmation_pending(doc),
     }
-
-
-def _expire_confirmation_pending(doc) -> None:
-    if doc.status != "Confirmation Pending" or not doc.modified:
-        return
-    age_seconds = (frappe.utils.now_datetime() - frappe.utils.get_datetime(doc.modified)).total_seconds()
-    if age_seconds < CONFIRMATION_PENDING_SECONDS:
-        return
-
-    before = snapshot_doc(doc)
-    doc.status = "Provider Unconfirmed"
-    doc.error_message = _(
-        "Vobiz did not confirm this request within {0} seconds. Verify the provider call history before retrying."
-    ).format(CONFIRMATION_PENDING_SECONDS)
-    doc = save_doc_latest(doc, before)
-    restore_mapping_after_call(doc.name)
-    frappe.db.commit()
 
 
 def sync_live_call_if_finished(doc) -> None:

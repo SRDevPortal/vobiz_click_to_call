@@ -14,7 +14,7 @@
 
     const DEFAULT_DOCTYPES = ["CRM Lead", "Contact", "Patient", "Customer"];
     let DOCTYPES = DEFAULT_DOCTYPES.slice();
-    const TERMINAL_STATUSES = ["Completed", "Failed", "Busy", "No Answer", "Cancelled", "Provider Unconfirmed"];
+    const TERMINAL_STATUSES = ["Completed", "Failed", "Busy", "No Answer", "Cancelled"];
     let currentPoller = null;
     let statusPollInFlight = false;
     const registeredDoctypes = new Set();
