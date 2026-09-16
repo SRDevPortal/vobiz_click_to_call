@@ -95,12 +95,21 @@ class TestPatientChatChannelRouting(unittest.TestCase):
 
 class TestExistingWhatsAppChatRouting(unittest.TestCase):
     def setUp(self):
+        window_patch = patch("wa_chat_hub.messaging.windows.get_messaging_window_state", return_value={"can_send_free_form": False})
+        window_patch.start()
+        self.addCleanup(window_patch.stop)
+        permission_patch = patch("wa_chat_hub.messaging.windows.evaluate_send_permission")
+        permission_patch.start()
+        self.addCleanup(permission_patch.stop)
         self.frappe = MagicMock()
         self.frappe.session.user = "agent@example.com"
         self.frappe.PermissionError = PermissionError
         self.frappe.throw.side_effect = lambda message, exc=ValueError: self._raise(exc, message)
         self.frappe.db.exists.return_value = True
-        self.frappe.db.get_value.return_value = "EXISTING-ACCOUNT"
+        self.frappe.db.get_value.side_effect = lambda doctype, name, fields, **kw: (
+            {"unread_count": 0, "modified": "2026-09-16 12:00:00"}
+            if fields == ["unread_count", "modified"] else "EXISTING-ACCOUNT"
+        )
         self.doc = MagicMock()
         self.frappe.get_doc.return_value = self.doc
         self.mapping = {"whatsapp_channel_account": "FALLBACK-ACCOUNT"}
@@ -211,12 +220,16 @@ class TestExistingWhatsAppChatRouting(unittest.TestCase):
                 "wa_chat_hub.outbound.send_interakt_template_message", return_value={"sent": True},
             ) as template, patch(
                 "wa_chat_hub.outbound.send_outbound_message", return_value={"sent": True},
-            ) as reply, patch.object(services, "append_message", return_value={}) as append:
+            ) as reply, patch(
+                "wa_chat_hub.interakt.templates_api.resolve_approved_template",
+                side_effect=lambda account, payload: payload,
+            ) as resolve_template, patch.object(services, "append_message", return_value={}) as append:
                 result = console.send_whatsapp_template(
                     "LATEST-CHAT", "welcome", followup_body="Hello", reference_doctype=doctype, reference_name="REFERENCE",
                 )
                 self.assertTrue(result["success"])
                 self.assertEqual(template.call_args.args[0], "LATEST-CHAT")
+                self.assertEqual(resolve_template.call_args.args[0], "EXISTING-ACCOUNT")
                 reply.assert_called_once_with("LATEST-CHAT", "Hello", "Text")
                 self.assertEqual([call.args[0]["conversation"] for call in append.call_args_list],
                                  ["LATEST-CHAT", "LATEST-CHAT"])

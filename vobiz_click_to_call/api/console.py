@@ -600,13 +600,99 @@ def get_whatsapp_conversation(reference_doctype: str, reference_name: str) -> di
 
 @frappe.whitelist()
 def get_whatsapp_messages(conversation: str, limit: int | str = 30, before: str | None = None,
-                          reference_doctype: str | None = None, reference_name: str | None = None) -> dict[str, Any]:
+                          reference_doctype: str | None = None, reference_name: str | None = None,
+                          after_message: str | None = None,
+                          status_message_names: str | list | None = None) -> dict[str, Any]:
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
 
     _ensure_whatsapp_conversation_read(conversation, reference_doctype, reference_name)
-    page = _whatsapp_messages_page(conversation, limit, before)
-    return {"success": True, **page}
+    read_state = frappe.db.get_value(
+        "Chat Conversation", conversation, ["unread_count", "modified"], as_dict=True
+    ) or {}
+    page = _whatsapp_messages_page(conversation, limit, before, after_message=after_message)
+    statuses = _whatsapp_message_statuses(conversation, status_message_names)
+    from wa_chat_hub.messaging.windows import get_messaging_window_state
+
+    return {
+        "success": True, **page, "message_statuses": statuses,
+        "messaging_window": get_messaging_window_state(conversation),
+        "unread_count": frappe.utils.cint(read_state.get("unread_count")),
+        "read_version": str(read_state.get("modified") or ""),
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def mark_whatsapp_read(
+    conversation: str,
+    read_version: str,
+    reference_doctype: str | None = None,
+    reference_name: str | None = None,
+) -> dict[str, Any]:
+    if frappe.session.user == "Guest":
+        frappe.throw(_("Login required."), frappe.PermissionError)
+    _ensure_whatsapp_conversation_read(conversation, reference_doctype, reference_name)
+    if not read_version:
+        frappe.throw(_("Load the conversation before marking it as read."))
+
+    # A current, locked read prevents clearing messages that arrived after the displayed snapshot.
+    current = frappe.db.get_value(
+        "Chat Conversation", conversation, ["unread_count", "modified"], as_dict=True, for_update=True
+    )
+    if not current:
+        frappe.throw(_("WhatsApp conversation not found."))
+    if frappe.utils.get_datetime(current.modified) != frappe.utils.get_datetime(read_version):
+        return {"success": True, "marked_read": False, "unread_count": frappe.utils.cint(current.unread_count)}
+
+    from wa_chat_hub.services import mark_conversation_read
+
+    mark_conversation_read(conversation)
+    return {"success": True, "marked_read": True, "unread_count": 0}
+
+
+@frappe.whitelist()
+def get_whatsapp_message_media(
+    message: str,
+    download: int | str = 0,
+    reference_doctype: str | None = None,
+    reference_name: str | None = None,
+):
+    if frappe.session.user == "Guest":
+        frappe.throw(_("Login required."), frappe.PermissionError)
+    row = frappe.db.get_value(
+        "Chat Message", message,
+        ["name", "conversation", "content_type", "media_url", "attachment_file", "raw_transport_payload"],
+        as_dict=True,
+    )
+    if not row:
+        frappe.throw(_("Message not found."))
+    _ensure_whatsapp_conversation_read(row.conversation, reference_doctype, reference_name)
+    from wa_chat_hub.api.chat import _serve_authorized_message_media
+
+    return _serve_authorized_message_media(row, download=bool(frappe.utils.cint(download)))
+
+
+def _whatsapp_message_statuses(conversation: str, message_names: str | list | None) -> list:
+    if not message_names:
+        return []
+    if isinstance(message_names, str):
+        try:
+            message_names = json.loads(message_names)
+        except (TypeError, ValueError):
+            frappe.throw(_("Message names must be a JSON list."))
+    if not isinstance(message_names, list) or any(type(name) not in (str, int) for name in message_names):
+        frappe.throw(_("Message names must be a list of message IDs."))
+    if len(message_names) > 100:
+        frappe.throw(_("At most 100 message statuses can be checked at a time."))
+    names = list(dict.fromkeys(str(name) for name in message_names if name))
+    if not names:
+        return []
+    return frappe.get_all(
+        "Chat Message",
+        filters={"conversation": conversation, "direction": "Outbound", "name": ["in", names]},
+        fields=["name", "delivery_status"],
+        limit_page_length=100,
+    )
 
 
 @frappe.whitelist(methods=["POST"])
@@ -619,12 +705,20 @@ def send_whatsapp_reply(conversation: str, body: str,
 
     _ensure_whatsapp_conversation_read(conversation, reference_doctype, reference_name)
 
+    from wa_chat_hub.messaging.windows import evaluate_send_permission
+
+    # Reject a closed window before recording an outbound attempt or clearing the draft.
+    if not evaluate_send_permission(conversation, "Text").allowed:
+        return {"success": False, "result": {"sent": False, "error": _(
+            "Messaging window closed. Use an approved template and wait for the patient to reply before sending a normal message."
+        )}}
+
     try:
         from wa_chat_hub.outbound import send_outbound_message
         from wa_chat_hub.services import append_message
 
         outbound = send_outbound_message(conversation, body.strip(), "Text")
-        delivery_status = outbound.get("delivery_status") or "Sent"
+        delivery_status = (outbound.get("delivery_status") or "Sent") if outbound.get("sent") else "Failed"
     except Exception as exc:
         frappe.log_error(frappe.get_traceback(), "Vobiz Workdesk WhatsApp Send Failed")
         outbound = {
@@ -652,7 +746,124 @@ def send_whatsapp_reply(conversation: str, body: str,
         "raw_transport_payload": outbound,
     })
     frappe.db.commit()
-    return {"success": True, "result": {**outbound, **result}, **_whatsapp_messages_page(conversation, 30)}
+    return {"success": bool(outbound.get("sent")), "result": {**outbound, **result}, **_whatsapp_messages_page(conversation, 30)}
+
+
+@frappe.whitelist(methods=["POST"])
+def upload_whatsapp_media(
+    conversation: str,
+    kind: str = "image",
+    reference_doctype: str | None = None,
+    reference_name: str | None = None,
+) -> dict[str, Any]:
+    if frappe.session.user == "Guest":
+        frappe.throw(_("Login required."), frappe.PermissionError)
+    _ensure_whatsapp_conversation_read(conversation, reference_doctype, reference_name)
+
+    from wa_chat_hub.api.runtime import DOCUMENT_UPLOAD_MIMETYPES, _upload_authorized_media_for_send
+
+    mimetype = None
+    if kind == "image":
+        allowed = {"image/"}
+    elif kind in {"audio", "sticker"}:
+        from wa_chat_hub.messaging.windows import evaluate_send_permission
+
+        content_type = kind.title()
+        evaluate_send_permission(conversation, content_type).ensure_allowed(content_type)
+        mimetype = _validate_whatsapp_audio_or_sticker(kind)
+        allowed = {mimetype}
+    elif kind == "document":
+        allowed = DOCUMENT_UPLOAD_MIMETYPES
+    else:
+        frappe.throw(_("Only images, documents, audio and stickers are supported."))
+    return _upload_authorized_media_for_send(
+        conversation, allowed, _("File is required"), _("Unsupported file type"),
+        **({"mimetype": mimetype} if mimetype else {}),
+    )
+
+
+def _validate_whatsapp_audio_or_sticker(kind: str) -> str:
+    """Reject unsupported files before uploading any bytes to the provider."""
+    from io import BytesIO
+
+    file = frappe.request.files.get("file") if frappe.request and frappe.request.files else None
+    if not file:
+        frappe.throw(_("Choose a file first."))
+    limit = 16 * 1024 * 1024 if kind == "audio" else 500 * 1024
+    try:
+        content = file.stream.read(limit + 1)
+    finally:
+        file.stream.seek(0)
+    if not content:
+        frappe.throw(_("File is empty."))
+    if len(content) > limit:
+        frappe.throw(_("Audio must be 16 MB or smaller.") if kind == "audio" else _("Stickers must be 500 KB or smaller."))
+
+    if kind == "sticker":
+        from PIL import Image, UnidentifiedImageError
+
+        try:
+            with Image.open(BytesIO(content)) as image:
+                if image.format != "WEBP" or image.size != (512, 512):
+                    frappe.throw(_("Choose a WebP sticker with dimensions 512 x 512 pixels."))
+                animated = getattr(image, "is_animated", False)
+                image.verify()
+        except (UnidentifiedImageError, OSError, ValueError):
+            frappe.throw(_("Choose a valid WebP sticker with dimensions 512 x 512 pixels."))
+        if not animated and len(content) > 100 * 1024:
+            frappe.throw(_("Static stickers must be 100 KB or smaller."))
+        mimetype = "image/webp"
+    else:
+        types = {".aac": "audio/aac", ".mp3": "audio/mpeg", ".m4a": "audio/mp4",
+                 ".amr": "audio/amr", ".ogg": "audio/ogg", ".opus": "audio/ogg"}
+        extension = "." + (file.filename or "").rsplit(".", 1)[-1].lower()
+        mimetype = (file.mimetype or "").lower()
+        mimetype = {"audio/mp3": "audio/mpeg", "audio/x-m4a": "audio/mp4",
+                    "audio/x-aac": "audio/aac", "audio/x-ogg": "audio/ogg"}.get(mimetype, mimetype)
+        if mimetype in {"", "application/octet-stream", "application/ogg"}:
+            mimetype = types.get(extension, "")
+        if mimetype not in set(types.values()):
+            frappe.throw(_("Choose MP3, AAC, M4A, AMR or OGG/Opus audio."))
+        if mimetype == "audio/ogg" and not (content.startswith(b"OggS") and b"OpusHead" in content[:512]):
+            frappe.throw(_("OGG audio must use the Opus codec."))
+    return mimetype
+
+
+@frappe.whitelist(methods=["POST"])
+def send_whatsapp_media(
+    conversation: str,
+    content_type: str,
+    media_url: str,
+    body: str | None = None,
+    display_media_url: str | None = None,
+    attachment_file: str | None = None,
+    file_name: str | None = None,
+    file_size: str | None = None,
+    reference_doctype: str | None = None,
+    reference_name: str | None = None,
+) -> dict[str, Any]:
+    if frappe.session.user == "Guest":
+        frappe.throw(_("Login required."), frappe.PermissionError)
+    _ensure_whatsapp_conversation_read(conversation, reference_doctype, reference_name)
+    content_type = (content_type or "").title()
+    if content_type not in {"Image", "Document", "Audio", "Sticker"}:
+        frappe.throw(_("Only images, documents, audio and stickers are supported."))
+    if content_type in {"Audio", "Sticker"}:
+        body = ""  # These WhatsApp media types do not support captions.
+
+    from wa_chat_hub.api.runtime import _send_authorized_reply
+
+    return _send_authorized_reply({
+        "conversation": conversation,
+        "content_type": content_type,
+        "body": body,
+        "media_url": media_url,
+        "display_media_url": display_media_url,
+        "attachment_file": attachment_file,
+        "file_name": file_name,
+        "file_size": file_size,
+        "sender_type": "Agent",
+    })
 
 
 @frappe.whitelist()
@@ -693,6 +904,7 @@ def send_whatsapp_template(
     template_category: str | None = None,
     reference_doctype: str | None = None,
     reference_name: str | None = None,
+    file_name: str | None = None,
 ) -> dict[str, Any]:
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
@@ -700,6 +912,7 @@ def send_whatsapp_template(
         frappe.throw(_("Template is required."))
     _ensure_whatsapp_conversation_read(conversation, reference_doctype, reference_name)
 
+    from wa_chat_hub.interakt.templates_api import resolve_approved_template
     from wa_chat_hub.outbound import send_interakt_template_message
     from wa_chat_hub.services import append_message
 
@@ -709,10 +922,13 @@ def send_whatsapp_template(
         "body_values": _list_from_template_values(body_values),
         "header_values": _list_from_template_values(header_values),
         "template_category": template_category or "",
+        "file_name": file_name,
     }
+    channel_account = frappe.db.get_value("Chat Conversation", conversation, "channel_account")
+    template = resolve_approved_template(channel_account, template)
     try:
         outbound = send_interakt_template_message(conversation, template)
-        delivery_status = outbound.get("delivery_status") or "Sent"
+        delivery_status = (outbound.get("delivery_status") or "Sent") if outbound.get("sent") else "Failed"
     except Exception as exc:
         frappe.log_error(frappe.get_traceback(), "Vobiz Workdesk WhatsApp Template Send Failed")
         outbound = {
@@ -735,18 +951,28 @@ def send_whatsapp_template(
         "sender_type": "Agent",
         "content_type": "Template",
         "body": body_text,
+        "media_url": template.get("header_media_url"),
         "delivery_status": delivery_status,
         "channel_message_id": outbound.get("provider_message_id"),
-        "raw_transport_payload": outbound,
+        "raw_transport_payload": {
+            **outbound,
+            "header_format": template.get("header_format"),
+            "header_media_url": template.get("header_media_url"),
+        },
         "template_category": template_category,
     })
 
     followup_body = (followup_body or "").strip()
-    if followup_body:
-        send_whatsapp_reply(conversation, followup_body, reference_doctype, reference_name)
-    else:
-        frappe.db.commit()
-    return {"success": True, "result": {**outbound, **result}, **_whatsapp_messages_page(conversation, 30)}
+    followup_error = None
+    if followup_body and outbound.get("sent"):
+        followup = send_whatsapp_reply(conversation, followup_body, reference_doctype, reference_name)
+        if not followup.get("success"):
+            followup_error = (followup.get("result") or {}).get("error") or _("Follow-up message could not be sent.")
+    frappe.db.commit()
+    return {
+        "success": bool(outbound.get("sent")), "result": {**outbound, **result},
+        "followup_error": followup_error, **_whatsapp_messages_page(conversation, 30)
+    }
 
 
 @frappe.whitelist()
@@ -4238,6 +4464,8 @@ def _whatsapp_preview(reference_doctype: str, reference_name: str) -> dict[str, 
     )
 
     if conversation:
+        from wa_chat_hub.messaging.windows import get_messaging_window_state
+
         fields = _existing_fields(frappe.get_meta("Chat Conversation"), (
             "name", "status", "priority", "lead_score", "lead_lan", "lead_temperature",
             "last_message_preview", "unread_count", "ai_summary", "modified",
@@ -4248,6 +4476,7 @@ def _whatsapp_preview(reference_doctype: str, reference_name: str) -> dict[str, 
             "available": True,
             "conversation": conversation,
             "data": data,
+            "messaging_window": get_messaging_window_state(conversation),
             **page,
         }
 
@@ -4395,7 +4624,8 @@ def _whatsapp_recent_messages(conversation: str) -> list[dict[str, Any]]:
     return _whatsapp_messages_page(conversation, 10).get("messages", [])
 
 
-def _whatsapp_messages_page(conversation: str, limit: int | str = 30, before: str | None = None) -> dict[str, Any]:
+def _whatsapp_messages_page(conversation: str, limit: int | str = 30, before: str | None = None,
+                             *, after_message: str | None = None) -> dict[str, Any]:
     if not conversation or not frappe.db.exists("DocType", "Chat Message"):
         return {"messages": [], "has_more": False, "next_before": None}
 
@@ -4409,30 +4639,57 @@ def _whatsapp_messages_page(conversation: str, limit: int | str = 30, before: st
         "body",
         "media_url",
         "attachment_file",
+        "raw_transport_payload",
         "delivery_status",
         "creation",
     ))
     filters: dict[str, Any] = {"conversation": conversation}
     if before:
         filters["creation"] = ["<", before]
-    rows = frappe.get_all(
-        "Chat Message",
-        filters=filters,
-        fields=fields,
-        order_by="creation desc",
-        limit_page_length=limit + 1,
-    )
+    if after_message:
+        rows = _whatsapp_messages_after(conversation, after_message, fields, limit + 1)
+    else:
+        rows = frappe.get_all(
+            "Chat Message",
+            filters=filters,
+            fields=fields,
+            order_by="creation desc, name desc",
+            limit_page_length=limit + 1,
+        )
     has_more = len(rows) > limit
     rows = rows[:limit]
-    rows.reverse()
+    if not after_message:
+        rows.reverse()
+    from wa_chat_hub.api.chat import _attach_template_media
+
     for row in rows:
+        _attach_template_media(row)
+        row.pop("raw_transport_payload", None)
         if row.get("attachment_file") and not row.get("media_url"):
             row["attachment_url"] = frappe.db.get_value("File", row.get("attachment_file"), "file_url") or ""
     return {
         "messages": rows,
         "has_more": has_more,
         "next_before": rows[0].get("creation") if rows else before,
+        "has_more_after": bool(after_message and has_more),
     }
+
+
+def _whatsapp_messages_after(conversation: str, after_message: str, fields: list[str], limit: int) -> list:
+    cursor = frappe.db.get_value(
+        "Chat Message", {"name": after_message, "conversation": conversation}, ["name", "creation"], as_dict=True
+    )
+    if not cursor:
+        frappe.throw(_("The last WhatsApp message was not found in this conversation."))
+    # fields are selected from the fixed message-field list above, never from request input.
+    columns = ", ".join(f"`{field}`" for field in fields)
+    return frappe.db.sql(
+        f"""SELECT {columns} FROM `tabChat Message`
+        WHERE conversation = %s AND (creation > %s OR (creation = %s AND name > %s))
+        ORDER BY creation ASC, name ASC LIMIT %s""",
+        (conversation, cursor.creation, cursor.creation, cursor.name, limit),
+        as_dict=True,
+    )
 
 
 def _ensure_whatsapp_conversation_read(
@@ -4690,14 +4947,15 @@ def _talk_seconds(row) -> int:
 
 def _list_from_template_values(value) -> list[str]:
     if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item or "").strip()]
+        # Keep positions (including blanks) so validation cannot silently shift variables.
+        return [str(item).strip() if item is not None else "" for item in value]
     text = str(value or "").strip()
     if not text:
         return []
     try:
         parsed = frappe.parse_json(text)
         if isinstance(parsed, list):
-            return [str(item).strip() for item in parsed if str(item or "").strip()]
+            return [str(item).strip() if item is not None else "" for item in parsed]
     except Exception:
         pass
-    return [row.strip() for row in text.replace(",", "\n").splitlines() if row.strip()]
+    return [row.strip() for row in text.replace(",", "\n").split("\n")]
