@@ -123,17 +123,19 @@ def status_bucket(row: dict[str, Any] | None) -> str:
         return "failed"
     if "cancel" in outcome_signal or "reject" in outcome_signal or "decline" in outcome_signal:
         return "cancelled"
-    # A positive billsec may only describe the Agent First A-leg. Check the
-    # final B-leg outcome above before treating it as a connected customer call.
-    if frappe.utils.cint(row.get("billsec")) > 0:
-        return "connected"
     signal = call_signal(row)
     if status == "Busy":
         return "busy"
-    if status == "No Answer":
+    if status == "No Answer" and row.get("call_flow") != "Customer First":
         return "no_answer"
     if status == "Failed":
         return "failed"
+    # A positive billsec can belong only to the agent leg. Preserve the final
+    # customer outcome even when a later CDR supplies agent billing duration.
+    if frappe.utils.cint(row.get("billsec")) > 0:
+        return "connected"
+    if status == "No Answer":
+        return "no_answer"
     if status in MISSED_STATUSES:
         return "missed"
     if talk_seconds(row) > 0:

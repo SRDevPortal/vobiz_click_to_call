@@ -102,11 +102,16 @@ def reconcile_legacy_call(call_log: str) -> None:
     """Provider I/O runs in a separate job with no mapping/log locks held."""
     from requests.exceptions import Timeout, ConnectionError
     from vobiz_click_to_call.services.cdr import sync_call_log_cdr
+    from vobiz_click_to_call.services import recovery_policy
 
     try:
-        sync_call_log_cdr(call_log, ignore_permissions=True, strict_match=True)
-        if frappe.db.get_value("Vobiz Call Log", call_log, "status") in TERMINAL_STATUSES:
-            enqueue_recovery(call_log)
+        with recovery_policy.attempt(call_log) as allowed:
+            if not allowed:
+                return
+            sync_call_log_cdr(call_log, ignore_permissions=True, strict_match=True)
+            if frappe.db.get_value("Vobiz Call Log", call_log, "status") in TERMINAL_STATUSES:
+                recovery_policy.clear(call_log)
+                enqueue_recovery(call_log)
     except (frappe.QueryDeadlockError, frappe.QueryTimeoutError,
             frappe.TimestampMismatchError, Timeout, ConnectionError) as exc:
         raise frappe.RetryBackgroundJobError from exc

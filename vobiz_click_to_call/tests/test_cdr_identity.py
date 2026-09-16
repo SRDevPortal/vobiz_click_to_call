@@ -20,7 +20,7 @@ class CDRIdentityTests(unittest.TestCase):
         replacements = [
             (frappe, "local", SimpleNamespace(flags=frappe._dict(in_test=False))),
             (frappe, "db", self.db), (frappe, "session", SimpleNamespace(user="agent")),
-            (frappe, "get_roles", lambda: []), (frappe, "get_doc", lambda *args: self.doc),
+            (frappe, "get_roles", lambda: []), (frappe, "get_doc", lambda *args, **kwargs: self.doc),
             (frappe, "throw", lambda message: (_ for _ in ()).throw(ValueError(message))),
             (frappe.utils, "now", lambda: "2026-09-14 16:45:00"),
             (cdr, "_", lambda text: text),
@@ -101,6 +101,77 @@ class CDRIdentityTests(unittest.TestCase):
         self.assertEqual(self.doc.recording_url, correct["recording_url"])
         self.assertEqual(self.doc.recording_status, "Completed")
         self.doc.save.assert_called_once()
+
+    def test_agent_billing_does_not_overwrite_final_customer_failure(self):
+        from vobiz_click_to_call.services.call_status import status_bucket
+        for status, bucket in [("Failed", "failed"), ("No Answer", "no_answer"), ("Busy", "busy")]:
+            with self.subTest(status=status):
+                self.doc.update(call_uuid="own-id", status=status, call_status="customer-failed",
+                                hangup_cause="CUSTOMER_FAILURE")
+                cdr.apply_cdr_to_call_log(self.doc, {"uuid": "own-id", "billsec": 25,
+                                                  "status": "completed", "hangup_cause": "NORMAL_CLEARING"}, {})
+                self.assertEqual(self.doc.status, status)
+                self.assertEqual(self.doc.hangup_cause, "CUSTOMER_FAILURE")
+                self.assertEqual(status_bucket({"status": status, "billsec": 25}), bucket)
+
+    def test_explicit_customer_outcome_wins_over_agent_billing(self):
+        self.assertEqual(cdr.status_from_cdr({"status": "completed", "b_leg_status": "no-answer",
+                                             "billsec": 25}, "Connected"), "No Answer")
+
+    def test_active_parent_with_ended_customer_leg_is_not_terminal(self):
+        self.assertFalse(cdr._terminal_cdr({"status": "in-progress", "dial_status": "completed",
+                                          "end_time": "2026-09-14 16:45:00"}))
+
+    def test_direct_exact_lookup_avoids_list_search(self):
+        self.doc.call_uuid = "own-id"
+        self.provider.retrieve_cdr.return_value = {"data": {"uuid": "own-id", "status": "completed"}}
+        self.assertEqual(cdr.lookup_cdr(self.provider, self.doc)["uuid"], "own-id")
+        self.provider.search_cdrs.assert_not_called()
+
+    def test_uuid_changed_during_request_cannot_mark_new_call_not_found(self):
+        self.doc.call_uuid = "old-id"
+        latest = frappe._dict(self.doc, call_uuid="new-id")
+        self.provider.search_cdrs.return_value = {"data": []}
+        with patch.object(frappe, "get_doc", side_effect=[self.doc, latest]) as get_doc:
+            self.assertEqual(cdr.sync_call_log_cdr("CALL")["status"], "Identity Changed")
+        get_doc.assert_called_with("Vobiz Call Log", "CALL", for_update=True)
+        self.db.set_value.assert_not_called()
+
+    def test_callback_final_status_arriving_during_request_is_preserved(self):
+        self.doc.update(call_uuid="own-id", status="Connected")
+        latest = frappe._dict(self.doc, status="Busy", hangup_cause="USER_BUSY")
+        self.provider.search_cdrs.return_value = {"data": [{"uuid": "own-id", "status": "completed", "billsec": 25}]}
+        with patch.object(frappe, "get_doc", side_effect=[self.doc, latest]):
+            self.assertEqual(cdr.sync_call_log_cdr("CALL")["status"], "Synced")
+        self.assertEqual(latest.status, "Busy")
+        self.assertEqual(latest.hangup_cause, "USER_BUSY")
+
+    def test_manual_sync_cannot_finalize_a_still_active_provider_call(self):
+        self.doc.update(call_uuid="own-id", status="Connected")
+        self.provider.search_cdrs.return_value = {"data": [{"uuid": "own-id", "status": "in-progress",
+                                                         "billsec": 25}]}
+        self.assertEqual(cdr.sync_call_log_cdr("CALL")["status"], "Provider Active")
+        self.assertEqual(self.doc.status, "Connected")
+        self.doc.save.assert_not_called()
+
+    def test_recent_sync_reserves_capacity_for_backlog_and_bounds_batch_size(self):
+        from datetime import datetime
+        from vobiz_click_to_call.services import recovery_policy
+        recent = [frappe._dict(name=f"new-{i}") for i in range(4)]
+        old = [frappe._dict(name=f"old-{i}") for i in range(8)]
+        with patch.object(frappe, "get_all", side_effect=[recent, old]) as query, \
+                patch.object(frappe, "enqueue") as enqueue, \
+                patch.object(frappe.utils, "now_datetime", return_value=datetime(2026, 9, 16)), \
+                patch.object(recovery_policy, "due", side_effect=lambda name, purpose: name != "new-0"):
+            result = cdr.enqueue_recent_cdr_sync(limit=8, batch_size=500)
+        self.assertEqual(result["queued"], 8)
+        batches = [call.kwargs["call_logs"] for call in enqueue.call_args_list]
+        self.assertEqual([len(batch) for batch in batches], [5, 3])
+        selected = [name for batch in batches for name in batch]
+        self.assertNotIn("new-0", selected)
+        self.assertEqual(sum(name.startswith("old-") for name in selected), 5)
+        self.assertIn("cdr_synced_at asc", query.call_args.kwargs["order_by"])
+        self.assertEqual(query.call_args.kwargs["filters"]["status"], ["in", cdr.TERMINAL_STATUSES])
 
 
 if __name__ == "__main__":

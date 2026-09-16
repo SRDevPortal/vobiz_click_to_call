@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
+from email.utils import parsedate_to_datetime
+import time
 
 import requests
 
@@ -10,12 +13,30 @@ from frappe import _
 from vobiz_click_to_call.services.settings import get_auth_credentials, get_settings
 
 
+class ProviderTemporaryError(Exception):
+    """A read can be retried later; this never means that a call has ended."""
+
+    def __init__(self, message: str, retry_after: float = 0):
+        super().__init__(message)
+        self.retry_after = max(0, min(float(retry_after or 0), 3600))
+
+
+def _retry_after(value):
+    try:
+        return max(0, float(value))
+    except (ValueError, TypeError):
+        try:
+            return max(0, parsedate_to_datetime(value).timestamp() - time.time())
+        except (ValueError, TypeError, OverflowError):
+            return 0
+
+
 class VobizClient:
     def __init__(self, settings=None):
         self.settings = settings or get_settings()
         self.auth_id, self.auth_token = get_auth_credentials(self.settings)
         self.base_url = (self.settings.base_url or "https://api.vobiz.ai/api/v1").strip().rstrip("/")
-        self.timeout = int(self.settings.http_timeout or 20)
+        self.timeout = max(1, int(self.settings.http_timeout or 20))
 
     def make_call(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.auth_id or not self.auth_token:
@@ -72,6 +93,14 @@ class VobizClient:
         url = f"{self.base_url}/Account/{self.auth_id}/cdr/search"
         return self._get(url, params or {}, "Vobiz CDR search failed")
 
+    def retrieve_cdr(self, call_id: str) -> dict[str, Any]:
+        if not self.auth_id or not self.auth_token:
+            frappe.throw(_("Vobiz Auth ID/Auth Token are not configured."))
+        if not call_id:
+            return {}
+        url = f"{self.base_url}/Account/{self.auth_id}/cdr/{quote(call_id, safe='')}"
+        return self._get(url, {}, "Vobiz CDR lookup failed", allow_missing=True)
+
     def retrieve_live_call(self, call_uuid: str, status: str = "live") -> dict[str, Any]:
         if not self.auth_id or not self.auth_token:
             frappe.throw(_("Vobiz Auth ID/Auth Token are not configured."))
@@ -104,17 +133,28 @@ class VobizClient:
 
         return data
 
-    def _get(self, url: str, params: dict[str, Any], failure_label: str) -> dict[str, Any]:
-        response = requests.get(
-            url,
-            params=params,
-            headers={
-                "X-Auth-ID": self.auth_id,
-                "X-Auth-Token": self.auth_token,
-                "Content-Type": "application/json",
-            },
-            timeout=self.timeout,
-        )
+    def _get(self, url: str, params: dict[str, Any], failure_label: str,
+             *, allow_missing: bool = False) -> dict[str, Any]:
+        from vobiz_click_to_call.services.recovery_policy import claim_provider_read
+
+        claim_provider_read(self.auth_id)
+        try:
+            response = requests.get(
+                url, params=params,
+                headers={"X-Auth-ID": self.auth_id, "X-Auth-Token": self.auth_token,
+                         "Content-Type": "application/json"},
+                timeout=(min(5, self.timeout), self.timeout),
+            )
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+            raise ProviderTemporaryError(f"{failure_label}: temporary connection/read failure") from None
+
+        if allow_missing and response.status_code == 404:
+            return {}
+        if response.status_code in (408, 429, 500, 502, 503, 504):
+            raise ProviderTemporaryError(
+                f"{failure_label}: HTTP {response.status_code}",
+                retry_after=_retry_after(response.headers.get("Retry-After")),
+            )
 
         try:
             data = response.json()

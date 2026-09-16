@@ -55,7 +55,7 @@ async function testConsole(app) {
     obj.workdesk_whatsapp_message_html = message => message.name;
 
     obj.bind_realtime(); obj.bind_realtime();
-    assert.equal(handlers.size, 5, 'No duplicate realtime subscriptions');
+    assert.equal(handlers.size, app === 'vobiz_system_call' ? 6 : 5, 'No duplicate realtime subscriptions');
     handlers.get('wa_chat_new_message')({ conversation: 'OTHER' });
     assert.equal(timers.size, 0);
     handlers.get('wa_chat_new_message')({ conversation: 'CONV', message: { name: 'UNTRUSTED' } });

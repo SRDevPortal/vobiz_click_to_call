@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -16,9 +16,11 @@ from vobiz_click_to_call.services import cdr
 
 class MappingRecoveryTests(unittest.TestCase):
     def setUp(self):
+        from vobiz_click_to_call.services import recovery_policy
         self.db = MagicMock()
         for obj, name, value in (
             (frappe, "db", self.db),
+            (recovery_policy, "attempt", lambda *a, **kw: nullcontext(True)),
             (frappe, "local", SimpleNamespace(flags=frappe._dict(in_test=False), request=None)),
             (frappe, "session", SimpleNamespace(user="test-agent")),
             (call, "_", lambda value: value),

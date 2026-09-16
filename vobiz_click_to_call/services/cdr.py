@@ -8,13 +8,14 @@ import frappe
 from frappe import _
 
 from vobiz_ai.api.call_log import make_outbound_call_key, sync_linked_summaries, sync_reference_links
-from vobiz_click_to_call.services.client import VobizClient
+from vobiz_click_to_call.services.client import ProviderTemporaryError, VobizClient
 from vobiz_click_to_call.services.call_status import status_from_provider
 from vobiz_click_to_call.services.disposition import update_reference_call_metrics
 from vobiz_click_to_call.services.numbers import normalize_phone_number
 from vobiz_click_to_call.services.settings import get_settings
 
-CDR_BATCH_SIZE = 10
+CDR_BATCH_SIZE = 5
+TERMINAL_STATUSES = ("Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled")
 CDR_PROVIDER_ID_FIELDS = ("call_uuid", "recording_call_uuid", "request_uuid", "a_leg_uuid", "b_leg_uuid")
 STALE_RINGING_TIMEOUT_SECONDS = 60
 STALE_RINGING_STATUSES = ("Queued", "Initiated", "Dialing", "Ringing", "Connecting", "Agent Ringing")
@@ -42,18 +43,28 @@ def sync_call_log_cdr(call_log: str, ignore_permissions: bool = False, *, strict
     if not _provider_ids(doc):
         return {"status": "Awaiting Provider ID", "call_log": doc.name}
 
-    params = build_cdr_search_params(doc)
-    response = VobizClient(settings).search_cdrs(params)
-    cdr = find_matching_cdr(doc, response, strict_match=strict_match)
+    original_ids = _provider_ids(doc)
+    frappe.db.commit()  # Provider I/O must not retain a transaction's row locks.
+    cdr = lookup_cdr(VobizClient(settings), doc)
+    response = {"data": [cdr]} if cdr else {"data": []}
+    # Callback updates may have arrived during the request. Lock the latest row
+    # instead of saving the stale document read before the network operation.
+    doc = frappe.get_doc("Vobiz Call Log", call_log, for_update=True)
+    if original_ids != _provider_ids(doc) or (cdr and find_matching_cdr(doc, response) is None):
+        frappe.db.rollback()
+        return {"status": "Identity Changed", "call_log": call_log}
     if not cdr:
-        doc.cdr_sync_status = "Not Found"
-        doc.cdr_synced_at = frappe.utils.now()
-        doc.cdr_json = _bounded_json(response)
-        doc.save(ignore_permissions=True)
+        if doc.cdr_sync_status == "Synced":
+            frappe.db.commit()
+            return {"status": "Synced", "call_log": doc.name}
+        frappe.db.set_value("Vobiz Call Log", call_log,
+                            {"cdr_sync_status": "Not Found", "cdr_synced_at": frappe.utils.now()},
+                            update_modified=False)
         frappe.db.commit()
         return {"status": "Not Found", "call_log": doc.name}
 
-    if strict_match and not _terminal_cdr(cdr):
+    if not _terminal_cdr(cdr):
+        frappe.db.commit()
         return {"status": "Provider Active", "call_log": doc.name}
 
     apply_cdr_to_call_log(doc, cdr, response)
@@ -61,30 +72,33 @@ def sync_call_log_cdr(call_log: str, ignore_permissions: bool = False, *, strict
     return {"status": "Synced", "call_log": doc.name}
 
 
-def enqueue_recent_cdr_sync(limit: int = 50, batch_size: int = CDR_BATCH_SIZE) -> dict:
+def enqueue_recent_cdr_sync(limit: int = 100, batch_size: int = CDR_BATCH_SIZE) -> dict:
     settings = get_settings()
     if not settings.enabled or not settings.enable_cdr_sync:
         return {"queued": 0, "disabled": True}
 
-    limit = max(1, min(int(limit or 50), 200))
+    limit = max(1, min(int(limit or 100), 200))
     batch_size = max(1, min(int(batch_size or CDR_BATCH_SIZE), CDR_BATCH_SIZE))
 
-    rows = frappe.get_all(
-        "Vobiz Call Log",
-        filters={"cdr_sync_status": ["in", ["", "Not Synced", "Not Found", "Failed"]]},
-        fields=["name"],
-        order_by="creation desc",
-        limit=limit,
-    )
-
-    names = [row.name for row in rows]
+    from vobiz_click_to_call.services.recovery_policy import due
+    filters = {"cdr_sync_status": ["in", ["", "Not Synced", "Not Found", "Failed"]],
+               "status": ["in", TERMINAL_STATUSES],
+               "creation": ["<", frappe.utils.add_to_date(frappe.utils.now_datetime(), seconds=-60)]}
+    provider_ids = [[field, "is", "set"] for field in CDR_PROVIDER_ID_FIELDS]
+    # Reserve at least half the work for older/least-recently-attempted records.
+    # New traffic must not permanently hide the existing backlog.
+    recent = frappe.get_all("Vobiz Call Log", filters=filters, or_filters=provider_ids,
+                            fields=["name"], order_by="creation desc", limit=max(1, limit // 2))
+    backlog = frappe.get_all("Vobiz Call Log", filters=filters, or_filters=provider_ids,
+                             fields=["name"], order_by="cdr_synced_at asc, creation asc", limit=limit)
+    names = list(dict.fromkeys(row.name for row in recent + backlog if due(row.name, "cdr")))[:limit]
     for start in range(0, len(names), batch_size):
         batch = names[start : start + batch_size]
         batch_hash = hashlib.sha1("|".join(batch).encode()).hexdigest()[:16]
         frappe.enqueue(
             "vobiz_click_to_call.services.cdr.process_cdr_batch",
             queue="long",
-            timeout=300,
+            timeout=600,
             job_id=f"vobiz-cdr-batch-{batch_hash}",
             deduplicate=True,
             call_logs=batch,
@@ -125,7 +139,13 @@ def sync_missing_inbound_cdrs(date: str | None = None, limit: int = 100) -> dict
 
     date = str(date or frappe.utils.today())
     limit = max(1, min(int(limit or 100), 100))
-    response = VobizClient(settings).search_cdrs({"date": date})
+    try:
+        response = VobizClient(settings).search_cdrs({"start_date": date, "end_date": date,
+                                                   "call_direction": "inbound", "per_page": limit})
+    except ProviderTemporaryError:
+        # The next scheduled sweep retries without turning an account budget or
+        # temporary provider outage into another generic scheduler traceback.
+        return {"created": 0, "skipped": 0, "pending_provider": True}
     rows = extract_cdr_rows(response)
     created = 0
     skipped = 0
@@ -150,16 +170,27 @@ def sync_missing_inbound_cdrs(date: str | None = None, limit: int = 100) -> dict
 
 
 def process_cdr_batch(call_logs: list[str] | tuple[str, ...]) -> dict:
+    from vobiz_click_to_call.services import recovery_policy
     call_logs = list(call_logs or [])[:CDR_BATCH_SIZE]
     result = {"synced": 0, "not_found": 0, "failed": 0}
     for call_log in call_logs:
         try:
-            status = sync_call_log_cdr(call_log, ignore_permissions=True).get("status")
-            if status == "Synced":
-                result["synced"] += 1
-            elif status == "Not Found":
-                result["not_found"] += 1
+            with recovery_policy.attempt(call_log, "cdr") as allowed:
+                if not allowed:
+                    continue
+                # Attempt timestamps also rotate transient failures to the back
+                # of the backlog; this metadata must not extend call activity.
+                frappe.db.set_value("Vobiz Call Log", call_log, "cdr_synced_at",
+                                    frappe.utils.now(), update_modified=False)
+                frappe.db.commit()
+                status = sync_call_log_cdr(call_log, ignore_permissions=True).get("status")
+                if status == "Synced":
+                    result["synced"] += 1
+                    recovery_policy.clear(call_log, "cdr")
+                elif status == "Not Found":
+                    result["not_found"] += 1
         except Exception:
+            frappe.db.rollback()
             result["failed"] += 1
             frappe.log_error(frappe.get_traceback(), "Vobiz CDR sync failed")
 
@@ -313,21 +344,43 @@ def _normalize_cdr_phone(value: str | None) -> str:
 
 
 def build_cdr_search_params(doc) -> dict[str, Any]:
-    params: dict[str, Any] = {}
-    lookup_uuid = doc.call_uuid or doc.get("recording_call_uuid")
+    params: dict[str, Any] = {"per_page": 50}
+    lookup_uuid = doc.get("call_uuid") or doc.get("recording_call_uuid") or doc.get("request_uuid")
     if lookup_uuid:
-        params["call_uuid"] = lookup_uuid
-    if doc.request_uuid:
-        params["request_uuid"] = doc.request_uuid
-    if doc.customer_number:
-        params["to"] = doc.customer_number
-    if doc.caller_id:
-        params["from"] = doc.caller_id
-    if doc.creation:
-        created = frappe.utils.getdate(doc.creation)
+        params["search"] = lookup_uuid
+    if doc.get("customer_number"):
+        key = "from_number" if doc.get("direction") == "Incoming" else "to_number"
+        params[key] = str(doc.get("customer_number")).lstrip("+")
+    # A browser endpoint username is not an originating phone number.
+    if doc.get("creation"):
+        created = frappe.utils.getdate(doc.get("creation"))
         params["start_date"] = str(frappe.utils.add_days(created, -1))
         params["end_date"] = str(frappe.utils.add_days(created, 1))
     return params
+
+
+def lookup_cdr(client, doc):
+    """Prefer one exact lookup; bounded searches must still match provider IDs."""
+    if not _provider_ids(doc):
+        return None
+    call_id = doc.get("call_uuid") or doc.get("recording_call_uuid")
+    if call_id:
+        response = client.retrieve_cdr(str(call_id))
+        if isinstance(response, dict):
+            data = response.get("data", response)
+            single = {"data": [data]} if isinstance(data, dict) else response
+            found = find_matching_cdr(doc, single)
+            if found:
+                return found
+    params = build_cdr_search_params(doc)
+    for page in (1, 2):
+        response = client.search_cdrs(dict(params, page=page))
+        found = find_matching_cdr(doc, response)
+        if found:
+            return found
+        if not (response.get("pagination") or {}).get("has_next"):
+            break
+    return None
 
 
 def _provider_ids(doc) -> set[str]:
@@ -357,6 +410,9 @@ def find_matching_cdr(doc, response: dict, *, strict_match: bool = False) -> dic
 
 
 def _terminal_cdr(cdr: dict) -> bool:
+    parent_state = str(cdr.get("status") or cdr.get("call_status") or "").lower().replace("_", "-")
+    if parent_state in {"in-progress", "live", "ringing", "answered", "connected", "queued"}:
+        return False
     if cdr.get("end_time") or cdr.get("EndTime"):
         return True
     states = {str(cdr.get(key) or "").lower().replace("_", "-") for key in (
@@ -395,13 +451,18 @@ def apply_cdr_to_call_log(doc, cdr: dict, raw_response: dict) -> None:
     doc.billsec = first_int(cdr, "billsec", "bill_seconds", "billed_duration", fallback=doc.billsec)
     doc.cost = first_float(cdr, "cost", "total_amount", "charge", fallback=doc.cost)
     doc.currency = cdr.get("currency") or doc.currency or "INR"
-    doc.hangup_cause = cdr.get("hangup_cause") or cdr.get("hangup_cause_name") or doc.hangup_cause
-    doc.call_status = cdr.get("status") or cdr.get("call_status") or doc.call_status
+    # An A-leg CDR can carry billsec/NORMAL_CLEARING when the customer leg
+    # failed. Enrich final calls without replacing their callback outcome.
+    if doc.status not in TERMINAL_STATUSES:
+        doc.hangup_cause = cdr.get("hangup_cause") or cdr.get("hangup_cause_name") or doc.hangup_cause
+        doc.call_status = cdr.get("status") or cdr.get("call_status") or doc.call_status
     recording_url = cdr.get("recording_url") or cdr.get("record_url") or doc.recording_url
     doc.recording_url = recording_url
     if recording_url and doc.recording_status != "Completed":
         doc.recording_status = "Completed"
-    doc.status = status_from_cdr(cdr, doc.status)
+    if doc.status not in TERMINAL_STATUSES:
+        doc.status = status_from_cdr(dict(cdr, dial_status=cdr.get("dial_status")
+                                        or cdr.get("b_leg_status") or doc.get("dial_status")), doc.status)
     doc.save(ignore_permissions=True)
     update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
     sync_linked_summaries(doc)
@@ -411,7 +472,8 @@ def status_from_cdr(cdr: dict, current_status: str) -> str:
     return status_from_provider(
         {
             "status": cdr.get("status"),
-            "call_status": cdr.get("call_status"),
+            "call_status": cdr.get("call_status") or cdr.get("status"),
+            "dial_status": cdr.get("dial_status") or cdr.get("b_leg_status"),
             "hangup_cause": cdr.get("hangup_cause") or cdr.get("hangup_cause_name"),
             "duration": first_int(cdr, "duration", "call_duration"),
             "billsec": first_int(cdr, "billsec", "bill_seconds", "billed_duration"),

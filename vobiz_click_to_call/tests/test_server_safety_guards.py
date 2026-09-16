@@ -38,11 +38,12 @@ class TestServerSafetyGuards(unittest.TestCase):
         self.assertEqual(
             app_hooks.scheduler_events["hourly"],
             [
-                "vobiz_click_to_call.services.cdr.enqueue_recent_cdr_sync",
                 "vobiz_click_to_call.services.cdr.enqueue_missing_inbound_cdr_sync",
                 "vobiz_click_to_call.api.console.close_stale_agent_attendance_sessions",
             ],
         )
+        self.assertEqual(app_hooks.scheduler_events["cron"]["*/5 * * * *"],
+                         ["vobiz_click_to_call.services.cdr.enqueue_recent_cdr_sync"])
         self.assertEqual(
             app_hooks.scheduler_events["cron"]["* * * * *"],
             ["vobiz_click_to_call.services.cdr.recover_stale_ringing_calls",
