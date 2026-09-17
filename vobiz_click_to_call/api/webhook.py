@@ -49,6 +49,7 @@ def answer(call_log: str | None = None, token: str | None = None):
         return _xml_response(_hangup_xml())
 
     xml = _dial_xml(doc)
+    frappe.db.commit()  # Persist XML recording ownership for GET callbacks too.
     _log_webhook_event("answer returning dial xml", doc, {"xml": xml})
     return _xml_response(xml)
 
@@ -424,6 +425,8 @@ def _with_nested_response(payload: dict) -> dict:
 
 def _dial_xml(doc) -> str:
     settings = get_settings()
+    from vobiz_click_to_call.services.recording import session_recording_xml
+    record_xml = session_recording_xml(doc, settings)
     callback_url = build_callback_url(
         "vobiz_click_to_call.api.webhook.dial_callback",
         doc.name,
@@ -455,6 +458,7 @@ def _dial_xml(doc) -> str:
     return (
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
         "<Response>"
+        f"{record_xml}"
         f"<Dial {attr_text}>"
         f"<Number>{escape(provider_phone_number(dial_number))}</Number>"
         "</Dial>"
@@ -523,6 +527,9 @@ def _log_webhook_event(message: str, doc, payload: dict, severity: str = "Info")
 
 def _start_recording_safely(call_log: str) -> None:
     try:
+        from vobiz_click_to_call.services.recording import has_session_recording
+        if has_session_recording(call_log):
+            return
         frappe.enqueue(
             "vobiz_click_to_call.services.recording.start_recording_if_needed",
             queue="short",
