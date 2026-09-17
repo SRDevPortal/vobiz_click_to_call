@@ -81,6 +81,51 @@ async function check(app) {
         obj.initialize_whatsapp_window(body, cached);
         assert.match(body.find('[data-wa-window-text]').text(), /Messaging window closed/);
         assert.equal(body.find('[data-wa-send]').prop('disabled'), true, 'Reopening a cached tab cannot extend expiry');
+
+        // Bootstrap waits for the backdrop transition before attaching a new modal.
+        // A fast chat response can render while the Workdesk is still detached.
+        w.frappe.ui = { Dialog: class {
+            constructor() {
+                this.$wrapper = w.$('<div><button class="close"></button><div class="details"></div></div>');
+            }
+            get_close_btn() { return this.$wrapper.find('.close'); }
+            get_field() { return { $wrapper: this.$wrapper.find('.details') }; }
+            show() {}
+            finish_show() {
+                w.$(w.document.body).append(this.$wrapper);
+                this.$wrapper.trigger('shown.bs.modal');
+            }
+        } };
+        obj.queue_meta_value = () => 'CRM Lead';
+        obj.update_workdesk_primary_action = () => {};
+        obj.render_workdesk_incoming_controls = () => {};
+        obj.scroll_whatsapp_to_bottom = () => {};
+        const scheduled = [];
+        obj.schedule_whatsapp_sync = delay => {
+            if (obj.active_whatsapp_view()) scheduled.push(delay);
+        };
+        function open_detached(name, windowState = state) {
+            const context = { loaded_workdesk_tabs: { whatsapp: true }, workdesk: { whatsapp: {
+                available: true, conversation: name, messaging_window: windowState, messages: [],
+            } } };
+            obj.open_detail_dialog({ doctype: 'Patient', name }, context, 'whatsapp');
+            return obj.state.active_workdesk_dialog;
+        }
+        const firstDialog = open_detached('FIRST');
+        assert.match(firstDialog.get_field().$wrapper.find('[data-wa-window-text]').text(), /Checking/);
+        assert.equal(scheduled.length, 0, 'Detached chats cannot start polling yet');
+        firstDialog.finish_show();
+        assert.match(firstDialog.get_field().$wrapper.find('[data-wa-window-text]').text(), /Messaging window open/);
+        assert.equal(firstDialog.get_field().$wrapper.find('[data-wa-reply]').prop('disabled'), false);
+        assert.deepEqual(scheduled, [0], 'Modal shown starts live updates after attachment');
+
+        const newerDialog = open_detached('NEWER', { can_send_free_form: false });
+        firstDialog.$wrapper.trigger('shown.bs.modal');
+        assert.equal(scheduled.length, 1, 'A delayed event from an old dialog cannot initialize the new chat');
+        newerDialog.finish_show();
+        assert.match(newerDialog.get_field().$wrapper.find('[data-wa-window-text]').text(), /No incoming message/);
+        assert.equal(newerDialog.get_field().$wrapper.find('[data-wa-reply]').prop('disabled'), true);
+        assert.deepEqual(scheduled, [0, 0]);
         console.log(`${app}: real jQuery/DOM initial rendering, failed polls, retry recovery, expiry and draft preservation passed`);
     } finally {
         obj.stop_whatsapp_sync();

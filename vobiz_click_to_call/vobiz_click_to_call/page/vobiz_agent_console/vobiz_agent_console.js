@@ -1873,6 +1873,17 @@ class VobizAgentConsole {
 		this.state.active_workdesk_dialog = dialog;
 		dialog.$wrapper.addClass('vobiz-workdesk-modal');
 		dialog.get_close_btn().show();
+		dialog.$wrapper.on('shown.bs.modal', () => {
+			if (this.state.active_workdesk_dialog !== dialog) return;
+			const view = this.active_whatsapp_view();
+			if (!view) return;
+			// A fast chat response can render before Bootstrap attaches the modal.
+			// Resume initialization once its backdrop transition has completed.
+			if (!view.$list.data('wa-window-state')) {
+				this.initialize_whatsapp_window(view.$body, context.workdesk.whatsapp || {});
+			}
+			this.schedule_whatsapp_sync(0);
+		});
 		dialog.$wrapper.on('hidden.bs.modal', () => {
 			this.close_whatsapp_media_viewer();
 			dialog.$wrapper.find('[data-wa-playback]').each((_, media) => { media.pause(); media.removeAttribute('src'); media.load(); });
