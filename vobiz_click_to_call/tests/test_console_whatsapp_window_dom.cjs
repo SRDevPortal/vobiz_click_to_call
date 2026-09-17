@@ -41,46 +41,41 @@ async function check(app) {
             messages: [{ name: 123, direction: 'Outbound', delivery_status: 'Read', body: 'Test' }],
         };
         body.html(obj.workdesk_whatsapp_html({ whatsapp: wa }));
-        obj.initialize_whatsapp_window(body, wa);
         return wa;
     }
     try {
-        render(state);
-        assert.equal(requests, 0, 'Initial guidance does not wait for background polling');
-        assert.match(body.find('[data-wa-window-text]').text(), /Messaging window open/);
-        assert.equal(body.find('[data-wa-send]').prop('disabled'), false);
-        assert.equal(body.find('[data-wa-reply]').prop('disabled'), false);
+        function assertComposerReady(target = body) {
+            assert.equal(target.find('[data-wa-window-banner], [data-wa-window-text], [data-wa-window-retry]').length, 0);
+            for (const selector of ['[data-wa-reply]', '[data-wa-send]', '[data-wa-attach]', '[data-wa-emoji]', '[data-wa-template]']) {
+                assert.equal(target.find(selector).prop('disabled'), false, `${selector} is available without a window check`);
+            }
+        }
+        render(null);
+        assertComposerReady();
+        assert.equal(requests, 0, 'Composer is available before any live refresh');
         body.find('[data-wa-reply]').val('Keep draft');
         fail = true;
         await obj.sync_inline_whatsapp();
-        assert.equal(body.find('[data-wa-send]').prop('disabled'), false, 'Failed refresh retains a known unexpired window');
+        assertComposerReady();
         assert.equal(body.find('[data-wa-reply]').val(), 'Keep draft');
-
-        render(null);
-        await obj.sync_inline_whatsapp();
-        assert.match(body.find('[data-wa-window-text]').text(), /Could not check/);
-        assert.notEqual(body.find('[data-wa-window-retry]').css('display'), 'none');
-        assert.equal(body.find('[data-wa-send]').prop('disabled'), true);
-        assert.equal(body.find('[data-wa-template]').first().prop('disabled'), false);
-
         fail = false;
+        for (const windowState of [state, { can_send_free_form: false }, null]) {
+            response.messaging_window = windowState;
+            await obj.sync_inline_whatsapp();
+            assertComposerReady();
+            assert.equal(body.find('[data-wa-reply]').val(), 'Keep draft');
+        }
+        body.find('[data-wa-send]').prop('disabled', true);
+        body.find('[data-wa-chat-list]').data('wa-sending', true);
         await obj.sync_inline_whatsapp();
-        assert.match(body.find('[data-wa-window-text]').text(), /Messaging window open/);
-        assert.equal(body.find('[data-wa-window-retry]').css('display'), 'none');
-        assert.equal(body.find('[data-wa-send]').prop('disabled'), false);
-
-        // A rendering problem in unrelated history must not keep the banner waiting.
-        render(null);
-        obj.append_live_whatsapp_messages = () => { throw new Error('History render failed'); };
-        await obj.sync_inline_whatsapp();
-        assert.match(body.find('[data-wa-window-text]').text(), /Messaging window open/);
-        assert.equal(body.find('[data-wa-send]').prop('disabled'), false);
-
-        const cached = render(state);
-        cached.window_received_at = Date.now() - 25 * 60 * 60 * 1000;
-        obj.initialize_whatsapp_window(body, cached);
-        assert.match(body.find('[data-wa-window-text]').text(), /Messaging window closed/);
-        assert.equal(body.find('[data-wa-send]').prop('disabled'), true, 'Reopening a cached tab cannot extend expiry');
+        assert.equal(body.find('[data-wa-send]').prop('disabled'), true, 'Polling cannot re-enable an in-flight send');
+        body.find('[data-wa-send]').prop('disabled', false);
+        body.find('[data-wa-chat-list]').data('wa-sending', false);
+        const detached = body.detach();
+        render({ can_send_free_form: false });
+        assertComposerReady();
+        w.$(w.document.body).append(detached);
+        assertComposerReady();
 
         // Bootstrap waits for the backdrop transition before attaching a new modal.
         // A fast chat response can render while the Workdesk is still detached.
@@ -112,10 +107,10 @@ async function check(app) {
             return obj.state.active_workdesk_dialog;
         }
         const firstDialog = open_detached('FIRST');
-        assert.match(firstDialog.get_field().$wrapper.find('[data-wa-window-text]').text(), /Checking/);
+        assertComposerReady(firstDialog.get_field().$wrapper);
         assert.equal(scheduled.length, 0, 'Detached chats cannot start polling yet');
         firstDialog.finish_show();
-        assert.match(firstDialog.get_field().$wrapper.find('[data-wa-window-text]').text(), /Messaging window open/);
+        assertComposerReady(firstDialog.get_field().$wrapper);
         assert.equal(firstDialog.get_field().$wrapper.find('[data-wa-reply]').prop('disabled'), false);
         assert.deepEqual(scheduled, [0], 'Modal shown starts live updates after attachment');
 
@@ -123,10 +118,10 @@ async function check(app) {
         firstDialog.$wrapper.trigger('shown.bs.modal');
         assert.equal(scheduled.length, 1, 'A delayed event from an old dialog cannot initialize the new chat');
         newerDialog.finish_show();
-        assert.match(newerDialog.get_field().$wrapper.find('[data-wa-window-text]').text(), /No incoming message/);
-        assert.equal(newerDialog.get_field().$wrapper.find('[data-wa-reply]').prop('disabled'), true);
+        assertComposerReady(newerDialog.get_field().$wrapper);
+        assert.equal(newerDialog.get_field().$wrapper.find('[data-wa-reply]').prop('disabled'), false);
         assert.deepEqual(scheduled, [0, 0]);
-        console.log(`${app}: real jQuery/DOM initial rendering, failed polls, retry recovery, expiry and draft preservation passed`);
+        console.log(`${app}: unblocked composer, failed polls, drafts, pending sends and delayed modal attachment passed`);
     } finally {
         obj.stop_whatsapp_sync();
         w.close();

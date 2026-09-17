@@ -52,7 +52,7 @@ async function check(app) {
         const fields = dialog.$wrapper.find('[data-wa-template-variable]');
         assert.deepEqual(Array.from(fields.map((i, el) => el.getAttribute('data-wa-template-variable')).get()), ['header_1', 'body_1', 'body_2']);
         assert.equal(dialog.fields.header_values.hidden, true, 'Text headers use guided inputs');
-        assert.equal(dialog.fields.followup_body.read_only, true, 'Closed-window guidance remains intact');
+        assert.equal(Boolean(dialog.fields.followup_body.read_only), false, 'Template follow-up is not blocked by frontend window checks');
         assert.match(dialog.$wrapper.find('[data-wa-template-progress]').text(), /0 \/ 3/);
         await dialog.config.primary_action({});
         assert.equal(calls.length, 0);

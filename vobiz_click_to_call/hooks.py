@@ -10,7 +10,7 @@ after_migrate = "vobiz_click_to_call.install.after_migrate"
 on_logout = "vobiz_click_to_call.vobiz_click_to_call.doctype.vobiz_user_mapping.vobiz_user_mapping.mark_user_offline_on_logout"
 
 app_include_js = [
-    "/assets/vobiz_click_to_call/js/click_to_call.js",
+    "/assets/vobiz_click_to_call/js/click_to_call.js?v=20260917.1",
     "/assets/vobiz_click_to_call/js/list_dialer.js",
     "/assets/vobiz_click_to_call/js/call_log.js",
     "/assets/vobiz_click_to_call/js/availability.js?v=20260909.2",

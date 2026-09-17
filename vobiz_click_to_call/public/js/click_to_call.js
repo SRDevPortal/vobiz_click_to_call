@@ -1,4 +1,17 @@
 (function () {
+    // Keep this version in sync with the asset URL in hooks.py.
+    // Frappe caches Page source separately from the application's JS assets.
+    try {
+        const key = 'vobiz_click_to_call_console_version';
+        const version = '20260917.1';
+        if (window.localStorage.getItem(key) !== version) {
+            window.localStorage.removeItem('_page:vobiz-agent-console');
+            window.localStorage.setItem(key, version);
+        }
+    } catch (_) {
+        // Storage can be unavailable in restricted browser sessions.
+    }
+
     const FIELD_CANDIDATES = [
         "mobile_no",
         "mobile",

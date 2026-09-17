@@ -136,19 +136,20 @@ async function check(app) {
         allowed = false;
         releaseUpload();
         await pending;
-        assert.equal(requests.length, count, 'Window expiry during upload blocks sending');
-        assert.match(notices.at(-1).message, /approved template/);
+        const unavailableMessage = /not ready/;
+        assert.equal(requests.length, count, 'A chat becoming unavailable during upload blocks sending');
+        assert.match(notices.at(-1).message, unavailableMessage);
         w.fetch = originalFetch;
         allowed = false;
         count = uploads.length;
         await dialog.config.primary_action();
-        assert.equal(uploads.length, count, 'Window closes before sending');
-        await assert.rejects(obj.send_workdesk_whatsapp_media(body, 'CONV', {}), /approved template/);
+        assert.equal(uploads.length, count, 'Unavailable chats cannot upload');
+        await assert.rejects(obj.send_workdesk_whatsapp_media(body, 'CONV', {}), unavailableMessage);
         obj.stop_whatsapp_sync();
         assert.equal(obj.whatsapp_attachment_dialog, null);
         const lastDialog = dialog;
         obj.open_workdesk_attachment_dialog(body, 'sticker');
-        assert.equal(dialog, lastDialog, 'Closed window prevents opening attachments');
+        assert.equal(dialog, lastDialog, 'Unavailable chat prevents opening attachments');
         assert.equal(revoked.length, created, 'Every preview object URL is released');
         console.log(`${app}: audio/sticker selection, preview, sending, validation, errors, duplicate protection, window and cleanup passed`);
     } finally { w.close(); }
