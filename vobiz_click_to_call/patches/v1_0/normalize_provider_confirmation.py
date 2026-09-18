@@ -13,5 +13,7 @@ def execute():
             doc = frappe.get_doc("Vobiz Call Log", name, for_update=True)
             if doc.status in LEGACY_STATUSES:
                 normalize_legacy_status(doc)
+                # Historical call logs may reference deleted records.
+                doc.flags.ignore_links = True
                 doc.save(ignore_permissions=True)
         frappe.db.commit()
