@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 import frappe
+from vobiz_click_to_call.services.reference_sync import request_reference_sync
 from frappe import _
 
 from vobiz_ai.api.call_log import make_outbound_call_key, sync_linked_summaries, sync_reference_links
@@ -266,8 +267,7 @@ def create_missing_inbound_call_log_from_cdr(cdr: dict, raw_response: dict | Non
     doc.patient = previous.patient
     sync_reference_links(doc)
     doc.insert(ignore_permissions=True)
-    update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
-    sync_linked_summaries(doc)
+    request_reference_sync(doc.name)
     return doc
 
 
@@ -464,8 +464,7 @@ def apply_cdr_to_call_log(doc, cdr: dict, raw_response: dict) -> None:
         doc.status = status_from_cdr(dict(cdr, dial_status=cdr.get("dial_status")
                                         or cdr.get("b_leg_status") or doc.get("dial_status")), doc.status)
     doc.save(ignore_permissions=True)
-    update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
-    sync_linked_summaries(doc)
+    request_reference_sync(doc.name)
 
 
 def status_from_cdr(cdr: dict, current_status: str) -> str:

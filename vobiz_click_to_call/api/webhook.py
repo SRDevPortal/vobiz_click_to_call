@@ -5,6 +5,7 @@ from datetime import datetime
 from xml.sax.saxutils import escape, quoteattr
 
 import frappe
+from vobiz_click_to_call.services.reference_sync import request_reference_sync
 from frappe.rate_limiter import rate_limit
 from werkzeug.wrappers import Response
 
@@ -144,8 +145,7 @@ def dial_action(call_log: str | None = None, token: str | None = None):
     doc = save_doc_latest(doc, before)
     _append_callback_if_enabled(doc.name, "dial_action", payload)
     if doc.status in {"Completed", "Failed", "Busy", "No Answer", "Cancelled"}:
-        update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
-        sync_linked_summaries(doc)
+        request_reference_sync(doc.name)
         _enqueue_ai_if_ready(doc)
     frappe.db.commit()
     if doc.status == "Connected":
@@ -189,8 +189,7 @@ def hangup(call_log: str | None = None, token: str | None = None):
     doc = save_doc_latest(doc, before)
     _append_callback_if_enabled(doc.name, "hangup", payload)
     restore_mapping_after_call(doc.name)
-    update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
-    sync_linked_summaries(doc)
+    request_reference_sync(doc.name)
     _enqueue_ai_if_ready(doc)
     frappe.db.commit()
     return _plain_response("OK")
@@ -213,8 +212,7 @@ def fallback(call_log: str | None = None, token: str | None = None):
     doc = save_doc_latest(doc, before)
     _append_callback_if_enabled(doc.name, "fallback", payload)
     restore_mapping_after_call(doc.name)
-    update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
-    sync_linked_summaries(doc)
+    request_reference_sync(doc.name)
     _enqueue_ai_if_ready(doc)
     frappe.db.commit()
     return _plain_response("OK")

@@ -8,6 +8,8 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 def after_install():
     ensure_dependencies()
     ensure_defaults()
+    from vobiz_click_to_call.patches.v1_0.add_incoming_route_indexes import execute
+    execute()
 
 
 def after_migrate():
@@ -77,6 +79,7 @@ def ensure_defaults():
     if changed:
         settings.save(ignore_permissions=True)
 
+    ensure_reference_sync_fields()
     ensure_crm_lead_fields()
     ensure_issue_department_fields()
     ensure_crm_lead_disposition_optional()
@@ -258,3 +261,13 @@ def _delete_custom_field_if_type_mismatch(dt: str, fieldname: str, expected_fiel
     if custom_field and custom_field.fieldtype != expected_fieldtype:
         frappe.delete_doc("Custom Field", custom_field.name, ignore_permissions=True, force=True)
         frappe.clear_cache(doctype=dt)
+
+def ensure_reference_sync_fields():
+    """Pending work is stored with the call, independently of Redis availability."""
+    create_custom_fields({"Vobiz Call Log": [
+        {"fieldname": "vobiz_reference_sync_token", "label": "Reference Sync Token",
+         "fieldtype": "Data", "hidden": 1, "read_only": 1, "no_copy": 1},
+        {"fieldname": "vobiz_reference_sync_due", "label": "Reference Sync Due",
+         "fieldtype": "Datetime", "hidden": 1, "read_only": 1, "no_copy": 1,
+         "search_index": 1},
+    ]})

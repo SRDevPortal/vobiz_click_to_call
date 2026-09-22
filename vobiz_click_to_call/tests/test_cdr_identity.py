@@ -28,6 +28,7 @@ class CDRIdentityTests(unittest.TestCase):
             (cdr, "VobizClient", lambda *args: self.provider),
             (cdr, "update_reference_call_metrics", MagicMock()),
             (cdr, "sync_linked_summaries", MagicMock()),
+            (cdr, "request_reference_sync", MagicMock()),
         ]
         for obj, name, value in replacements:
             p = patch.object(obj, name, value)

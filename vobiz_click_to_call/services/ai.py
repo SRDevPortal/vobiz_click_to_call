@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 import frappe
+from vobiz_click_to_call.services.reference_sync import request_reference_sync
 
 from vobiz_ai.api.call_log import sync_linked_summaries
 from vobiz_click_to_call.services.call_status import normalize_status_values
@@ -430,8 +431,7 @@ def apply_ai_result(call_log: str, result: dict[str, Any], settings=None) -> Non
     if lead_auto_applied:
         lead_sync = sync_ai_disposition_safely(doc, disposition)
     if auto_disposed:
-        update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
-        sync_linked_summaries(doc)
+        request_reference_sync(doc.name)
 
     if settings.add_ai_summary_comment and doc.reference_doctype and doc.reference_name:
         add_reference_comment(doc, lead_sync)

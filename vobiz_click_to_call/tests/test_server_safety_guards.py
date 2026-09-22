@@ -46,7 +46,8 @@ class TestServerSafetyGuards(unittest.TestCase):
                          ["vobiz_click_to_call.services.cdr.enqueue_recent_cdr_sync"])
         self.assertEqual(
             app_hooks.scheduler_events["cron"]["* * * * *"],
-            ["vobiz_click_to_call.services.cdr.recover_stale_ringing_calls",
+            ["vobiz_click_to_call.services.reference_sync.recover_pending_reference_syncs",
+             "vobiz_click_to_call.services.cdr.recover_stale_ringing_calls",
              "vobiz_click_to_call.services.cancellation.recover_pending_cancellations"],
         )
 

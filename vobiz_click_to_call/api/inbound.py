@@ -36,6 +36,24 @@ TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "C
 def route():
     """Route inbound DID callbacks to the agent who last called this customer."""
     payload = _payload()
+    settings = get_settings()
+    did = normalize_phone_number(_first_value(payload, "To", "to", "Called", "did", "DID"),
+                                 default_country_code=get_default_country_code(settings))
+    if not settings.enabled:
+        return _plain_response("IGNORED")
+    if not _inbound_callback_allowed(payload, settings, did):
+        return _plain_response("IGNORED") if _event_name(payload) == "hangup" else _xml_response(_hangup_xml())
+    from vobiz_click_to_call.services import incoming_routing
+    event = _event_name(payload)
+    if event == "hangup":
+        incoming_routing.mark_ended(payload)
+    if event and event not in {"callinitiated", "startapp", "ring"}:
+        return _route(payload)
+    return incoming_routing.run(payload, lambda: _route(payload),
+                                frappe.utils.get_url("/api/method/vobiz_click_to_call.api.inbound.route"))
+
+
+def _route(payload):
     event = _event_name(payload)
     settings = get_settings()
     if not settings.enabled:
@@ -68,6 +86,34 @@ def route():
     if not customer_number:
         log_vobiz_event("Inbound route ignored: caller number missing", severity="Warning", payload=payload)
         return _xml_response(_hangup_xml())
+
+    previous_route = find_existing_inbound_call(payload)
+    if previous_route:
+        for stored, supplied in ((previous_route.customer_number, customer_number),
+                                  (previous_route.did_number, did_number)):
+            if stored and normalize_phone_number(stored, default_country_code=default_country_code) != supplied:
+                return _xml_response(_hangup_xml())
+        # A provider retry must reuse the committed decision, never select a
+        # different agent, recreate a lead, or reopen a terminal call.
+        if previous_route.status in TERMINAL_STATUSES or previous_route.call_status in {
+            "cancellation-requested", "browser-ended-pending-provider",
+        }:
+            return _xml_response(_hangup_xml())
+        if previous_route.answer_time or previous_route.status in {
+            "Connected", "In Progress", "Agent Answered", "Customer Answered",
+        }:
+            return _xml_response(_wait_xml())
+        external = _request_data(previous_route, "inbound_mapped_agent") is False or any(_request_flag(previous_route, flag) for flag in (
+            "ai_agent_end_fallback_attempted", "busy_callback_ai_fallback_attempted",
+            "end_fallback_attempted",
+        ))
+        mapping = get_user_mapping(previous_route.user) if previous_route.user else None
+        if not external and (not mapping or mapping.get("current_call_log") != previous_route.name):
+            return _xml_response(_hangup_xml())
+        agent = previous_route.agent_number
+        if str(agent or "").startswith("sip:"):
+            agent = previous_route.user_mobile
+        return _xml_response(_dial_agent_xml(previous_route, agent, settings))
 
     existing = find_existing_reference(customer_number)
     reference_first = bool(
@@ -134,6 +180,7 @@ def route():
         route_type=target.get("route_type") or "last_agent",
         origin_user=previous.user,
     )
+    _set_request_data(call_log, "inbound_mapped_agent", bool(target.get("is_mapped_agent")))
     update_inbound_call_event(call_log, payload, commit=False)
     if target.get("is_mapped_agent"):
         _mark_mapping_busy(target.get("user"), call_log.name)
@@ -486,6 +533,7 @@ def route_unknown_inbound(
             mapping=mapping,
             target=target,
         )
+    _set_request_data(call_log, "inbound_mapped_agent", bool(target.get("is_mapped_agent")))
     update_inbound_call_event(call_log, payload, commit=False)
 
     agent_mobile = target.get("agent_mobile")
@@ -499,9 +547,9 @@ def route_unknown_inbound(
         frappe.db.commit()
         return _xml_response(_hangup_xml())
 
-    update_incoming_assignment(mapping, target)
     if target.get("is_mapped_agent"):
         _mark_mapping_busy(target.get("user"), call_log.name)
+    update_incoming_assignment(mapping, target)
 
     if _is_trunk_notification(payload):
         log_vobiz_event(
@@ -555,6 +603,7 @@ def route_existing_patient_inbound(patient_name: str, customer_number: str, did_
             payload,
             target=target,
         )
+    _set_request_data(call_log, "inbound_mapped_agent", bool(target.get("is_mapped_agent")))
     update_inbound_call_event(call_log, payload, commit=False)
 
     agent_mobile = target.get("agent_mobile")
@@ -621,6 +670,7 @@ def route_existing_crm_lead_inbound(lead_name: str, customer_number: str, did_nu
             payload,
             target=target,
         )
+    _set_request_data(call_log, "inbound_mapped_agent", bool(target.get("is_mapped_agent")))
     update_inbound_call_event(call_log, payload, commit=False)
 
     agent_mobile = target.get("agent_mobile")
@@ -1745,20 +1795,17 @@ def _inbound_callback_allowed(payload: dict[str, Any], settings, did_number: str
 def _mark_mapping_busy(user: str | None, call_log: str) -> None:
     if not user:
         return
-    mapping_name = frappe.db.get_value("Vobiz User Mapping", {"user": user, "enabled": 1}, "name")
-    if not mapping_name:
+    if getattr(frappe.flags, "vobiz_incoming_routing", False):
+        from vobiz_click_to_call.services.incoming_routing import reserve_agent
+        reserve_agent(user, call_log)
         return
-    frappe.db.set_value(
-        "Vobiz User Mapping",
-        mapping_name,
-        {
-            "availability_status": "Busy",
-            "accept_calls": 0,
-            "current_call_log": call_log,
-            "last_status_at": frappe.utils.now(),
-        },
-        update_modified=True,
-    )
+    # Existing DialAction fallback handling remains outside initial routing.
+    mapping_name = frappe.db.get_value("Vobiz User Mapping", {"user": user, "enabled": 1}, "name")
+    if mapping_name:
+        frappe.db.set_value("Vobiz User Mapping", mapping_name, {
+            "availability_status": "Busy", "accept_calls": 0,
+            "current_call_log": call_log, "last_status_at": frappe.utils.now(),
+        }, update_modified=True)
 
 
 def _end_fallback_mobile(settings=None) -> str:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import frappe
+from vobiz_click_to_call.services.reference_sync import request_reference_sync
 from frappe import _
 
 from vobiz_ai.api.call_log import sync_linked_summaries
@@ -106,8 +107,7 @@ def save_call_disposition(
                     lead_sync.get("reason") or _("Unknown error")
                 )
             )
-    update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
-    sync_linked_summaries(doc)
+    request_reference_sync(doc.name)
     add_disposition_comment(doc)
     frappe.db.commit()
 

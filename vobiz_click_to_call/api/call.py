@@ -6,6 +6,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import frappe
+from vobiz_click_to_call.services.reference_sync import request_reference_sync
 from frappe import _
 from requests.exceptions import ReadTimeout
 
@@ -318,8 +319,7 @@ def start_call(
     call_log.request_uuid = extract_provider_id(response, "request_uuid", "requestUUID", "request_id", "requestId")
     call_log.call_uuid = call_log.call_uuid or extract_provider_id(response, "call_uuid", "callUUID", "uuid", "CallUUID")
     call_log = save_doc_latest(call_log, before)
-    update_reference_call_metrics(reference_doctype, reference_name)
-    sync_linked_summaries(call_log)
+    request_reference_sync(call_log.name)
     log_vobiz_event("Provider make_call response received", call_log=call_log.name, payload=response)
     frappe.db.commit()
 
@@ -489,7 +489,7 @@ def sync_live_call_if_finished(doc) -> None:
         doc.response_json = merge_json(doc.response_json, {"live_status_response": response})
         doc = save_doc_latest(doc, before)
         restore_mapping_after_call(doc.name)
-        update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
+        request_reference_sync(doc.name)
         frappe.db.commit()
 
 

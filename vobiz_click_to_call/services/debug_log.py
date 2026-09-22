@@ -1,12 +1,46 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from typing import Any
 
 import frappe
 
 MAX_DIAGNOSTIC_PAYLOAD_CHARS = 20 * 1024
 
+
+
+@contextmanager
+def defer_diagnostics():
+    """Buffer routing diagnostics until its locks have been released."""
+    previous = getattr(frappe.flags, "vobiz_deferred_diagnostics", None)
+    if previous is not None:
+        yield
+        return
+    pending = []
+    frappe.flags.vobiz_deferred_diagnostics = pending
+    try:
+        yield
+    finally:
+        frappe.flags.vobiz_deferred_diagnostics = previous
+        if pending:
+            try:
+                frappe.enqueue(
+                    "vobiz_click_to_call.services.debug_log.write_deferred_diagnostics",
+                    queue="default", timeout=120, entries=pending,
+                )
+            except Exception:
+                # Diagnostic failure must not change the call's routing outcome.
+                try:
+                    frappe.logger("vobiz_incoming").warning("Could not enqueue incoming diagnostics")
+                except Exception:
+                    pass
+
+
+def write_deferred_diagnostics(entries):
+    for entry in entries:
+        log_vobiz_event(**entry)
+        frappe.db.commit()
 
 def log_vobiz_event(
     message: str,
@@ -17,9 +51,17 @@ def log_vobiz_event(
     payload: Any = None,
     traceback: str | None = None,
 ) -> None:
-    """Write a non-blocking diagnostic row for click-to-call activity."""
+    """Write diagnostics synchronously, or buffer them during incoming routing."""
     try:
         if severity == "Info":
+            return
+
+        pending = getattr(frappe.flags, "vobiz_deferred_diagnostics", None)
+        if pending is not None:
+            if len(pending) < 20:
+                pending.append(dict(message=message, call_log=call_log, severity=severity,
+                                    process_type=process_type, payload=_stringify(payload),
+                                    traceback=traceback))
             return
 
         if not frappe.db.exists("DocType", "Vobiz Error Log"):
