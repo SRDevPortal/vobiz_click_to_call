@@ -35,6 +35,7 @@
     let currentAvailability = null;
     let activityTabId = null;
     let activityHeartbeatTimer = null;
+    let activityRequestInFlight = false;
     let activityIdleTimer = null;
     let breakTimer = null;
     let availabilityRefreshTimer = null;
@@ -629,16 +630,23 @@
     }
 
     function recordActivity() {
-        if (!canRecordActivity()) return;
-        frappe.call({
-            method: "vobiz_click_to_call.api.console.record_agent_activity",
-            type: "POST",
-            freeze: false,
-            args: {
-                tab_id: getActivityTabId(),
-                route: routeKey(),
-            },
-        });
+        if (!canRecordActivity() || activityRequestInFlight) return;
+        activityRequestInFlight = true;
+        try {
+            frappe.call({
+                method: "vobiz_click_to_call.api.console.record_agent_activity",
+                type: "POST",
+                freeze: false,
+                args: {
+                    tab_id: getActivityTabId(),
+                    route: routeKey(),
+                },
+                always: () => { activityRequestInFlight = false; },
+            });
+        } catch (error) {
+            activityRequestInFlight = false;
+            throw error;
+        }
     }
 
     function stopActivityTracking(closeSession) {
