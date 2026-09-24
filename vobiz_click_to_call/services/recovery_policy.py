@@ -9,6 +9,7 @@ import random
 import time
 
 import frappe
+from redis.exceptions import LockNotOwnedError
 
 from vobiz_click_to_call.services.client import ProviderTemporaryError
 
@@ -66,7 +67,13 @@ def attempt(call_log, purpose="reconcile"):
                                        "attempts": attempts, "last_error": state.get("last_error")}),
             )
     finally:
-        lock.release()
+        try:
+            lock.release()
+        except LockNotOwnedError:
+            # Redis atomically checked the token: an expired/replaced lease is
+            # not ours to release. Do not turn completed reconciliation into a
+            # failed transaction or mask the original exception.
+            pass
 
 
 def claim_provider_read(auth_id):

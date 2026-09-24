@@ -112,6 +112,35 @@ class RecoveryPolicyTests(unittest.TestCase):
         self.clock += 60
         policy.claim_provider_read("account")
 
+    def test_lost_lease_does_not_fail_successful_reconciliation(self):
+        lock = MagicMock()
+        lock.acquire.return_value = True
+        lock.release.side_effect = policy.LockNotOwnedError("expired")
+        with patch.object(self.cache, "lock", return_value=lock):
+            with policy.attempt("CALL") as allowed:
+                self.assertTrue(allowed)
+                policy.clear("CALL")
+        self.assertIsNone(self.cache.get_value(policy.state_key("CALL")))
+        lock.release.assert_called_once()
+
+    def test_lost_lease_does_not_mask_original_error(self):
+        lock = MagicMock()
+        lock.acquire.return_value = True
+        lock.release.side_effect = policy.LockNotOwnedError("expired")
+        with patch.object(self.cache, "lock", return_value=lock):
+            with self.assertRaisesRegex(ValueError, "original"):
+                with policy.attempt("CALL"):
+                    raise ValueError("original")
+
+    def test_other_redis_release_errors_are_not_hidden(self):
+        lock = MagicMock()
+        lock.acquire.return_value = True
+        lock.release.side_effect = ConnectionError("redis unavailable")
+        with patch.object(self.cache, "lock", return_value=lock):
+            with self.assertRaises(ConnectionError):
+                with policy.attempt("CALL"):
+                    pass
+
     def provider(self):
         obj = object.__new__(client.VobizClient)
         obj.auth_id, obj.auth_token = "test-id", "test-token"

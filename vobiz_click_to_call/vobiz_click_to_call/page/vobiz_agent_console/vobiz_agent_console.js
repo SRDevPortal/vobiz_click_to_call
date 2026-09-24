@@ -1359,7 +1359,8 @@ class VobizAgentConsole {
 	}
 
 	show_auto_call_dialog() {
-		if (this.auto_call_dialog && this.auto_call_dialog.$wrapper && this.auto_call_dialog.$wrapper.is(':visible')) {
+		// Reuse the dialog even while Bootstrap is still opening it.
+		if (this.auto_call_dialog) {
 			this.render_auto_call_dialog();
 			return;
 		}
@@ -1382,11 +1383,8 @@ class VobizAgentConsole {
 			}
 		});
 		dialog.$wrapper.on('hidden.bs.modal', () => {
-			if (this.state.active_workdesk_dialog !== dialog) return;
-			this.stop_whatsapp_sync();
-			if (this.auto_call_dialog === dialog) {
-				this.auto_call_dialog = null;
-			}
+			if (this.auto_call_dialog === dialog) this.auto_call_dialog = null;
+			dialog.$wrapper.remove();
 		});
 		dialog.show();
 		this.render_auto_call_dialog();
@@ -4336,7 +4334,7 @@ class VobizAgentConsole {
 		this.add_auto_event(__('Waiting for disposition'), `${current.lead} • ${outcome.label}. ${__('Update status to continue.')}`, outcome.state);
 		this.update_selected_count();
 		this.render_auto_live();
-		this.render_auto_call_dialog();
+		this.hide_auto_call_dialog();
 		this.prompt_auto_dial_disposition(call, current);
 	}
 
