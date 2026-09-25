@@ -1,3 +1,4 @@
+import json
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -5,6 +6,7 @@ import frappe
 from requests.exceptions import ReadTimeout
 from vobiz_click_to_call.api import call
 from vobiz_click_to_call.services import confirmation, mapping_recovery, realtime
+from vobiz_click_to_call.services import cancellation
 
 
 class ProviderConfirmationTests(unittest.TestCase):
@@ -65,6 +67,17 @@ class ProviderConfirmationTests(unittest.TestCase):
         latest.save.assert_not_called()
         old.reload.assert_called_once()
 
+    def test_provider_not_found_does_not_fabricate_end_or_release(self):
+        doc = self.doc(status="Connected", call_uuid="uuid")
+        client = MagicMock(); client.retrieve_live_call.side_effect = RuntimeError("Call not found")
+        with patch.object(call, "VobizClient", return_value=client), patch.object(call, "get_settings"), \
+                patch.object(call, "save_doc_latest") as save, \
+                patch.object(call, "restore_mapping_after_call") as release, \
+                patch.object(mapping_recovery, "enqueue_recovery") as recover:
+            call.sync_live_call_if_finished(doc)
+        save.assert_not_called(); release.assert_not_called(); recover.assert_called_once_with("C1")
+        self.assertEqual(doc.status, "Connected")
+        self.assertIsNone(doc.end_time)
 
     def test_completion_contract_contains_reference_and_direction(self):
         doc = self.doc(status="Completed", direction="Outgoing", reference_doctype="CRM Lead", reference_name="L1")
@@ -79,3 +92,41 @@ class ProviderConfirmationTests(unittest.TestCase):
         with patch.object(frappe, "publish_realtime") as publish:
             realtime.publish_call_disconnected(self.doc(call_status=confirmation.PENDING))
         publish.assert_not_called()
+
+    def test_wrong_provider_uuid_cannot_complete_call(self):
+        doc = self.doc(status="Connected", call_uuid="uuid")
+        client = MagicMock(); client.retrieve_live_call.return_value = {"call_uuid": "other", "status": "completed"}
+        with patch.object(call, "VobizClient", return_value=client), patch.object(call, "get_settings"), \
+                patch.object(call, "save_doc_latest") as save:
+            call.sync_live_call_if_finished(doc)
+        save.assert_not_called()
+
+    def test_end_call_retains_reservation_until_provider_confirmation(self):
+        for provider_error in (None, ReadTimeout("timeout")):
+            doc = self.doc(status="Connected", call_uuid="uuid")
+            db = MagicMock()
+            events = []
+            db.commit.side_effect = lambda: events.append("commit")
+            def end(_):
+                self.assertIn("commit", events)
+                self.assertTrue(json.loads(doc.response_json)["cancel_requested"])
+                if provider_error:
+                    raise provider_error
+            with patch.object(frappe, "db", db), patch.object(frappe, "session", frappe._dict(user=doc.user)), \
+                    patch.object(frappe.local, "flags", frappe._dict(in_test=False), create=True), \
+                    patch.object(frappe, "get_doc", return_value=doc), patch.object(frappe, "get_roles", return_value=[]), \
+                    patch.object(call, "log_vobiz_event"), patch.object(call, "snapshot_doc", return_value={}), \
+                    patch.object(call, "save_doc_latest", side_effect=lambda d, before: d), \
+                    patch.object(cancellation, "cancel_pending", side_effect=end), \
+                    patch.object(mapping_recovery, "enqueue_recovery") as recover, \
+                    patch.object(call, "restore_mapping_after_call") as release:
+                if provider_error:
+                    with self.assertRaises(ReadTimeout):
+                        call.cancel_call("C1")
+                else:
+                    result = call.cancel_call("C1")
+                    self.assertTrue(result["pending_provider"])
+            recover.assert_called_once_with("C1")
+            release.assert_not_called()
+            self.assertEqual(doc.status, "Connected")
+            self.assertIsNone(doc.end_time)

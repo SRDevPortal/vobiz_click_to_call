@@ -9,6 +9,8 @@ from __future__ import annotations
 from contextlib import ExitStack
 from hashlib import sha256
 from uuid import uuid4
+import random
+from redis.exceptions import LockError
 
 import frappe
 
@@ -89,11 +91,11 @@ def _acknowledge(call_log, token):
     frappe.db.commit()
 
 
-def _retry_later(call_log, token):
+def _retry_later(call_log, token, jitter=False):
     frappe.db.sql(
         f"UPDATE `tabVobiz Call Log` SET `{DUE}`=%s "
         f"WHERE name=%s AND `{TOKEN}`=%s",
-        (frappe.utils.add_to_date(frappe.utils.now_datetime(), seconds=120), call_log, token))
+        (frappe.utils.add_to_date(frappe.utils.now_datetime(), seconds=120 + (random.randint(0, 30) if jitter else 0)), call_log, token))
     frappe.db.commit()
 
 
@@ -128,16 +130,28 @@ def sync_call_references(call_log: str) -> None:
             _acknowledge(call_log, token)
     except frappe.DoesNotExistError:
         frappe.db.rollback()
-    except Exception:
+    except Exception as exc:
+        expected_contention = isinstance(exc, (LockError, frappe.QueryTimeoutError, frappe.QueryDeadlockError))
         error = frappe.get_traceback()
         frappe.db.rollback()
         if token:
             try:
-                _retry_later(call_log, token)
+                _retry_later(call_log, token, jitter=expected_contention)
             except Exception:
                 # Preserve the original marker if even acknowledgement is blocked.
                 frappe.db.rollback()
         try:
+            if expected_contention:
+                # Site-scoped counter; first and every eighth contention per call
+                # remains visible without writing a DB traceback for every retry.
+                cache = frappe.cache()
+                key = cache.make_key("vobiz:reference-deferrals:" + sha256(call_log.encode()).hexdigest())
+                pipe = cache.pipeline(transaction=True)
+                pipe.incr(key)
+                pipe.expire(key, 3600)
+                count, _ = pipe.execute()
+                if count != 1 and count % 8:
+                    return
             frappe.log_error(title="Vobiz reference sync deferred",
                              message=f"Call: {call_log}\n{error}")
         except Exception:

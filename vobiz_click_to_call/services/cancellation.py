@@ -35,16 +35,20 @@ def cancel_pending(call_log):
     pending = cancellation_requested(doc) and doc.status not in TERMINAL
     frappe.db.commit()  # Never hold a call-row lock during provider I/O.
     if pending and uuid:
-        VobizClient().hangup_call(uuid, allow_missing=True)
+        client = VobizClient()
+        client.timeout = 3
+        return client.hangup_call(uuid, allow_missing=True)
     # Only a terminal callback/CDR may release the reservation.
 
 
 def recover_pending_cancellations():
     # Keyset scan avoids starving older calls behind a fixed first page.
+    # Provider callbacks replace call_status (for example with "answered").
+    # Cancellation intent lives in response_json and must survive those updates.
     cache = frappe.cache()
     cursor = cache.get_value("vctc:cancel-cursor") or ""
     rows = frappe.get_all("Vobiz Call Log",
-        filters={"name": [">", cursor], "call_status": "cancellation-requested"},
+        filters={"name": [">", cursor], "status": ["not in", sorted(TERMINAL)]},
         fields=["name", "status", "response_json", "call_uuid", "a_leg_uuid", "b_leg_uuid"],
         order_by="name asc", limit_page_length=100)
     cache.set_value("vctc:cancel-cursor", rows[-1].name if len(rows) == 100 else "",

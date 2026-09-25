@@ -4,6 +4,7 @@ from typing import Any
 from urllib.parse import quote
 from email.utils import parsedate_to_datetime
 import time
+import math
 
 import requests
 
@@ -14,11 +15,16 @@ from vobiz_click_to_call.services.settings import get_auth_credentials, get_sett
 
 
 class ProviderTemporaryError(Exception):
-    """A read can be retried later; this never means that a call has ended."""
+    """Temporary provider failure; retry policy depends on the operation."""
 
-    def __init__(self, message: str, retry_after: float = 0):
+    def __init__(self, message: str, retry_after: float = 0, *, operation="", status_code=None, source="provider", request_id=""):
         super().__init__(message)
-        self.retry_after = max(0, min(float(retry_after or 0), 3600))
+        delay = float(retry_after or 0)
+        self.retry_after = delay if math.isfinite(delay) and delay > 0 else 0
+        self.operation = operation
+        self.status_code = status_code
+        self.source = source
+        self.request_id = str(request_id or "")[:128]
 
 
 def _retry_after(value):
@@ -60,7 +66,26 @@ class VobizClient:
         if not call_uuid:
             frappe.throw(_("Vobiz Call UUID is required to cancel a call."))
 
+        from vobiz_click_to_call.services import recovery_policy
+        # All callers (browser, core, recovery and conference) share this UUID
+        # operation guard, independent of their read/reconciliation cooldowns.
+        key = self.auth_id + ":" + call_uuid
+        result = None
+        with recovery_policy.attempt(key, purpose="hangup") as allowed:
+            if allowed:
+                result = self._hangup_call(call_uuid, allow_missing=allow_missing)
+        return result or {"pending_provider": True, "request_deferred": True,
+                          "retry_after": recovery_policy.retry_delay(key, "hangup")}
+
+    def _hangup_call(self, call_uuid, *, allow_missing=False):
         url = f"{self.base_url}/Account/{self.auth_id}/Call/{call_uuid}/"
+        try:
+            return self._delete_call(url, allow_missing=allow_missing)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+            raise ProviderTemporaryError("Vobiz hangup: temporary connection/read failure",
+                                         operation="hangup", source="transport") from None
+
+    def _delete_call(self, url, *, allow_missing=False):
         response = requests.delete(
             url,
             headers={
@@ -68,9 +93,10 @@ class VobizClient:
                 "X-Auth-Token": self.auth_token,
                 "Content-Type": "application/json",
             },
-            timeout=self.timeout,
+            timeout=(min(5, self.timeout), min(20, self.timeout)),
         )
 
+        self._raise_temporary(response, "hangup")
         if response.status_code in (200, 202, 204):
             return {"message": "Call hangup requested", "status_code": response.status_code}
 
@@ -127,6 +153,7 @@ class VobizClient:
         except Exception:
             data = {"raw_response": response.text}
 
+        self._raise_temporary(response, "post")
         if response.status_code >= 400:
             message = _bounded_error_message(data.get("message") or data.get("error") or response.text or response.reason)
             frappe.throw(_("{0}: {1}").format(failure_label, message))
@@ -146,15 +173,12 @@ class VobizClient:
                 timeout=(min(5, self.timeout), self.timeout),
             )
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
-            raise ProviderTemporaryError(f"{failure_label}: temporary connection/read failure") from None
+            raise ProviderTemporaryError(f"{failure_label}: temporary connection/read failure",
+                                         operation="read", source="transport") from None
 
         if allow_missing and response.status_code == 404:
             return {}
-        if response.status_code in (408, 429, 500, 502, 503, 504):
-            raise ProviderTemporaryError(
-                f"{failure_label}: HTTP {response.status_code}",
-                retry_after=_retry_after(response.headers.get("Retry-After")),
-            )
+        self._raise_temporary(response, "read")
 
         try:
             data = response.json()
@@ -166,6 +190,16 @@ class VobizClient:
             frappe.throw(_("{0}: {1}").format(failure_label, message))
 
         return data
+
+    @staticmethod
+    def _raise_temporary(response, operation):
+        if response.status_code in (408, 429, 500, 502, 503, 504):
+            raise ProviderTemporaryError(
+                f"Vobiz {operation}: HTTP {response.status_code}",
+                retry_after=_retry_after(response.headers.get("Retry-After")),
+                operation=operation, status_code=response.status_code,
+                request_id=response.headers.get("X-Request-ID", ""),
+            )
 
 
 def _bounded_error_message(value: Any, max_chars: int = 2000) -> str:

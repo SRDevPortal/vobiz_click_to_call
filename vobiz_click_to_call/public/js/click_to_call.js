@@ -3,7 +3,7 @@
     // Frappe caches Page source separately from the application's JS assets.
     try {
         const key = 'vobiz_click_to_call_console_version';
-        const version = '20260917.1';
+        const version = '20260925.1';
         if (window.localStorage.getItem(key) !== version) {
             window.localStorage.removeItem('_page:vobiz-agent-console');
             window.localStorage.setItem(key, version);
@@ -32,6 +32,8 @@
     let statusPollInFlight = false;
     const registeredDoctypes = new Set();
     let allowedDoctypesLoaded = false;
+    let allowedDoctypesRequest = null;
+    const capabilityRequests = new WeakMap();
 
     function currentRoute() {
         if (!window.frappe || !frappe.get_route) return [];
@@ -190,17 +192,30 @@
             return;
         }
 
-        frappe.call({
+        const document = frm.doc;
+        const key = JSON.stringify([frm.doctype, document.name, document.modified, document.__unsaved]);
+        const pending = capabilityRequests.get(frm);
+        if (pending && pending.key === key && pending.document === document) return pending.promise;
+        const entry = {key, document};
+        capabilityRequests.set(frm, entry);
+        entry.promise = (async () => frappe.call({
             method: "vobiz_click_to_call.api.call.get_call_capability",
             args: {
                 reference_doctype: frm.doctype,
                 reference_name: frm.doc.name,
             },
-        }).then((r) => {
+        }))().then((r) => {
+            if (capabilityRequests.get(frm) !== entry || frm.doc !== document ||
+                window.cur_frm !== frm || JSON.stringify([frm.doctype, frm.doc.name, frm.doc.modified, frm.doc.__unsaved]) !== key) return;
             frm.vobiz_call_capability = r.message || {};
             renderButtons(frm);
             renderCallHistory(frm);
+        }).catch(() => {
+            if (capabilityRequests.get(frm) === entry && frm.doc === document) removeButtons(frm);
+        }).finally(() => {
+            if (capabilityRequests.get(frm) === entry) capabilityRequests.delete(frm);
         });
+        return entry.promise;
     }
 
     function bindGridRender(frm) {
@@ -603,16 +618,20 @@
             return;
         }
 
-        frappe.call({
+        if (allowedDoctypesRequest) return allowedDoctypesRequest;
+        allowedDoctypesRequest = (async () => frappe.call({
             method: "vobiz_click_to_call.api.call.get_allowed_doctypes_api",
-        }).then((r) => {
+        }))().then((r) => {
             DOCTYPES = Array.isArray(r.message) && r.message.length ? r.message : DEFAULT_DOCTYPES.slice();
             DOCTYPES.forEach(registerDoctype);
             allowedDoctypesLoaded = true;
             if (window.cur_frm && DOCTYPES.includes(cur_frm.doctype)) {
                 setupForm(cur_frm);
             }
-        });
+        }).catch(() => {
+            // A later navigation can retry; do not cache failed permission lookup.
+        }).finally(() => { allowedDoctypesRequest = null; });
+        return allowedDoctypesRequest;
     }
 
     $(document).on("page-change route-change", loadAllowedDoctypes);

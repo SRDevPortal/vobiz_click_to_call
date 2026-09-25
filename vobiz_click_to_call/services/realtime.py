@@ -15,6 +15,7 @@ def call_completion_payload(doc):
     )
     payload = {field: doc.get(field) for field in fields}
     payload["customer_number_display"] = doc.get("customer_number")
+    payload["customer_leg_attempted"] = doc.get("call_status") == "customer-leg-ended"
     return payload
 
 

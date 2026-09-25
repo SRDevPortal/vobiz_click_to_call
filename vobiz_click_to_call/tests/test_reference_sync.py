@@ -117,6 +117,23 @@ class ReferenceSyncTests(unittest.TestCase):
         self.assertIsNone(summaries.call_args.args[0].patient)
         self.assertEqual(get_all.call_args.kwargs["order_by"], "creation desc, name desc")
 
+    def test_expected_contention_preserves_retry_without_repeated_tracebacks(self):
+        self.mock(sync, "_update_summaries", MagicMock(side_effect=sync.LockError("contended")))
+        retry = self.mock(sync, "_retry_later", MagicMock())
+        self.cache.pipeline.return_value.execute.return_value = (2, True)
+        sync.sync_call_references("CALL")
+        retry.assert_called_once_with("CALL", "revision-1", jitter=True)
+        frappe.log_error.assert_not_called()
+        self.assertEqual(self.db.sql.call_args.args,
+                         ("SET SESSION innodb_lock_wait_timeout=%s", (50,)))
+
+    def test_repeated_contention_is_still_reported_at_threshold(self):
+        self.mock(sync, "_update_summaries", MagicMock(side_effect=frappe.QueryTimeoutError("blocked")))
+        self.mock(sync, "_retry_later", MagicMock())
+        self.cache.pipeline.return_value.execute.return_value = (8, True)
+        sync.sync_call_references("CALL")
+        frappe.log_error.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

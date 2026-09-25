@@ -1,4 +1,4 @@
-"""Shared, cross-worker cooldowns for read-only call reconciliation.
+"""Shared, cross-worker cooldowns for reconciliation and hangup operations.
 
 Redis loss may reset a cooldown, but can never establish a call outcome. The
 minute scheduler supplies retries; workers do not sleep or repeat call creation.
@@ -25,6 +25,11 @@ def due(call_log, purpose="reconcile"):
     return float(state.get("next_attempt", 0)) <= time.time()
 
 
+def retry_delay(call_log, purpose="reconcile"):
+    state = frappe.cache().get_value(state_key(call_log, purpose), expires=True) or {}
+    return max(1, int(float(state.get("next_attempt", 0)) - time.time()) + 1)
+
+
 def clear(call_log, purpose="reconcile"):
     frappe.cache().delete_value(state_key(call_log, purpose))
 
@@ -46,17 +51,25 @@ def attempt(call_log, purpose="reconcile"):
             return
         attempts = int(state.get("attempts", 0)) + 1
         # Keep checking unresolved calls at a low rate instead of abandoning them.
-        delay = min(900, 30 * 2 ** min(attempts - 1, 5)) + random.uniform(0, 10)
+        delay = min(120 if purpose == "hangup" else 900, 30 * 2 ** min(attempts - 1, 5)) + random.uniform(0, 10)
         state.update(attempts=attempts, next_attempt=now + delay)
         state.setdefault("first_attempt", now)
         cache.set_value(key, state, expires_in_sec=STATE_TTL)
         try:
             yield True
         except ProviderTemporaryError as exc:
+            if not lock.owned():
+                return  # A replacement worker owns any newer retry state.
             # No call-status write and no traceback containing provider headers.
             state["last_error"] = str(exc)[:250]
-            state["next_attempt"] = time.time() + max(delay, exc.retry_after)
+            state["last_error_source"] = exc.source
+            state["last_operation"] = exc.operation
+            state["last_http_status"] = exc.status_code
+            state["last_request_id"] = exc.request_id
+            state["next_attempt"] = time.time() + max(delay, exc.retry_after) + random.uniform(0, 5)
             cache.set_value(key, state, expires_in_sec=STATE_TTL)
+        if not lock.owned():
+            return
         if (attempts >= 8 and not state.get("alerted")
                 and cache.get_value(key, expires=True)):
             state["alerted"] = True
@@ -87,6 +100,10 @@ def claim_provider_read(auth_id):
     pipe.incr(key)
     pipe.expire(key, 120)
     count, _ = pipe.execute()
-    limit = max(1, int(frappe.conf.get("vobiz_provider_reads_per_minute", 120)))
+    try:
+        limit = max(1, int(frappe.conf.get("vobiz_provider_reads_per_minute", 120)))
+    except (ValueError, TypeError, OverflowError):
+        limit = 120
     if count > limit:
-        raise ProviderTemporaryError("Provider read budget exhausted", retry_after=60 - now % 60)
+        raise ProviderTemporaryError("Provider read budget exhausted", retry_after=60 - now % 60,
+                                     operation="read", source="local_budget")

@@ -46,3 +46,30 @@ class PendingCancellationTests(unittest.TestCase):
         with patch.object(frappe, "enqueue", side_effect=RuntimeError("offline")), patch.object(frappe, "log_error") as log, patch.object(frappe, "get_traceback", return_value="offline"):
             cancellation.queue_pending_cancel(self.doc())
         log.assert_called_once()
+
+    def test_scheduler_retries_intent_after_provider_replaces_call_status(self):
+        requested = self.doc(call_status="answered")
+        ordinary = self.doc(name="C2", call_status="answered", response_json="{}")
+        cache = MagicMock()
+        cache.get_value.return_value = ""
+        with patch.object(frappe, "cache", return_value=cache), \
+                patch.object(frappe, "get_all", return_value=[requested, ordinary]) as query, \
+                patch.object(frappe, "enqueue") as enqueue:
+            cancellation.recover_pending_cancellations()
+        filters = query.call_args.kwargs["filters"]
+        self.assertNotIn("call_status", filters)
+        self.assertEqual(set(filters["status"][1]), cancellation.TERMINAL)
+        enqueue.assert_called_once()
+        self.assertEqual(enqueue.call_args.kwargs["call_log"], requested.name)
+
+    def test_scheduler_advances_past_full_page_without_cancellation_requests(self):
+        rows = [self.doc(name=f"C{i:03}", response_json="{}") for i in range(100)]
+        cache = MagicMock()
+        cache.get_value.return_value = "B999"
+        with patch.object(frappe, "cache", return_value=cache), \
+                patch.object(frappe, "get_all", return_value=rows) as query, \
+                patch.object(frappe, "enqueue") as enqueue:
+            cancellation.recover_pending_cancellations()
+        self.assertEqual(query.call_args.kwargs["filters"]["name"], [">", "B999"])
+        cache.set_value.assert_called_once_with("vctc:cancel-cursor", "C099", expires_in_sec=3600)
+        enqueue.assert_not_called()

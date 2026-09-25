@@ -400,6 +400,14 @@ def _mark_confirmation_pending(call_log, exc: ReadTimeout) -> bool:
     return True
 
 
+def _has_customer_outcome(doc):
+    try:
+        data = json.loads(doc.get("request_json") or "{}")
+        return isinstance(data, dict) and isinstance(data.get("customer_outcome"), dict) and bool(data["customer_outcome"].get("status"))
+    except (TypeError, ValueError):
+        return False
+
+
 @frappe.whitelist()
 def get_call_status(call_log: str, sync_provider: int | str = 1) -> dict[str, Any]:
     if frappe.session.user == "Guest":
@@ -423,6 +431,7 @@ def get_call_status(call_log: str, sync_provider: int | str = 1) -> dict[str, An
         "reference_title": get_reference_title(doc.reference_doctype, doc.reference_name),
         "call_status": doc.call_status,
         "dial_status": doc.dial_status,
+        "customer_leg_attempted": _has_customer_outcome(doc),
         "hangup_cause": doc.hangup_cause,
         "error_message": doc.error_message,
         "recording_status": doc.recording_status,
@@ -465,23 +474,19 @@ def sync_live_call_if_finished(doc) -> None:
         message = str(exc).lower()
         if "not found" not in message and "call not found" not in message:
             return
-        before = snapshot_doc(doc)
-        doc.status = status_from_provider(
-            {"status": "completed", "call_status": "not found", "duration": doc.duration, "billsec": doc.billsec},
-            previous=doc.status,
-        ) or ("Completed" if doc.status == "Connected" else "Cancelled")
-        doc.call_status = doc.call_status or "ended"
-        doc.hangup_cause = doc.hangup_cause or "LIVE_CALL_NOT_FOUND"
-        doc.end_time = doc.end_time or frappe.utils.now()
-        doc.response_json = merge_json(doc.response_json, {"live_status_warning": str(exc)})
-        doc = save_doc_latest(doc, before)
-        restore_mapping_after_call(doc.name)
-        update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
-        frappe.db.commit()
+        # Disappearance from the live-call endpoint is not a final outcome.
+        # Require a matching final CDR/callback, even when the provider says 404.
+        from vobiz_click_to_call.services.mapping_recovery import enqueue_recovery
+        enqueue_recovery(doc.name)
         return
 
     provider_status = _provider_live_status(response)
     if provider_status in {"completed", "hangup", "ended", "failed", "busy", "no-answer", "no answer", "cancelled", "canceled"}:
+        sources = [response, response.get("data")] if isinstance(response, dict) else []
+        if not any(isinstance(value, dict) and
+                   (value.get("call_uuid") or value.get("CallUUID") or value.get("uuid")) == call_uuid
+                   for value in sources):
+            return
         before = snapshot_doc(doc)
         doc.status = _terminal_status_from_provider(provider_status, doc.status, doc)
         doc.call_status = provider_status
@@ -545,50 +550,24 @@ def cancel_call(call_log: str) -> dict[str, Any]:
     if doc.status in TERMINAL_STATUSES:
         return {"status": doc.status, "message": _("Call is already finished.")}
 
-    call_uuid = doc.call_uuid or doc.a_leg_uuid or doc.b_leg_uuid
-    if call_uuid:
-        try:
-            response = VobizClient(get_settings()).hangup_call(call_uuid)
-            message = _("Call cancellation requested.")
-            log_vobiz_event("Provider hangup response received", call_log=doc.name, payload=response)
-        except Exception as exc:
-            error_text = str(exc)
-            if "call not found" not in error_text.lower() and "not found" not in error_text.lower():
-                log_vobiz_event(
-                    "Provider hangup failed",
-                    call_log=doc.name,
-                    severity="Error",
-                    payload={"error": error_text, "call_uuid": call_uuid},
-                    traceback=frappe.get_traceback(),
-                )
-                raise
-            response = {
-                "provider_cancel_warning": error_text,
-                "treated_as_ended": True,
-                "call_uuid": call_uuid,
-            }
-            message = _("Provider call was already ended. Local call was cleared.")
-            log_vobiz_event("Provider hangup call not found; cancelled locally", call_log=doc.name, severity="Warning", payload=response)
-    else:
-        before = snapshot_doc(doc)
-        doc.response_json = merge_json(doc.response_json, {"cancel_requested": True})
-        doc.call_status = "cancellation-requested"
-        save_doc_latest(doc, before)
-        frappe.db.commit()
-        return {"status": doc.status, "pending_provider": True,
-                "message": _("Cancellation pending: waiting for the provider call identifier.")}
-
+    # Persist intent first: HTTP success/404/timeout alone is not proof of hangup.
+    # The same intent is retried after a late provider UUID and after worker failures.
     before = snapshot_doc(doc)
-    was_connected = has_confirmed_customer_connection(doc.as_dict())
-    doc.status = "Completed" if was_connected else "Cancelled"
-    doc.error_message = "Connected call ended by user." if was_connected else "Call cancelled by user."
-    doc.end_time = doc.end_time or frappe.utils.now()
-    doc.response_json = merge_json(doc.response_json, {"cancel_response": response})
+    doc.response_json = merge_json(doc.response_json, {"cancel_requested": True})
+    doc.call_status = "cancellation-requested"
     doc = save_doc_latest(doc, before)
-    restore_mapping_after_call(doc.name)
-    update_reference_call_metrics(doc.reference_doctype, doc.reference_name)
     frappe.db.commit()
-    return {"status": doc.status, "message": message}
+    from vobiz_click_to_call.services.cancellation import cancel_pending
+    from vobiz_click_to_call.services.mapping_recovery import enqueue_recovery
+    try:
+        hangup_result = cancel_pending(doc.name) or {}
+    finally:
+        enqueue_recovery(doc.name)
+        frappe.db.commit()
+    doc.reload()
+    return {"status": doc.status, "pending_provider": doc.status not in TERMINAL_STATUSES,
+            "retry_after": hangup_result.get("retry_after", 30),
+            "message": _("End Call requested. Waiting for confirmed provider termination.")}
 
 
 @frappe.whitelist()

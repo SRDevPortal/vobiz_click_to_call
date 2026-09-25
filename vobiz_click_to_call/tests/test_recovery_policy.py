@@ -29,7 +29,7 @@ class MemoryCache:
                 return False
             self.locks.add(key)
             return True
-        return SimpleNamespace(acquire=acquire, release=lambda: self.locks.remove(key))
+        return SimpleNamespace(acquire=acquire, release=lambda: self.locks.remove(key), owned=lambda: key in self.locks)
 
     def make_key(self, key):
         return key
