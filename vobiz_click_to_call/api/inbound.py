@@ -7,6 +7,7 @@ from typing import Any
 from xml.sax.saxutils import escape, quoteattr
 
 import frappe
+from vobiz_click_to_call.services.queue_sources import queue_includes
 from frappe.rate_limiter import rate_limit
 from werkzeug.wrappers import Response
 
@@ -1089,12 +1090,12 @@ def patient_route_mappings(patient) -> list[dict[str, Any]]:
     )
     rows = frappe.get_all(
         "Vobiz User Mapping",
-        filters={"enabled": 1, "queue_source": ["in", ["Patient", "CRM Lead and Patient"]]},
+        filters={"enabled": 1},
         fields=fields,
         order_by="modified asc",
         limit_page_length=2000,
     )
-    return [row for row in rows if _patient_mapping_matches(row, patient)]
+    return [row for row in rows if queue_includes(row.get("queue_source"), "Patient") and _patient_mapping_matches(row, patient)]
 
 
 def _patient_mapping_matches(mapping: dict[str, Any], patient) -> bool:

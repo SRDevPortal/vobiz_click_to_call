@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import frappe
 from vobiz_click_to_call.services.reference_sync import request_reference_sync
 from frappe import _
+from vobiz_click_to_call.services.queue_sources import queue_includes
 from requests.exceptions import ReadTimeout
 
 from vobiz_click_to_call.services.confirmation import confirmation_pending, normalize_existing
@@ -792,7 +793,7 @@ def has_mapped_patient_access(reference_doctype: str, reference_name: str, user:
     if reference_doctype != "Patient" or not frappe.db.exists("DocType", "Patient"):
         return False
     mapping = get_user_mapping(user or frappe.session.user)
-    if not mapping or (mapping.get("queue_source") or "").strip() not in {"Patient", "CRM Lead and Patient"}:
+    if not mapping or not queue_includes(mapping.get("queue_source"), "Patient"):
         return False
     patient = frappe.db.get_value(
         "Patient",

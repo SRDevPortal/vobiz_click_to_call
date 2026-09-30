@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import frappe
 from frappe import _
+from vobiz_click_to_call.services.queue_sources import QUEUE_SOURCES, parse_queue_sources, queue_includes
 from frappe.model.document import Document
 
 from vobiz_click_to_call.services.numbers import normalize_phone_number
@@ -32,10 +33,11 @@ class VobizUserMapping(Document):
                 frappe.throw(_("Interakt Channel Account must be an active Interakt account."))
 
         self.availability_status = self.availability_status or "Available"
-        self.queue_source = self.queue_source or "CRM Lead"
-        if self.queue_source not in {"CRM Lead", "Patient", "CRM Lead and Patient", "Patient Encounter", "Issue", "Discontinued"}:
-            frappe.throw(_("Queue Source must be CRM Lead, Patient, CRM Lead and Patient, Patient Encounter, Issue, or Discontinued."))
-        if self.queue_source in {"Patient", "CRM Lead and Patient"}:
+        sources = parse_queue_sources(self.queue_source)
+        if not sources or any(source not in QUEUE_SOURCES for source in sources):
+            frappe.throw(_("Select at least one valid Queue Source."))
+        self.queue_source = "\n".join(sources)
+        if queue_includes(self.queue_source, "Patient"):
             departments = _split_values(self.get("sr_medical_departments"))
             followup_ids = _split_values(self.get("sr_followup_ids"))
             diseases = _split_values(self.get("sr_dpt_diseases"))

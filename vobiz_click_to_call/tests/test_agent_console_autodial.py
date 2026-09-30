@@ -519,7 +519,6 @@ class TestAgentConsoleAutoDial(unittest.TestCase):
         mapping_json = USER_MAPPING_JSON.read_text(encoding="utf-8")
 
         self.assertIn('"fieldname": "queue_source"', mapping_json)
-        self.assertIn('"options": "CRM Lead\\nPatient\\nCRM Lead and Patient\\nPatient Encounter\\nIssue\\nDiscontinued"', mapping_json)
         self.assertIn('"fieldname": "sr_medical_department"', mapping_json)
         self.assertIn('"fieldname": "sr_followup_id"', mapping_json)
         self.assertIn('"fieldname": "sr_dpt_disease"', mapping_json)

@@ -15,6 +15,8 @@ from vobiz_click_to_call.services.settings import (
 
 class VobizSettings(Document):
     def validate(self):
+        from vobiz_click_to_call.api.encounter_queue import validate_configuration
+        validate_configuration(self)
         self.base_url = (self.base_url or "https://api.vobiz.ai/api/v1").strip().rstrip("/")
         self.default_country_code = (self.default_country_code or "+91").strip()
         self.caller_ids = self.normalize_caller_ids()

@@ -3,7 +3,7 @@
     // Frappe caches Page source separately from the application's JS assets.
     try {
         const key = 'vobiz_click_to_call_console_version';
-        const version = '20260925.1';
+        const version = '20260929.4';
         if (window.localStorage.getItem(key) !== version) {
             window.localStorage.removeItem('_page:vobiz-agent-console');
             window.localStorage.setItem(key, version);

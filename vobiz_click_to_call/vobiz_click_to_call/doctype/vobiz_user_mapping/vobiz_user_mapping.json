@@ -9,6 +9,7 @@
   "user",
   "enabled",
   "queue_source",
+  "queue_source_picker",
   "agent_mobile",
   "caller_id",
   "whatsapp_channel_account",
@@ -61,13 +62,13 @@
   },
   {
    "default": "CRM Lead",
-   "description": "Select which records this mapped user should work from in the agent console.",
+   "description": "Selected console queues, one per line.",
    "fieldname": "queue_source",
-   "fieldtype": "Select",
+   "fieldtype": "Small Text",
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Queue Source",
-   "options": "CRM Lead\nPatient\nCRM Lead and Patient\nPatient Encounter\nIssue\nDiscontinued"
+   "hidden": 1
   },
   {
    "description": "The phone number Vobiz will dial after the customer answers.",
@@ -98,13 +99,13 @@
   },
   {
    "collapsible": 1,
-   "depends_on": "eval:['Patient', 'CRM Lead and Patient'].includes(doc.queue_source)",
+   "depends_on": "eval:(doc.queue_source || '').replace('CRM Lead and Patient', 'CRM Lead\\nPatient').split('\\n').includes('Patient')",
    "fieldname": "patient_routing_section",
    "fieldtype": "Section Break",
    "label": "Patient Routing"
   },
   {
-   "depends_on": "eval:['Patient', 'CRM Lead and Patient'].includes(doc.queue_source)",
+   "depends_on": "eval:(doc.queue_source || '').replace('CRM Lead and Patient', 'CRM Lead\\nPatient').split('\\n').includes('Patient')",
    "fieldname": "sr_medical_department",
    "fieldtype": "Link",
    "in_list_view": 1,
@@ -113,7 +114,7 @@
    "options": "Medical Department"
   },
   {
-   "depends_on": "eval:['Patient', 'CRM Lead and Patient'].includes(doc.queue_source)",
+   "depends_on": "eval:(doc.queue_source || '').replace('CRM Lead and Patient', 'CRM Lead\\nPatient').split('\\n').includes('Patient')",
    "description": "Optional. Add one department per line to route this user to multiple patient departments.",
    "fieldname": "sr_medical_departments",
    "fieldtype": "Small Text",
@@ -121,7 +122,7 @@
    "label": "Departments"
   },
   {
-   "depends_on": "eval:['Patient', 'CRM Lead and Patient'].includes(doc.queue_source) && (doc.sr_medical_department=='Regional' || (doc.sr_medical_departments && doc.sr_medical_departments.split('\\n').includes('Regional')))",
+   "depends_on": "eval:(doc.queue_source || '').replace('CRM Lead and Patient', 'CRM Lead\\nPatient').split('\\n').includes('Patient') && (doc.sr_medical_department=='Regional' || (doc.sr_medical_departments && doc.sr_medical_departments.split('\\n').includes('Regional')))",
    "fieldname": "sr_dpt_disease",
    "fieldtype": "Link",
    "in_list_view": 1,
@@ -136,7 +137,7 @@
    "label": "Diseases"
   },
   {
-   "depends_on": "eval:['Patient', 'CRM Lead and Patient'].includes(doc.queue_source) && (doc.sr_medical_department=='Regional' || (doc.sr_medical_departments && doc.sr_medical_departments.split('\\n').includes('Regional')))",
+   "depends_on": "eval:(doc.queue_source || '').replace('CRM Lead and Patient', 'CRM Lead\\nPatient').split('\\n').includes('Patient') && (doc.sr_medical_department=='Regional' || (doc.sr_medical_departments && doc.sr_medical_departments.split('\\n').includes('Regional')))",
    "fieldname": "sr_dpt_language",
    "fieldtype": "Link",
    "in_list_view": 1,
@@ -151,7 +152,7 @@
    "label": "Languages"
   },
   {
-   "depends_on": "eval:['Patient', 'CRM Lead and Patient'].includes(doc.queue_source)",
+   "depends_on": "eval:(doc.queue_source || '').replace('CRM Lead and Patient', 'CRM Lead\\nPatient').split('\\n').includes('Patient')",
    "fieldname": "sr_followup_id",
    "fieldtype": "Select",
    "in_list_view": 1,
@@ -160,7 +161,7 @@
    "options": "\n0\n1\n2\n3\n4\n5\n6\n7\n8\n9"
   },
   {
-   "depends_on": "eval:['Patient', 'CRM Lead and Patient'].includes(doc.queue_source)",
+   "depends_on": "eval:(doc.queue_source || '').replace('CRM Lead and Patient', 'CRM Lead\\nPatient').split('\\n').includes('Patient')",
    "description": "Optional. Add one follow up ID per line, or separate IDs with commas.",
    "fieldname": "sr_followup_ids",
    "fieldtype": "Small Text",
@@ -294,6 +295,11 @@
    "fieldname": "notes",
    "fieldtype": "Small Text",
    "label": "Notes"
+  },
+  {
+   "fieldname": "queue_source_picker",
+   "fieldtype": "HTML",
+   "label": "Queue Source"
   }
  ],
  "links": [],

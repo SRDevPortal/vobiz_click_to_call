@@ -1,5 +1,6 @@
 frappe.ui.form.on('Vobiz User Mapping', {
 	refresh(frm) {
+        setup_queue_source_picker(frm);
 		load_vobiz_number_options(frm);
 		setup_patient_routing_multi_ui(frm);
 		setup_fallback_user_multi_ui(frm);
@@ -106,7 +107,7 @@ function setup_patient_routing_multi_ui(frm) {
 }
 
 function queue_source_includes_patient(queue_source) {
-	return ['Patient', 'CRM Lead and Patient'].includes(queue_source || '');
+	return queue_source_values(queue_source).includes('Patient');
 }
 
 function setup_fallback_user_multi_ui(frm) {
@@ -211,4 +212,35 @@ function remove_multi_value(frm, opts, value) {
 	if ((frm.doc[opts.fieldname] || '').toString().trim() === value) {
 		frm.set_value(opts.fieldname, '');
 	}
+}
+
+function queue_source_values(value) {
+    const values = get_multi_values(value);
+    return [...new Set(values.flatMap(source => source === 'CRM Lead and Patient' ? ['CRM Lead', 'Patient'] : [source]))];
+}
+
+function setup_queue_source_picker(frm) {
+    const wrapper = frm.fields_dict.queue_source_picker;
+    if (!wrapper) return;
+    wrapper.$wrapper.empty();
+    const control = frappe.ui.form.make_control({
+        parent: wrapper.$wrapper,
+        render_input: true,
+        df: {
+            fieldname: 'queue_source_selection',
+            fieldtype: 'MultiSelectList',
+            label: __('Queue Source'),
+            description: __('Select all queues this user should work from.'),
+            options: ['CRM Lead', 'Patient', 'Patient Encounter', 'Issue', 'Discontinued'],
+            read_only: frm.doc.__islocal ? 0 : !frm.perm.some(permission => permission.write),
+            onchange() {
+                if (frm.__setting_queue_source) return;
+                return frm.set_value('queue_source', control.get_value().join('\n'));
+            }
+        }
+    });
+    frm.__setting_queue_source = true;
+    Promise.resolve(control.set_value(queue_source_values(frm.doc.queue_source || 'CRM Lead')))
+        .finally(() => { frm.__setting_queue_source = false; });
+    frm.queue_source_control = control;
 }

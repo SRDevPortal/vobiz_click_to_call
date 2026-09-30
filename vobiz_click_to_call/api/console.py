@@ -24,6 +24,7 @@ from vobiz_click_to_call.services.attendance import agent_attendance_enabled
 from vobiz_click_to_call.services.call_status import MISSED_STATUSES, is_inbound_missed_call, status_bucket, talk_seconds
 from vobiz_click_to_call.services.lead_disposition import get_lead_disposition_context
 from vobiz_click_to_call.services.patient_routing import patient_matches_mapping
+from vobiz_click_to_call.services.queue_sources import queue_source_options, queue_includes, parse_queue_sources
 from vobiz_click_to_call.services.settings import get_idle_auto_offline_config, get_settings
 
 
@@ -466,14 +467,14 @@ def _get_permitted_reference(reference_doctype: str, reference_name: str):
 def _has_mapped_queue_access(reference_doctype: str) -> bool:
     agent = _agent_context()
     queue_source = (agent.get("queue_source") or "").strip()
-    return QUEUE_SOURCE_DOCTYPES.get(queue_source) == reference_doctype
+    return any(QUEUE_SOURCE_DOCTYPES.get(source) == reference_doctype for source in queue_source_options(queue_source))
 
 
 def _has_mapped_patient_access(reference_doctype: str, reference_name: str) -> bool:
     if reference_doctype != "Patient":
         return False
     agent = _agent_context()
-    if (agent.get("queue_source") or "").strip() not in {"Patient", COMBINED_QUEUE_SOURCE}:
+    if not queue_includes(agent.get("queue_source"), "Patient"):
         return False
     patient = frappe.db.get_value(
         "Patient",
@@ -1001,7 +1002,7 @@ def get_call_performance(
         from_date=from_date,
         to_date=to_date,
         status_filter=status_filter,
-        queue_source=queue_source or _agent_queue_source(agent),
+        queue_source=queue_source or _selected_queue_source(_agent_queue_source(agent)),
         agent_user=agent_user,
         lead_owner=lead_owner,
         team=team,
@@ -1053,7 +1054,7 @@ def get_analytics(
         "from_date": from_date,
         "to_date": to_date,
         "status_filter": status_filter,
-        "queue_source": queue_source or _agent_queue_source(agent),
+        "queue_source": queue_source or _selected_queue_source(_agent_queue_source(agent)),
         "agent_user": agent_user,
         "lead_owner": lead_owner,
         "team": team,
@@ -1122,7 +1123,7 @@ def _analytics_data(
 ) -> dict[str, Any]:
     from_date, to_date = _analytics_date_range(from_date, to_date)
     status_filter = _analytics_status_filter(status_filter)
-    queue_source = queue_source if queue_source in QUEUE_SOURCE_DOCTYPES else _agent_queue_source(agent)
+    queue_source = queue_source if queue_source in QUEUE_SOURCE_DOCTYPES else _selected_queue_source(_agent_queue_source(agent))
     start = f"{from_date} 00:00:00"
     end = f"{to_date} 23:59:59"
     filters: dict[str, Any] = {"creation": ["between", [start, end]]}
@@ -1781,8 +1782,6 @@ def _append_mapped_agents_with_zero_calls(
 
     filters: dict[str, Any] = {"enabled": 1}
     queue_filter = _analytics_mapped_agent_queue_filter(queue_source)
-    if queue_filter:
-        filters["queue_source"] = ["in", queue_filter]
     users = _analytics_mapped_agent_scope(
         queue_source=queue_source,
         agent_user=agent_user,
@@ -1794,12 +1793,15 @@ def _append_mapped_agents_with_zero_calls(
             return
         filters["user"] = ["in", sorted(users)]
 
-    mapped_users = frappe.get_all(
+    mappings = frappe.get_all(
         "Vobiz User Mapping",
         filters=filters,
-        pluck="user",
+        fields=["user", "queue_source"],
         limit_page_length=2000,
     )
+    allowed_sources = set(parse_queue_sources(queue_filter))
+    mapped_users = [mapping.user for mapping in mappings
+                    if not queue_filter or allowed_sources.intersection(parse_queue_sources(mapping.queue_source))]
     existing = {row.get("user") for row in rows}
     for user in mapped_users:
         if not user or user in existing or _is_demo_analytics_user(user):
@@ -1815,9 +1817,9 @@ def _is_demo_analytics_user(user: str | None) -> bool:
 
 def _analytics_mapped_agent_queue_filter(queue_source: str | None = None) -> list[str]:
     if queue_source in {"CRM Lead", "Discontinued"}:
-        return ["CRM Lead", "CRM Lead and Patient"]
+        return ["CRM Lead", "Discontinued"]
     if queue_source == "Patient":
-        return ["Patient", "CRM Lead and Patient"]
+        return ["Patient"]
     return []
 
 
@@ -3199,21 +3201,17 @@ def _agent_context() -> dict[str, Any]:
 
 
 def _agent_queue_source(agent: dict[str, Any] | None = None) -> str:
-    source = ((agent or {}).get("queue_source") or "CRM Lead").strip()
-    return source if source in QUEUE_SOURCE_DOCTYPES else "CRM Lead"
+    return "\n".join(queue_source_options((agent or {}).get("queue_source")))
 
 
 def _selected_queue_source(agent_queue_source: str, requested_source: str | None = None) -> str:
+    options = queue_source_options(agent_queue_source)
     requested_source = (requested_source or "").strip()
-    if agent_queue_source == COMBINED_QUEUE_SOURCE:
-        return requested_source if requested_source in {"CRM Lead", "Patient"} else "CRM Lead"
-    return agent_queue_source
+    return requested_source if requested_source in options else options[0]
 
 
 def _queue_source_options(agent_queue_source: str) -> list[str]:
-    if agent_queue_source == COMBINED_QUEUE_SOURCE:
-        return ["CRM Lead", "Patient"]
-    return [agent_queue_source]
+    return queue_source_options(agent_queue_source)
 
 
 def _queue_doctype_for_source(queue_source: str) -> str:
@@ -3300,7 +3298,7 @@ def _lead_queue(
     user_filters: str | list | None = None,
     limit_start: int = 0,
 ) -> list[dict[str, Any]]:
-    queue_source = queue_source or _agent_queue_source(agent)
+    queue_source = queue_source or _selected_queue_source(_agent_queue_source(agent))
     preferred_doctype = _queue_doctype_for_source(queue_source)
     if preferred_doctype and frappe.db.exists("DocType", preferred_doctype):
         return _queue_for_doctype(

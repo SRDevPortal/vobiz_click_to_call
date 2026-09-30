@@ -51,7 +51,11 @@
   "ai_disposition_system_prompt",
   "ai_disposition_options",
   "auto_apply_ai_disposition",
-  "add_ai_summary_comment"
+  "add_ai_summary_comment",
+  "encounter_queue_section",
+  "enable_encounter_queue",
+  "encounter_queue_fields",
+  "encounter_queue_filters"
  ],
  "fields": [
   {
@@ -387,6 +391,34 @@
    "fieldname": "add_ai_summary_comment",
    "fieldtype": "Check",
    "label": "Add AI Summary Comment"
+  },
+  {
+   "fieldname": "encounter_queue_section",
+   "fieldtype": "Section Break",
+   "label": "Patient Encounter Queue",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "enable_encounter_queue",
+   "fieldtype": "Check",
+   "label": "Enable Patient Encounter Queue",
+   "default": "0"
+  },
+  {
+   "fieldname": "encounter_queue_fields",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "label": "Encounter Queue Columns",
+   "default": "[\"name\", \"patient\", \"patient_name\", \"encounter_date\", \"status\"]",
+   "description": "Ordered field names. Use Configure Encounter Queue to choose columns. Field permissions still apply."
+  },
+  {
+   "fieldname": "encounter_queue_filters",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "label": "Encounter Queue Filters",
+   "default": "[]",
+   "description": "All conditions must match. Use Configure Encounter Queue to choose filters. Example: Shipkia Status != Delivered includes records without a shipment status. Add Shipkia Order ID is set to show shipped orders only."
   }
  ],
  "issingle": 1,
