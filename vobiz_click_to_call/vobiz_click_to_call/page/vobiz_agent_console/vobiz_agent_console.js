@@ -4156,7 +4156,8 @@ class VobizAgentConsole {
 				reference_doctype: row.doctype,
 				reference_name: row.name,
 				phone_field: patientPhone ? patientPhone.fieldname : row.phone_field,
-				phone_number: patientPhone ? patientPhone.number : row.phone,
+				phone_number: String(patientPhone ? patientPhone.fieldname : row.phone_field).startsWith('privacy:')
+					? null : (patientPhone ? patientPhone.number : row.phone),
 				patient_phone_selected: patientPhone ? 1 : 0
 			},
 			freeze: true,

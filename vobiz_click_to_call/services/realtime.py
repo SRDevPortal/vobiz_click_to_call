@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import frappe
 
+from vobiz_click_to_call import number_privacy
+
 
 TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled"}
 
 
-def call_completion_payload(doc):
+def call_completion_payload(doc, user=None):
     """The same complete event contract for document saves and lifecycle updates."""
     fields = (
         "name", "status", "direction", "reference_doctype", "reference_name",
@@ -14,7 +16,9 @@ def call_completion_payload(doc):
         "call_flow", "call_status",
     )
     payload = {field: doc.get(field) for field in fields}
-    payload["customer_number_display"] = doc.get("customer_number")
+    payload["customer_number_display"] = number_privacy.display_number(
+        doc.get("customer_number"), user or doc.get("user")
+    )
     payload["customer_leg_attempted"] = doc.get("call_status") == "customer-leg-ended"
     return payload
 
@@ -26,7 +30,7 @@ def publish_call_disconnected(doc, method=None) -> None:
 
     frappe.publish_realtime(
         "vobiz_call_disconnected",
-        call_completion_payload(doc),
+        call_completion_payload(doc, doc.user),
         user=doc.user,
         after_commit=True,
     )

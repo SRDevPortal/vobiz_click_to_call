@@ -8,6 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import frappe
+from vobiz_click_to_call import number_privacy
 from frappe import _
 
 from vobiz_click_to_call.api.call import (
@@ -307,7 +308,7 @@ def get_agent_console_data(
     return {
         "availability": get_call_capability(),
         "active_call": _active_call(),
-        "queue": queue[:limit],
+        "queue": [number_privacy.project_reference(row) for row in queue[:limit]],
         "queue_pagination": {"has_more": len(queue) > limit},
         "queue_meta": static_context["queue_meta"],
         "dispositions": static_context["dispositions"],
@@ -390,7 +391,7 @@ def get_reference_context(reference_doctype: str, reference_name: str, lite: int
     history = _call_history(reference_doctype, reference_name, 8)
 
     return {
-        "reference": _reference_row(reference_doctype, doc),
+        "reference": number_privacy.project_reference(_reference_row(reference_doctype, doc)),
         "history": history,
         "guidance": _guidance_for_reference(reference_doctype, doc),
         "workdesk": _workdesk_context(reference_doctype, reference_name, doc, lite=lite, history=history),
@@ -3920,7 +3921,7 @@ def get_reference_missed_calls(reference_doctype: str, reference_name: str, limi
         "reference_doctype": reference_doctype,
         "reference_name": reference_name,
         "count": len(calls),
-        "calls": calls,
+        "calls": number_privacy.project_call_rows(calls),
     }
 
 
@@ -4057,7 +4058,7 @@ def _call_history(reference_doctype: str, reference_name: str, limit: int) -> li
     for row in rows:
         row["duration_label"] = _duration_label(_talk_seconds(row))
         row["recording_download_url"] = recording_proxy_url(row.name) if row.recording_url else ""
-    return rows
+    return number_privacy.project_call_rows(rows)
 
 
 def _guidance_for_reference(reference_doctype: str, doc) -> dict[str, Any]:
@@ -4098,7 +4099,9 @@ def _workdesk_context(
         "patient": patient,
         "vobiz": _vobiz_summary_from_history(history) if history is not None else _vobiz_summary(reference_doctype, reference_name),
         "whatsapp": _whatsapp_deferred(reference_doctype, reference_name),
-        "create_defaults": _create_defaults(reference_doctype, reference_name, doc, patient),
+        "create_defaults": number_privacy.project_create_defaults(
+            _create_defaults(reference_doctype, reference_name, doc, patient)
+        ),
         "deferred_tabs": ["encounters", "clinical-history", "reports", "whatsapp"],
     }
 
@@ -4168,7 +4171,7 @@ def _lead_details(
                     "options": _status_options(reference_doctype) if fieldname == "status" else [],
                 }
             )
-        return {"doctype": reference_doctype, "name": reference_name, "fields": fields}
+        return number_privacy.project_details({"doctype": reference_doctype, "name": reference_name, "fields": fields})
 
     meta = frappe.get_meta("CRM Lead")
     wa_ai = _conversation_ai_fields(reference_doctype, reference_name) if include_conversation_ai else {}
@@ -4205,7 +4208,7 @@ def _lead_details(
                 "fieldtype": df.fieldtype,
             }
         )
-    return {"doctype": reference_doctype, "name": reference_name, "fields": fields}
+    return number_privacy.project_details({"doctype": reference_doctype, "name": reference_name, "fields": fields})
 
 
 def _conversation_ai_fields(reference_doctype: str, reference_name: str) -> dict[str, Any]:

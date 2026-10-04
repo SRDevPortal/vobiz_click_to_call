@@ -4,9 +4,15 @@ from unittest.mock import patch
 import frappe
 
 from vobiz_click_to_call.services.realtime import publish_call_disconnected
+from vobiz_click_to_call import number_privacy
 
 
 class CallCompletionEventTests(unittest.TestCase):
+    def setUp(self):
+        projection = patch.object(number_privacy, "display_number", side_effect=lambda value, user=None: value)
+        projection.start()
+        self.addCleanup(projection.stop)
+
     def test_completion_includes_disposition_context_after_commit_for_own_agent(self):
         for direction in ("Incoming", "Outgoing"):
             with self.subTest(direction=direction):
@@ -25,6 +31,16 @@ class CallCompletionEventTests(unittest.TestCase):
                               "answer_time", "end_time", "call_flow"):
                     self.assertEqual(payload[field], doc[field])
                 self.assertEqual(publish.call_args.kwargs, {"user": doc.user, "after_commit": True})
+
+    def test_completion_projects_number_for_receiving_agent(self):
+        doc = frappe._dict(name="CALL-1", status="Completed", user="agent@example.test",
+                           customer_number="1234567890")
+        with patch.object(number_privacy, "display_number", return_value="******7890") as display, \
+             patch.object(frappe, "publish_realtime") as publish:
+            publish_call_disconnected(doc)
+        display.assert_called_once_with("1234567890", "agent@example.test")
+        self.assertEqual(publish.call_args.args[1]["customer_number_display"], "******7890")
+
 
     def test_unfinished_or_unassigned_calls_do_not_publish_completion(self):
         for status, user in [("Queued", "agent@example.test"), ("Connected", "agent@example.test"),

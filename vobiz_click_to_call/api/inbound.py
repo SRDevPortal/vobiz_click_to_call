@@ -7,6 +7,7 @@ from typing import Any
 from xml.sax.saxutils import escape, quoteattr
 
 import frappe
+from vobiz_click_to_call import number_privacy
 from vobiz_click_to_call.services.queue_sources import queue_includes
 from frappe.rate_limiter import rate_limit
 from werkzeug.wrappers import Response
@@ -1444,7 +1445,7 @@ def publish_callback_notification(call_log, previous, customer_number: str, did_
                 "reference_name": call_log.reference_name,
                 "crm_lead": call_log.crm_lead,
                 "patient": call_log.patient,
-                "customer_number": customer_number,
+                "customer_number": number_privacy.display_number(customer_number, call_log.user),
                 "did_number": did_number,
                 "agent_mobile": agent_mobile,
                 "agent_user": call_log.user,

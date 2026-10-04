@@ -6,6 +6,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import frappe
+from vobiz_click_to_call import number_privacy
 from vobiz_click_to_call.services.reference_sync import request_reference_sync
 from frappe import _
 from vobiz_click_to_call.services.queue_sources import queue_includes
@@ -148,7 +149,7 @@ def get_patient_phone_choices(patient: str) -> list[dict[str, str]]:
     doc = frappe.get_doc("Patient", patient)
     if not doc.has_permission("read") and not has_mapped_patient_access("Patient", patient):
         frappe.throw(_("You do not have permission to read this patient."))
-    return _patient_primary_phone_candidates(doc, get_default_country_code(get_settings()))
+    return number_privacy.project_choices(doc, _patient_primary_phone_candidates(doc, get_default_country_code(get_settings())))
 
 
 @frappe.whitelist()
@@ -332,7 +333,7 @@ def _call_start_result(call_log, call_flow: str, customer_number: str, user_mobi
         "call_log": call_log.name,
         "status": call_log.status,
         "call_flow": call_flow,
-        "customer_number": customer_number,
+        "customer_number": number_privacy.display_number(customer_number),
         "agent_mobile_display": mask_phone(user_mobile),
     }
     if confirmation_pending:
@@ -900,6 +901,15 @@ def create_call_log(
 
 
 def resolve_target_number(doc, phone_field: str | None = None, phone_number: str | None = None) -> tuple[str, str | None]:
+    if phone_field and phone_field.startswith(number_privacy.PREFIX):
+        # Call entry points authorize the source document before this resolver.
+        # Resolve only current candidates; tokens never grant document access.
+        if phone_number:
+            raise frappe.ValidationError("Do not submit a displayed number with a private phone choice.")
+        return number_privacy.resolve_choice(
+            doc, phone_field, collect_phone_candidates(doc) + collect_linked_customer_phone_candidates(doc)
+        )
+
     if phone_field:
         df = doc.meta.get_field(phone_field)
         if not df or not is_phone_like_field(df):
