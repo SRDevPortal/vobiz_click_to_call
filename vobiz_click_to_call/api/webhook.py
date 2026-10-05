@@ -341,6 +341,13 @@ def _validate_callback(call_log: str | None, token: str | None):
     if not doc.callback_token or not secrets_match(doc.callback_token, token):
         return None, payload
 
+    # A callback may have opened a REPEATABLE READ snapshot before a concurrent
+    # Dial callback committed its connection/billing evidence. Compute outcomes
+    # from a locking current read; merging a stale derived status after a
+    # TimestampMismatchError can otherwise overwrite a completed customer call.
+    doc = frappe.get_doc("Vobiz Call Log", call_log, for_update=True)
+    if not doc.callback_token or not secrets_match(doc.callback_token, token):
+        return None, payload
     return doc, payload
 
 

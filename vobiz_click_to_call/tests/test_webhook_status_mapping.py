@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from vobiz_click_to_call.api.webhook import _status_from_dial_status, _status_from_hangup
 from vobiz_click_to_call.api.console import _analytics_bucket
@@ -17,6 +17,39 @@ from vobiz_click_to_call.services.disposition import call_next_action_label
 
 
 class TestWebhookStatusMapping(unittest.TestCase):
+    def test_hangup_uses_current_connected_evidence_instead_of_old_snapshot(self):
+        import frappe
+        from vobiz_click_to_call.api import webhook
+
+        stale = frappe._dict(callback_token="callback-secret", status="Connected", billsec=0, duration=0)
+        current = frappe._dict(callback_token="callback-secret", status="Completed", billsec=60, duration=8)
+        payload = {"CallStatus": "completed", "HangupCause": "NORMAL_CLEARING"}
+
+        def read_doc(doctype, name, **kwargs):
+            return current if kwargs.get("for_update") else stale
+
+        with patch.object(webhook, "_payload", return_value=payload), \
+             patch.object(frappe, "db", MagicMock()) as db, \
+             patch.object(frappe, "get_doc", side_effect=read_doc):
+            db.exists.return_value = True
+            doc, received = webhook._validate_callback("CALL-1", "callback-secret")
+            self.assertEqual(webhook._status_from_hangup(
+                received["CallStatus"], received["HangupCause"],
+                previous=doc.status, billsec=doc.billsec, duration=doc.duration,
+            ), "Completed")
+
+    def test_invalid_callback_token_does_not_lock_call(self):
+        import frappe
+        from vobiz_click_to_call.api import webhook
+
+        doc = frappe._dict(callback_token="callback-secret")
+        with patch.object(webhook, "_payload", return_value={}), \
+             patch.object(frappe, "db", MagicMock()) as db, \
+             patch.object(frappe, "get_doc", return_value=doc) as read:
+            db.exists.return_value = True
+            self.assertIsNone(webhook._validate_callback("CALL-1", "wrong-secret")[0])
+            read.assert_called_once_with("Vobiz Call Log", "CALL-1")
+
     def test_timestamp_retry_reapplies_only_changed_fields(self):
         class Field:
             def __init__(self, fieldname):
