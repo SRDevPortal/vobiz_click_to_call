@@ -883,9 +883,10 @@ def get_whatsapp_templates(conversation: str, force_refresh: int | str = 0,
         channel_account = frappe.db.get_value("Chat Conversation", conversation, "channel_account")
         response = get_interakt_templates(channel_account=channel_account, force_refresh=force_refresh)
         result = response.get("result") or {}
+        from wa_chat_hub.interakt.template_autofill import add_suggestions
         return {
             "success": True,
-            "templates": result.get("templates") or [],
+            "templates": add_suggestions(result.get("templates") or [], conversation),
             "channel_account": result.get("channel_account"),
             "count": result.get("count") or 0,
         }
@@ -914,7 +915,7 @@ def send_whatsapp_template(
         frappe.throw(_("Template is required."))
     _ensure_whatsapp_conversation_read(conversation, reference_doctype, reference_name)
 
-    from wa_chat_hub.interakt.templates_api import resolve_approved_template
+    from wa_chat_hub.interakt.template_selection import resolve_chat_template
     from wa_chat_hub.outbound import send_interakt_template_message
     from wa_chat_hub.services import append_message
 
@@ -927,7 +928,7 @@ def send_whatsapp_template(
         "file_name": file_name,
     }
     channel_account = frappe.db.get_value("Chat Conversation", conversation, "channel_account")
-    template = resolve_approved_template(channel_account, template)
+    template = resolve_chat_template(channel_account, template)
     try:
         outbound = send_interakt_template_message(conversation, template)
         delivery_status = (outbound.get("delivery_status") or "Sent") if outbound.get("sent") else "Failed"
