@@ -3354,6 +3354,8 @@ def _queue_for_doctype(
             "lead_name",
             "first_name",
             "patient_name",
+            "sr_patient_id",
+            "patient_id",
             "customer_name",
             "company_name",
             "subject",
@@ -3589,9 +3591,14 @@ def _queue_search_rows(
     """Search indexed fields separately to avoid a multi-column wildcard scan."""
     query = str(query or "").strip()[:140]
     digits = "".join(ch for ch in query if ch.isdigit())
-    searches: list[tuple[str, str, Any]] = []
+    # Document IDs may contain many digits; always search the document name.
+    searches: list[tuple[str, str, Any]] = [("name", "like", f"{query}%")]
+    for fieldname in ("sr_patient_id", "patient_id"):
+        if meta.has_field(fieldname):
+            searches.append((fieldname, "like", f"{query}%"))
+    is_phone_query = bool(query) and all(ch.isdigit() or ch in "+-(). " for ch in query)
 
-    if len(digits) >= 7:
+    if is_phone_query and len(digits) >= 7:
         last10 = digits[-10:]
         phone_values = [query, digits, last10]
         if len(last10) == 10:
@@ -3612,7 +3619,7 @@ def _queue_search_rows(
         for fieldname in [field for field in phone_fields if meta.has_field(field)][:6]:
             searches.append((fieldname, "in", phone_values))
     else:
-        for fieldname in ("name", "lead_name", "patient_name", "customer_name", "company_name", "subject"):
+        for fieldname in ("lead_name", "patient_name", "customer_name", "company_name", "subject"):
             if fieldname == "name" or meta.has_field(fieldname):
                 searches.append((fieldname, "like", f"{query}%"))
 
@@ -3687,6 +3694,7 @@ def _reference_row(doctype: str, doc) -> dict[str, Any]:
         "name": data.get("name"),
         "creation": data.get("creation"),
         "modified": data.get("modified"),
+        "patient_id": data.get("sr_patient_id") or data.get("patient_id"),
         "title": title,
         "company": company,
         "phone": phone_field.get("value"),
@@ -4138,6 +4146,8 @@ def _lead_details(
         meta = frappe.get_meta(reference_doctype)
         wanted = (
             "patient_name",
+            "sr_patient_id",
+            "patient_id",
             "first_name",
             "middle_name",
             "last_name",
