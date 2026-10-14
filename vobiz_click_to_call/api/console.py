@@ -4298,7 +4298,7 @@ def _patient_clinical_history(patient: str | None) -> dict[str, Any]:
 
     encounter_meta = frappe.get_meta("Patient Encounter")
     if not encounter_meta.has_field("patient"):
-        return {"patient": patient_row, "rows": []}
+        return number_privacy.project_clinical_history({"patient": patient_row, "rows": []})
 
     base_fields = _existing_fields(encounter_meta, (
         "name", "patient", "patient_name", "encounter_date", "encounter_time", "practitioner",
@@ -4341,7 +4341,7 @@ def _patient_clinical_history(patient: str | None) -> dict[str, Any]:
         if len(history) >= 12:
             break
 
-    return {"patient": patient_row, "rows": history}
+    return number_privacy.project_clinical_history({"patient": patient_row, "rows": history})
 
 
 def _related_appointments(patient: str | None) -> list[dict[str, Any]]:

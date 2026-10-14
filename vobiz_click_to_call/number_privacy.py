@@ -103,6 +103,16 @@ def project_call_rows(rows):
     from privacy_shield.display_text import mask_display
     result = deepcopy(rows)
     for row in result:
+        # Return only our authorized stream route, never the provider media URL.
+        available = bool(row.get("recording_url") or row.get("recording_download_url"))
+        row["recording_available"] = available
+        row["recording_download_allowed"] = False
+        row.pop("recording_url", None)
+        if available and row.get("name"):
+            from vobiz_click_to_call.api.recording import recording_proxy_url
+            row["recording_download_url"] = recording_proxy_url(row["name"])
+        else:
+            row["recording_download_url"] = ""
         if "customer_number" in row:
             row["customer_number"] = mask_number(row["customer_number"])
         for field in ("ai_summary", "ai_next_action", "transcript_text",
@@ -121,4 +131,34 @@ def project_create_defaults(defaults):
     if appointment is not None:
         # The Patient link's native fetch_from fills this field on server validation.
         appointment.pop("apt_mobile_number", None)
+    return result
+
+
+def project_clinical_history(payload):
+    """Mask this reviewed Workdesk display response without changing records."""
+    if not restricted():
+        return payload
+    from privacy_shield.masking import mask_number
+    from privacy_shield.display_text import mask_display
+    result = deepcopy(payload)
+    patient = result.get("patient")
+    if isinstance(patient, dict):
+        for field in ("mobile", "mobile_no", "sr_mobile_no", "phone", "phone_no", "sr_phone_no"):
+            if field in patient:
+                patient[field] = mask_number(patient[field])
+        for field in ("patient_name", "first_name"):
+            if field in patient:
+                patient[field] = mask_display(patient[field])
+    for row in result.get("rows", []):
+        # IDs, dates and clinical measurements remain unchanged. Only explicit
+        # display prose is processed; stored notes are never rewritten.
+        for field in ("patient_name", "practitioner_name", "sr_complaints", "sr_observations",
+                      "sr_investigations", "sr_diagnosis", "sr_notes"):
+            if field in row:
+                row[field] = mask_display(row[field])
+        for rows in (row.get("medications") or {}).values():
+            for medication in rows:
+                for field in ("medication", "sr_drug_instruction"):
+                    if field in medication:
+                        medication[field] = mask_display(medication[field])
     return result

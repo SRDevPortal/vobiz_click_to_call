@@ -213,3 +213,53 @@ class ConsoleNumberPrivacyTests(unittest.TestCase):
         self.assertEqual(publish.call_args.args[1]["customer_number"], "******0101")
         self.assertEqual(publish.call_args.args[1]["did_number"], "18005550100")
         self.assertEqual(publish.call_args.kwargs, {"user": "agent", "after_commit": True})
+
+    def test_masked_recording_uses_only_opaque_server_stream_url(self):
+        raw = [{"name": "CALL-1", "customer_number": "2025550101",
+                "recording_url": "https://media.vobiz.ai/2025550101/audio.mp3",
+                "recording_download_url": "https://media.vobiz.ai/unsafe",
+                "recording_duration": 36}]
+        result = privacy.project_call_rows(raw)[0]
+        self.assertNotIn("recording_url", result)
+        self.assertNotIn("media.vobiz.ai", str(result))
+        self.assertNotIn("2025550101", str(result))
+        self.assertTrue(result["recording_available"])
+        self.assertFalse(result["recording_download_allowed"])
+        self.assertEqual(result["recording_download_url"],
+            "/api/method/vobiz_click_to_call.api.recording.stream?call_log=CALL-1")
+        self.assertEqual(result["recording_duration"], 36)
+        self.assertIn("media.vobiz.ai", raw[0]["recording_url"])
+
+    def test_clinical_history_masks_contacts_and_note_numbers_without_storage_edits(self):
+        raw = {"patient": {"name": "PAT-1", "mobile": "2025550101", "phone": "2025550199",
+                           "sr_phone_no": "2025550199", "patient_name": "Test", "sr_patient_id": "SR64928"},
+               "rows": [{"name": "ENC-1", "encounter_date": "2026-06-30",
+                         "sr_notes": "Phone: +91 2025550101. Age: 27. Blood urea: 124 mg/dL.",
+                         "medications": {"drug_prescription": [{"dosage": "1-0-1",
+                            "sr_drug_instruction": "Contact 2025550199 after food"}]}}]}
+        original = deepcopy(raw)
+        result = privacy.project_clinical_history(raw)
+        self.assertNotIn("2025550101", str(result))
+        self.assertNotIn("2025550199", str(result))
+        self.assertIn("Age: 27. Blood urea: 124 mg/dL.", result["rows"][0]["sr_notes"])
+        self.assertEqual(result["rows"][0]["name"], "ENC-1")
+        self.assertEqual(result["patient"]["sr_patient_id"], "SR64928")
+        self.assertEqual(raw, original)
+        with patch.object(privacy, "restricted", return_value=False):
+            self.assertIs(privacy.project_clinical_history(raw), raw)
+
+    def test_clinical_history_server_builder_projects_before_return(self):
+        patient = frappe._dict(name="PAT-1", mobile="2025550101")
+        encounter = frappe._dict(name="ENC-1", sr_notes="Phone: 2025550199")
+        meta = MagicMock()
+        meta.has_field.side_effect = lambda field: field == "patient"
+        with patch.object(frappe.local, "db", MagicMock(), create=True) as db, \
+             patch.object(frappe, "get_meta", return_value=meta), \
+             patch.object(console, "_existing_fields", side_effect=lambda meta, fields: list(fields)), \
+             patch.object(frappe, "get_all", return_value=[encounter]):
+            db.exists.return_value = True
+            db.get_value.return_value = patient
+            result = console._patient_clinical_history("PAT-1")
+        self.assertNotIn("2025550101", str(result))
+        self.assertNotIn("2025550199", str(result))
+        self.assertEqual(result["rows"][0]["name"], "ENC-1")
