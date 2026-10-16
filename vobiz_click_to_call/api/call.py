@@ -580,6 +580,15 @@ def get_my_availability() -> dict[str, Any]:
     mapping = get_user_mapping(frappe.session.user)
     if not mapping:
         return {"is_mapped": False, "reason": _("No active Vobiz user mapping found.")}
+    # A final log is enough to release Busy; do not wait for another callback
+    # or a background worker. The recovery rechecks the pointer under locks.
+    if mapping.get("current_call_log"):
+        from vobiz_click_to_call.services.mapping_recovery import recover_final_mapping
+        if recover_final_mapping(mapping["name"], mapping["current_call_log"]):
+            mapping = get_user_mapping(frappe.session.user)
+            if not mapping:
+                return {"is_mapped": False, "reason": _("No active Vobiz user mapping found.")}
+
     idle_auto_offline = get_idle_auto_offline_config()
 
     last_status_at = mapping.get("last_status_at")
@@ -867,6 +876,12 @@ def mark_mapping_busy(mapping_name: str, call_log: str) -> None:
         },
         update_modified=True,
     )
+
+    user = frappe.db.get_value("Vobiz User Mapping", mapping_name, "user")
+    if user:
+        frappe.publish_realtime(
+            "vobiz_mapping_busy", {"call_log": call_log}, user=user, after_commit=True,
+        )
 
 
 def restore_mapping_after_call(call_log: str) -> None:

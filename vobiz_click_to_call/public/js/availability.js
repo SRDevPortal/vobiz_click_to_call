@@ -40,6 +40,8 @@
     let breakTimer = null;
     let availabilityRefreshTimer = null;
     let availabilityRequest = null;
+    let availabilityRevision = 0;
+    let availabilityRefreshQueued = false;
     let activityBound = false;
     let breakSyncBound = false;
     let trackingActivity = false;
@@ -67,12 +69,9 @@
     function init() {
         if (!window.frappe || !frappe.session || frappe.session.user === "Guest") return;
         if (!recoveryEventsBound && frappe.realtime) {
-            frappe.realtime.on("vobiz_mapping_recovered", () => {
-                const request = refresh();
-                if (request && request.then) {
-                    request.then((r) => $(document).trigger("vobiz_availability_changed", [r.message || {}]));
-                }
-            });
+            frappe.realtime.on("vobiz_mapping_busy", requestAvailabilityRefresh);
+            frappe.realtime.on("vobiz_mapping_recovered", requestAvailabilityRefresh);
+            frappe.realtime.on("vobiz_call_disconnected", requestAvailabilityRefresh);
             recoveryEventsBound = true;
         }
         bindBreakSyncEvents();
@@ -92,23 +91,40 @@
         refresh();
     }
 
+    function requestAvailabilityRefresh() {
+        // A call transition invalidates any older in-flight status response.
+        availabilityRevision += 1;
+        if (availabilityRequest) {
+            availabilityRefreshQueued = true;
+            return availabilityRequest;
+        }
+        return refresh();
+    }
+
     function refresh() {
         if (!window.frappe || !frappe.session || frappe.session.user === "Guest") return;
         if (!shouldLoadAvailability()) return;
         if (availabilityRequest) return availabilityRequest;
+        const revision = availabilityRevision;
         availabilityRequest = frappe.call({
             method: "vobiz_click_to_call.api.call.get_my_availability",
         }).then((r) => {
             const data = r.message || {};
-            if (!data.is_mapped) return;
+            if (revision !== availabilityRevision || !data.is_mapped) return r;
 
             currentAvailability = data;
             ensureStyles();
             renderControl(data);
             startActivityTracking();
             startAvailabilityRefreshTimer();
+            $(document).trigger("vobiz_availability_changed", [data]);
+            return r;
         }).always(() => {
             availabilityRequest = null;
+            if (availabilityRefreshQueued) {
+                availabilityRefreshQueued = false;
+                refresh();
+            }
         });
         return availabilityRequest;
     }
@@ -801,7 +817,7 @@
         init();
     }
 
-    $(document).on("vobiz_refresh_availability", refresh);
+    $(document).on("vobiz_refresh_availability", requestAvailabilityRefresh);
     $(document).on("page-change route-change", handleRouteChange);
 
     if (frappe.ready) frappe.ready(init);

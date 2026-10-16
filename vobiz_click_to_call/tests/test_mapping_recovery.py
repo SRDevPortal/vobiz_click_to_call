@@ -40,6 +40,59 @@ class MappingRecoveryTests(unittest.TestCase):
             [],
         ]
 
+    def test_final_read_releases_registered_browser(self):
+        self.rows(context={"source": "vobiz_system_call", "call_device": "Browser Softphone"})
+        self.db.get_value.return_value = "Completed"
+        with patch("vobiz_system_call.api.lifecycle.presence", return_value="TAB"):
+            self.assertTrue(recovery.recover_final_mapping("MAP", "CALL"))
+        self.assertEqual(self.db.sql.call_args.args[1][:2], ("Available", 1))
+        self.db.commit.assert_called_once()
+
+    def test_final_read_never_releases_pending_provider_call(self):
+        self.db.get_value.return_value = "Initiated"
+        self.assertFalse(recovery.recover_final_mapping("MAP", "CALL"))
+        self.db.sql.assert_not_called()
+        self.db.commit.assert_not_called()
+
+    def test_final_read_rechecks_status_and_pointer_under_lock(self):
+        for status, pointer in (("Initiated", "CALL"), ("Completed", "NEW-CALL")):
+            with self.subTest(status=status, pointer=pointer):
+                self.db.reset_mock()
+                self.rows(status=status, pointer=pointer)
+                self.db.get_value.return_value = "Completed"
+                with patch.object(recovery, "enqueue_recovery") as enqueue:
+                    self.assertFalse(recovery.recover_final_mapping("MAP", "CALL"))
+                enqueue.assert_not_called()
+                self.assertLessEqual(self.db.sql.call_count, 2)
+
+    def test_final_read_respects_disabled_auto_availability(self):
+        self.rows()
+        mapping = next(self.db.sql.side_effect)
+        mapping[0].auto_available_after_call = 0
+        self.db.sql.side_effect = [mapping, [frappe._dict(
+            name="CALL", status="Completed", request_json="{}")], []]
+        self.db.get_value.return_value = "Completed"
+        self.assertTrue(recovery.recover_final_mapping("MAP", "CALL"))
+        self.assertEqual(self.db.sql.call_args.args[1][:2], ("Away", 0))
+
+    def test_availability_response_uses_recovered_mapping(self):
+        old = {"name": "MAP", "current_call_log": "CALL", "availability_status": "Busy"}
+        fresh = {"name": "MAP", "current_call_log": "", "availability_status": "Available", "accept_calls": 1}
+        with patch.object(call, "get_user_mapping", side_effect=[old, fresh]), \
+                patch.object(recovery, "recover_final_mapping", return_value=True), \
+                patch.object(call, "get_idle_auto_offline_config", return_value={}), \
+                patch.object(call, "get_mapping_unavailable_reason", return_value=""):
+            result = call.get_my_availability()
+        self.assertEqual(result["availability_status"], "Available")
+        self.assertEqual(result["current_call_log"], "")
+
+    def test_busy_event_is_private_and_after_commit(self):
+        self.db.get_value.return_value = "AGENT"
+        call.mark_mapping_busy("MAP", "CALL")
+        frappe.publish_realtime.assert_called_once_with(
+            "vobiz_mapping_busy", {"call_log": "CALL"}, user="AGENT", after_commit=True)
+        self.db.commit.assert_not_called()
+
     def test_restore_never_touches_mapping_in_call_transaction(self):
         with patch.object(recovery, "enqueue_recovery") as enqueue:
             call.restore_mapping_after_call("CALL")

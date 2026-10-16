@@ -40,7 +40,16 @@ def recover_mapping(call_log: str, mapping_name: str | None = None) -> None:
         raise frappe.RetryBackgroundJobError from exc
 
 
-def _recover_locked(mapping_name: str, call_log: str) -> None:
+def recover_final_mapping(mapping_name: str, call_log: str) -> bool:
+    """Release a known final call during an availability read, without provider I/O."""
+    if not call_log or frappe.db.get_value("Vobiz Call Log", call_log, "status") not in TERMINAL_STATUSES:
+        return False
+    changed = bool(_recover_locked(mapping_name, call_log, terminal_only=True))
+    frappe.db.commit()
+    return changed
+
+
+def _recover_locked(mapping_name: str, call_log: str, *, terminal_only=False) -> bool:
     mappings = frappe.db.sql(
         """SELECT name, user, enabled, availability_status, auto_available_after_call,
                   current_call_log
@@ -55,6 +64,8 @@ def _recover_locked(mapping_name: str, call_log: str) -> None:
            WHERE name=%s FOR UPDATE""", (call_log,), as_dict=True,
     )
     call = calls[0] if calls else None
+    if terminal_only and (not call or call.status not in TERMINAL_STATUSES):
+        return False
     try:
         context = json.loads((call.request_json if call else None) or "{}")
     except (TypeError, ValueError):
@@ -96,6 +107,8 @@ def _recover_locked(mapping_name: str, call_log: str) -> None:
     frappe.publish_realtime(
         "vobiz_mapping_recovered", {"call_log": call_log}, user=mapping.user, after_commit=True,
     )
+
+    return True
 
 
 def reconcile_legacy_call(call_log: str) -> None:
