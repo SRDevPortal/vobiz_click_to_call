@@ -1,0 +1,57 @@
+{
+  "doctype": "DocType",
+  "name": "Vobiz Transcript Sync Result",
+  "module": "Vobiz Click To Call",
+  "autoname": "hash",
+  "engine": "InnoDB",
+  "field_order": [
+    "sync_run",
+    "call_log",
+    "outcome",
+    "reason"
+  ],
+  "fields": [
+    {
+      "fieldname": "sync_run",
+      "label": "Sync run",
+      "fieldtype": "Link",
+      "options": "Vobiz Transcript Sync",
+      "reqd": 1,
+      "in_list_view": 1,
+      "search_index": 1,
+      "read_only": 1
+    },
+    {
+      "fieldname": "call_log",
+      "label": "Call log",
+      "fieldtype": "Link",
+      "options": "Vobiz Call Log",
+      "reqd": 1,
+      "in_list_view": 1,
+      "read_only": 1
+    },
+    {
+      "fieldname": "outcome",
+      "label": "Outcome",
+      "fieldtype": "Select",
+      "options": "Updated\nSkipped\nUnavailable\nFailed",
+      "in_list_view": 1,
+      "read_only": 1
+    },
+    {
+      "fieldname": "reason",
+      "label": "Reason",
+      "fieldtype": "Small Text",
+      "read_only": 1
+    }
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "report": 1
+    }
+  ],
+  "sort_field": "creation",
+  "sort_order": "DESC"
+}
