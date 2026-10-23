@@ -23,7 +23,6 @@ doctype_js = {
 
 doctype_list_js = {
     "Vobiz User Mapping": "public/js/vobiz_user_mapping_list.js",
-    "Vobiz Call Log": "public/js/transcript_sync_list.js",
 }
 
 doc_events = {
@@ -45,7 +44,6 @@ scheduler_events = {
     "cron": {
         "*/5 * * * *": ["vobiz_click_to_call.services.cdr.enqueue_recent_cdr_sync"],
         "* * * * *": [
-            "vobiz_click_to_call.services.transcript_sync.schedule",
             "vobiz_click_to_call.services.reference_sync.recover_pending_reference_syncs",
             "vobiz_click_to_call.services.cdr.recover_stale_ringing_calls",
             "vobiz_click_to_call.services.cancellation.recover_pending_cancellations",

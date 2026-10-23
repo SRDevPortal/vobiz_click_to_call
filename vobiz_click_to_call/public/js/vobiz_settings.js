@@ -1,10 +1,5 @@
 frappe.ui.form.on('Vobiz Settings', {
 	refresh(frm) {
-        if (frappe.user.has_role("System Manager")) {
-            frm.add_custom_button(__("Sync Missing Transcriptions"), () => {
-                frappe.set_route("List", "Vobiz Transcript Sync");
-            });
-        }
         frm.add_custom_button(__('Configure Encounter Queue'), () => configure_encounter_queue(frm));
 		frm.add_custom_button(__('Sync AI Dispositions'), () => {
 			frappe.call({
