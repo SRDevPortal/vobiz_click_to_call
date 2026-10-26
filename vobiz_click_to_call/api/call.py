@@ -126,9 +126,13 @@ def get_call_capability(reference_doctype: str | None = None, reference_name: st
 
 
 def _patient_primary_phone_candidates(doc, default_country_code: str) -> list[dict[str, str]]:
+    return _primary_phone_candidates(doc, default_country_code, "mobile")
+
+
+def _primary_phone_candidates(doc, default_country_code: str, mobile_field: str) -> list[dict[str, str]]:
     candidates = []
     seen = set()
-    for fieldname, label in (("mobile", _("Mobile Number")), ("phone", _("Contact Number"))):
+    for fieldname, label in ((mobile_field, _("Mobile Number")), ("phone", _("Phone Number"))):
         if not doc.meta.has_field(fieldname):
             continue
         number = str(doc.get(fieldname) or "").strip()
@@ -138,6 +142,15 @@ def _patient_primary_phone_candidates(doc, default_country_code: str) -> list[di
         seen.add(normalized)
         candidates.append({"fieldname": fieldname, "label": label, "number": number})
     return candidates
+
+
+def get_workdesk_phone_choices(doc) -> list[dict[str, str]]:
+    """Use only the already-authorized reference's primary number fields."""
+    mobile_field = {"CRM Lead": "mobile_no", "Patient": "mobile"}.get(doc.doctype)
+    if not mobile_field:
+        return []
+    choices = _primary_phone_candidates(doc, get_default_country_code(get_settings()), mobile_field)
+    return number_privacy.project_choices(doc, choices)
 
 
 @frappe.whitelist()

@@ -1171,8 +1171,6 @@ def create_unknown_inbound_lead(customer_number: str, did_number: str, mapping, 
         lead.lead_name = title[:140]
     if "mobile_no" in fields:
         lead.mobile_no = customer_number
-    if "phone" in fields:
-        lead.phone = customer_number
     if "status" in fields:
         lead.status = defaults.get("status")
     if "sr_lead_pipeline" in fields and defaults.get("pipeline"):

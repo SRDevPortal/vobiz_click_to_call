@@ -16,6 +16,7 @@ from vobiz_click_to_call.api.call import (
     _should_apply_idle_auto_offline,
     get_call_capability,
     get_call_status,
+    get_workdesk_phone_choices,
     is_active_call_log,
     restore_mapping_after_call,
 )
@@ -392,6 +393,7 @@ def get_reference_context(reference_doctype: str, reference_name: str, lite: int
 
     return {
         "reference": number_privacy.project_reference(_reference_row(reference_doctype, doc)),
+        "phone_choices": get_workdesk_phone_choices(doc),
         "history": history,
         "guidance": _guidance_for_reference(reference_doctype, doc),
         "workdesk": _workdesk_context(reference_doctype, reference_name, doc, lite=lite, history=history),
