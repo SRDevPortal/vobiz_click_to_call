@@ -607,6 +607,18 @@ class VobizAgentAnalytics {
 					.vobiz-pie-svg { height: 210px; }
 					.vobiz-agent-search, .vobiz-agent-sort, .vobiz-agent-sort select, .vobiz-agent-page-size { width: 100%; }
 				}
+
+                @media (max-width: 700px) {
+                    .vobiz-analytics-page { padding: 10px; }
+                    .vobiz-analytics-page * { min-width: 0; }
+                    .vobiz-analytics-page input, .vobiz-analytics-page select { font-size: 16px; max-width: 100%; }
+                    .vobiz-analytics-page .btn { min-height: 44px; white-space: normal; }
+                    .vobiz-checkbox-dropdown-menu { min-width: 0; width: 100%; max-width: 100%; }
+                    .vobiz-agent-break-records { grid-template-columns: minmax(0, 1fr); }
+                    .vobiz-agent-call-actions, .vobiz-agent-toolbar-actions { flex-wrap: wrap; gap: 8px; }
+                    .vobiz-agent-call-actions select { min-width: 0; max-width: 100%; }
+                    .vobiz-agent-detail-row { overflow-wrap: anywhere; }
+                }
 			</style>
 		`);
 	}

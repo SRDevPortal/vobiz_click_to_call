@@ -310,6 +310,12 @@
                     cursor: not-allowed;
                     opacity: .7;
                 }
+                @media (max-width: 700px), (max-height: 500px) {
+                    .vobiz-break-lock { overflow-y: auto; padding: 12px; }
+                    .vobiz-break-panel { margin: auto; padding: 18px; max-height: 100%; overflow-y: auto; }
+                    .vobiz-break-online, .vobiz-availability-item { min-height: 44px; }
+                    .vobiz-availability-menu { max-width: calc(100vw - 24px); }
+                }
             </style>
         `);
     }
