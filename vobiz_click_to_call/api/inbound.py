@@ -9,7 +9,7 @@ from xml.sax.saxutils import escape, quoteattr
 import frappe
 from vobiz_click_to_call import number_privacy
 from vobiz_click_to_call.services.queue_sources import queue_includes
-from frappe.rate_limiter import rate_limit
+from vobiz_click_to_call.services.callback_limits import callback_rate_limit
 from werkzeug.wrappers import Response
 
 from vobiz_ai.api.call_log import make_outbound_call_key, sync_reference_links
@@ -34,7 +34,7 @@ TERMINAL_STATUSES = {"Completed", "Failed", "Busy", "No Answer", "Cancelled", "C
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
-@rate_limit(limit=300, seconds=60)
+@callback_rate_limit("answer")
 def route():
     """Route inbound DID callbacks to the agent who last called this customer."""
     payload = _payload()
@@ -212,7 +212,7 @@ def _route(payload):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
-@rate_limit(limit=300, seconds=60)
+@callback_rate_limit("event")
 def dial_action(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
@@ -285,7 +285,7 @@ def dial_action(call_log: str | None = None, token: str | None = None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
-@rate_limit(limit=300, seconds=60)
+@callback_rate_limit("event")
 def dial_event(call_log: str | None = None, token: str | None = None):
     """Track the agent B-leg so incoming talk time starts when the agent answers."""
     doc, payload = _validate_callback(call_log, token)

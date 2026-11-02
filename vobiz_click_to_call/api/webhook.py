@@ -6,7 +6,7 @@ from xml.sax.saxutils import escape, quoteattr
 
 import frappe
 from vobiz_click_to_call.services.reference_sync import request_reference_sync
-from frappe.rate_limiter import rate_limit
+from vobiz_click_to_call.services.callback_limits import callback_rate_limit
 from werkzeug.wrappers import Response
 
 from vobiz_ai.api.call_log import sync_linked_summaries
@@ -20,7 +20,7 @@ from vobiz_click_to_call.services.settings import build_callback_url, get_inboun
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
-@rate_limit(limit=300, seconds=60)
+@callback_rate_limit("answer")
 def answer(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
@@ -56,7 +56,7 @@ def answer(call_log: str | None = None, token: str | None = None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
-@rate_limit(limit=300, seconds=60)
+@callback_rate_limit("event")
 def ring(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
@@ -76,7 +76,7 @@ def ring(call_log: str | None = None, token: str | None = None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
-@rate_limit(limit=300, seconds=60)
+@callback_rate_limit("event")
 def dial_callback(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
@@ -110,7 +110,7 @@ def dial_callback(call_log: str | None = None, token: str | None = None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
-@rate_limit(limit=300, seconds=60)
+@callback_rate_limit("event")
 def dial_action(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
@@ -159,7 +159,7 @@ def dial_action(call_log: str | None = None, token: str | None = None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
-@rate_limit(limit=300, seconds=60)
+@callback_rate_limit("hangup")
 def hangup(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
@@ -196,7 +196,7 @@ def hangup(call_log: str | None = None, token: str | None = None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
-@rate_limit(limit=300, seconds=60)
+@callback_rate_limit("answer")
 def fallback(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
@@ -219,7 +219,7 @@ def fallback(call_log: str | None = None, token: str | None = None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
-@rate_limit(limit=300, seconds=60)
+@callback_rate_limit("event")
 def recording_callback(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
@@ -246,7 +246,7 @@ def recording_callback(call_log: str | None = None, token: str | None = None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
-@rate_limit(limit=300, seconds=60)
+@callback_rate_limit("event")
 def transcription_callback(call_log: str | None = None, token: str | None = None):
     doc, payload = _validate_callback(call_log, token)
     if not doc:
@@ -258,7 +258,7 @@ def transcription_callback(call_log: str | None = None, token: str | None = None
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
-@rate_limit(limit=300, seconds=60)
+@callback_rate_limit("event")
 def transcription_event():
     payload = _payload()
     if not _static_event_allowed(payload):
