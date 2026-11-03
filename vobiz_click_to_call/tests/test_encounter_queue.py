@@ -170,6 +170,59 @@ class EncounterQueueTests(unittest.TestCase):
              patch.object(frappe, "get_single", return_value=self.settings), self.assertRaises(ValueError):
             queue._settings("ndr")
 
+    def test_ndr_visibility_requires_enabled_setting_mapping_and_read_permission(self):
+        for enabled, mapped, readable, expected in (
+            (1, True, True, True), (0, True, True, False),
+            (1, False, True, False), (1, True, False, False),
+        ):
+            settings = self.ndr_settings()
+            settings["enable_ndr_queue"] = enabled
+            with self.subTest(enabled=enabled, mapped=mapped, readable=readable), \
+                 patch.object(frappe, "session", frappe._dict(user="Administrator")), \
+                 patch.object(frappe, "get_single", return_value=settings), \
+                 patch.object(queue, "has_ndr_mapping", return_value=mapped), \
+                 patch.object(frappe, "has_permission", return_value=readable):
+                self.assertEqual(queue.get_available_views.__wrapped__(), {"ndr": expected})
+
+    def test_ndr_mapping_is_read_fresh_for_current_enabled_user(self):
+        db = Mock()
+        db.get_value.side_effect = ["Patient\nNDR", "Patient", None]
+        with patch.object(frappe, "session", frappe._dict(user="agent@example.com")), \
+             patch.object(frappe, "db", db):
+            self.assertTrue(queue.has_ndr_mapping())
+            self.assertFalse(queue.has_ndr_mapping())
+            self.assertFalse(queue.has_ndr_mapping())
+        for call in db.get_value.call_args_list:
+            self.assertEqual(call.args, ("Vobiz User Mapping", {"user": "agent@example.com", "enabled": 1}, "queue_source"))
+
+    def test_ndr_list_and_details_reject_unmapped_users_before_reading_records(self):
+        for user in ("agent@example.com", "Administrator"):
+            with self.subTest(user=user), patch.object(frappe, "session", frappe._dict(user=user)), \
+                 patch.object(frappe, "get_single", return_value=self.ndr_settings()), \
+                 patch.object(queue, "has_ndr_mapping", return_value=False), \
+                 patch.object(frappe, "get_list") as query, patch.object(frappe, "get_doc") as get_doc:
+                with self.assertRaises(ValueError):
+                    queue.get_queue.__wrapped__(view="ndr")
+                with self.assertRaises(ValueError):
+                    queue.get_encounter_context.__wrapped__("ENC-1", view="ndr")
+                query.assert_not_called()
+                get_doc.assert_not_called()
+
+    def test_mapped_ndr_access_still_requires_encounter_permission(self):
+        with patch.object(frappe, "session", frappe._dict(user="agent@example.com")), \
+             patch.object(frappe, "get_single", return_value=self.ndr_settings()), \
+             patch.object(queue, "has_ndr_mapping", return_value=True), \
+             patch.object(frappe, "has_permission", return_value=False), self.assertRaises(ValueError):
+            queue._settings("ndr")
+
+    def test_encounter_list_does_not_require_ndr_mapping(self):
+        with patch.object(frappe, "session", frappe._dict(user="agent@example.com")), \
+             patch.object(frappe, "get_single", return_value=self.settings), \
+             patch.object(queue, "has_ndr_mapping") as mapped, \
+             patch.object(frappe, "has_permission", return_value=True):
+            self.assertEqual(queue._settings("encounters"), self.settings)
+        mapped.assert_not_called()
+
     def test_ndr_options_are_manager_only_and_permission_aware(self):
         with patch.object(frappe, "get_roles", return_value=["System Manager"]), \
              patch.object(frappe, "get_list", return_value=[{"pe_shipkia_stage": "NDR"}]) as query:

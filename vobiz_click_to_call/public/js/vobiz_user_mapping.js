@@ -219,9 +219,26 @@ function queue_source_values(value) {
     return [...new Set(values.flatMap(source => source === 'CRM Lead and Patient' ? ['CRM Lead', 'Patient'] : [source]))];
 }
 
-function setup_queue_source_picker(frm) {
+async function setup_queue_source_picker(frm) {
     const wrapper = frm.fields_dict.queue_source_picker;
     if (!wrapper) return;
+    const requestId = frm.__queue_source_request_id = (frm.__queue_source_request_id || 0) + 1;
+    wrapper.$wrapper.text(__('Loading queue sources...'));
+    let options;
+    try {
+        const response = await frappe.call({
+            method: 'vobiz_click_to_call.vobiz_click_to_call.doctype.vobiz_user_mapping.vobiz_user_mapping.get_queue_source_options'
+        });
+        if (frm.__queue_source_request_id !== requestId) return;
+        options = response.message || [];
+    } catch (error) {
+        if (frm.__queue_source_request_id === requestId) {
+            wrapper.$wrapper.text(__('Unable to load queue sources. Reload this form to retry.'));
+        }
+        return;
+    }
+    const selected = queue_source_values(frm.doc.queue_source || 'CRM Lead');
+    const retainNdr = selected.includes('NDR') && !options.includes('NDR');
     wrapper.$wrapper.empty();
     const control = frappe.ui.form.make_control({
         parent: wrapper.$wrapper,
@@ -230,17 +247,24 @@ function setup_queue_source_picker(frm) {
             fieldname: 'queue_source_selection',
             fieldtype: 'MultiSelectList',
             label: __('Queue Source'),
-            description: __('Select all queues this user should work from.'),
-            options: ['CRM Lead', 'Patient', 'Patient Encounter', 'Issue', 'Discontinued'],
+            description: retainNdr
+                ? __('NDR is disabled in Settings. This user’s saved NDR assignment is retained but grants no NDR access until re-enabled.')
+                : __('Select all queues this user should work from. NDR is available when enabled in Vobiz Settings.'),
+            options,
             read_only: frm.doc.__islocal ? 0 : !frm.perm.some(permission => permission.write),
             onchange() {
                 if (frm.__setting_queue_source) return;
-                return frm.set_value('queue_source', control.get_value().join('\n'));
+                const values = control.get_value().slice();
+                if (retainNdr && !values.includes('NDR')) values.push('NDR');
+                return frm.set_value('queue_source', values.join('\n'));
             }
         }
     });
     frm.__setting_queue_source = true;
-    Promise.resolve(control.set_value(queue_source_values(frm.doc.queue_source || 'CRM Lead')))
-        .finally(() => { frm.__setting_queue_source = false; });
+    try {
+        await control.set_value(selected.filter(source => options.includes(source)));
+    } finally {
+        frm.__setting_queue_source = false;
+    }
     frm.queue_source_control = control;
 }

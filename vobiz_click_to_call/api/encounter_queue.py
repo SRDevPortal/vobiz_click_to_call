@@ -5,6 +5,7 @@ import json
 import frappe
 from frappe import _
 from frappe.model import get_permitted_fields
+from vobiz_click_to_call.services.queue_sources import queue_includes
 
 DOCTYPE = "Patient Encounter"
 SCALAR_TYPES = {"Data", "Link", "Dynamic Link", "Select", "Date", "Datetime", "Time",
@@ -108,9 +109,18 @@ def _settings(view="encounters"):
     settings = frappe.get_single("Vobiz Settings")
     if not settings.get("enable_ndr_queue" if view == "ndr" else "enable_encounter_queue"):
         frappe.throw(_("NDR Queue is disabled.") if view == "ndr" else _("Patient Encounter Queue is disabled."))
+    if view == "ndr" and not has_ndr_mapping():
+        frappe.throw(_("NDR must be selected in your enabled Vobiz User Mapping."), frappe.PermissionError)
     if not frappe.has_permission(DOCTYPE, "read"):
         frappe.throw(_("Not permitted to read Patient Encounters."), frappe.PermissionError)
     return settings
+
+
+def has_ndr_mapping():
+    if frappe.session.user == "Guest":
+        return False
+    source = frappe.db.get_value("Vobiz User Mapping", {"user": frappe.session.user, "enabled": 1}, "queue_source")
+    return queue_includes(source, "NDR")
 
 
 @frappe.whitelist()
@@ -125,7 +135,8 @@ def get_available_views():
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."), frappe.PermissionError)
     settings = frappe.get_single("Vobiz Settings")
-    return {"ndr": bool(settings.get("enable_ndr_queue") and frappe.has_permission(DOCTYPE, "read"))}
+    return {"ndr": bool(settings.get("enable_ndr_queue") and has_ndr_mapping()
+                        and frappe.has_permission(DOCTYPE, "read"))}
 
 
 @frappe.whitelist()

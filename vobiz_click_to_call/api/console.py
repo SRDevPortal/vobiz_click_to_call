@@ -26,7 +26,7 @@ from vobiz_click_to_call.services.attendance import agent_attendance_enabled
 from vobiz_click_to_call.services.call_status import MISSED_STATUSES, is_inbound_missed_call, status_bucket, talk_seconds
 from vobiz_click_to_call.services.lead_disposition import get_lead_disposition_context
 from vobiz_click_to_call.services.patient_routing import patient_matches_mapping
-from vobiz_click_to_call.services.queue_sources import queue_source_options, queue_includes, parse_queue_sources
+from vobiz_click_to_call.services.queue_sources import queue_source_options, queue_includes, parse_queue_sources, MAPPING_QUEUE_SOURCES
 from vobiz_click_to_call.services.settings import get_idle_auto_offline_config, get_settings
 
 
@@ -3203,11 +3203,14 @@ def _agent_context() -> dict[str, Any]:
 
 
 def _agent_queue_source(agent: dict[str, Any] | None = None) -> str:
-    return "\n".join(queue_source_options((agent or {}).get("queue_source")))
+    return "\n".join(source for source in parse_queue_sources((agent or {}).get("queue_source"))
+                     if source in MAPPING_QUEUE_SOURCES) or "CRM Lead"
 
 
 def _selected_queue_source(agent_queue_source: str, requested_source: str | None = None) -> str:
     options = queue_source_options(agent_queue_source)
+    if not options:
+        return "NDR"
     requested_source = (requested_source or "").strip()
     return requested_source if requested_source in options else options[0]
 
@@ -3217,12 +3220,22 @@ def _queue_source_options(agent_queue_source: str) -> list[str]:
 
 
 def _queue_doctype_for_source(queue_source: str) -> str:
+    if queue_source == "NDR":
+        return "Patient Encounter"
     return QUEUE_SOURCE_DOCTYPES.get(queue_source, "CRM Lead")
 
 
 def _queue_meta(queue_source: str, doctype: str, agent_queue_source: str | None = None) -> dict[str, Any]:
     agent_queue_source = agent_queue_source or queue_source
     source_options = _queue_source_options(agent_queue_source)
+    if queue_source == "NDR":
+        return {
+            "source": "NDR", "agent_source": agent_queue_source, "source_options": [],
+            "doctype": "Patient Encounter", "title": _("NDR"), "id_label": _("Encounter ID"),
+            "selected_label": _("encounters"), "summary_tab_label": _("Patient Encounter"),
+            "data_label": _("Patient Encounter Data"),
+            "empty_message": _("Use the NDR tab. It requires NDR to be enabled in Settings and selected in your mapping."),
+        }
     if doctype == "Patient":
         return {
             "source": queue_source,
@@ -3301,6 +3314,8 @@ def _lead_queue(
     limit_start: int = 0,
 ) -> list[dict[str, Any]]:
     queue_source = queue_source or _selected_queue_source(_agent_queue_source(agent))
+    if queue_source == "NDR":
+        return []
     preferred_doctype = _queue_doctype_for_source(queue_source)
     if preferred_doctype and frappe.db.exists("DocType", preferred_doctype):
         return _queue_for_doctype(

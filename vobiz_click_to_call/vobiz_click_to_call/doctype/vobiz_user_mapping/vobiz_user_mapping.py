@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import frappe
 from frappe import _
-from vobiz_click_to_call.services.queue_sources import QUEUE_SOURCES, parse_queue_sources, queue_includes
+from vobiz_click_to_call.services.queue_sources import QUEUE_SOURCES, MAPPING_QUEUE_SOURCES, parse_queue_sources, queue_includes
 from frappe.model.document import Document
 
 from vobiz_click_to_call.services.numbers import normalize_phone_number
@@ -33,10 +33,7 @@ class VobizUserMapping(Document):
                 frappe.throw(_("Interakt Channel Account must be an active Interakt account."))
 
         self.availability_status = self.availability_status or "Available"
-        sources = parse_queue_sources(self.queue_source)
-        if not sources or any(source not in QUEUE_SOURCES for source in sources):
-            frappe.throw(_("Select at least one valid Queue Source."))
-        self.queue_source = "\n".join(sources)
+        self.validate_queue_sources(settings)
         if queue_includes(self.queue_source, "Patient"):
             departments = _split_values(self.get("sr_medical_departments"))
             followup_ids = _split_values(self.get("sr_followup_ids"))
@@ -94,6 +91,16 @@ class VobizUserMapping(Document):
     def on_update(self):
         sync_reciprocal_fallback_users(self)
 
+    def validate_queue_sources(self, settings):
+        sources = parse_queue_sources(self.queue_source)
+        if not sources or any(source not in MAPPING_QUEUE_SOURCES for source in sources):
+            frappe.throw(_("Select at least one valid Queue Source."))
+        if "NDR" in sources and not frappe.utils.cint(settings.get("enable_ndr_queue")):
+            previous = self.get_doc_before_save()
+            if not previous or not queue_includes(previous.get("queue_source"), "NDR"):
+                frappe.throw(_("Enable NDR Tab in Vobiz Settings before assigning NDR to a user."))
+        self.queue_source = "\n".join(sources)
+
     def _reconcile_current_call_state(self) -> None:
         if not self.current_call_log:
             return
@@ -109,6 +116,16 @@ class VobizUserMapping(Document):
             auto_available = frappe.utils.cint(self.auto_available_after_call)
             self.availability_status = "Available" if auto_available else "Away"
             self.accept_calls = 1 if auto_available else 0
+
+
+@frappe.whitelist()
+def get_queue_source_options():
+    if not frappe.has_permission("Vobiz User Mapping", "read"):
+        frappe.throw(_("Not permitted to read Vobiz User Mapping."), frappe.PermissionError)
+    options = list(QUEUE_SOURCES)
+    if frappe.utils.cint(frappe.db.get_single_value("Vobiz Settings", "enable_ndr_queue")):
+        options.append("NDR")
+    return options
 
 
 def mark_user_offline_on_logout(login_manager=None) -> None:

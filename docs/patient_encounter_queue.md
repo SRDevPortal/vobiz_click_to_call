@@ -32,6 +32,7 @@ Validation:
 
 Queue Source in Vobiz User Mapping is a multi-select dropdown. Select any
 combination of CRM Lead, Patient, Patient Encounter, Issue and Discontinued.
+When NDR is enabled in Vobiz Settings, NDR is also available in this picker.
 The console source switcher offers the saved selections. Existing single-source
 and CRM Lead and Patient mappings are recognized without a bulk data update.
 Selecting Patient still requires its department and follow-up routing settings.
@@ -42,6 +43,18 @@ The Patient Encounter List tab retains its configured columns and filters.
 In **Vobiz Settings → NDR Queue**, choose **Shipkia Stages** and **Shipkia
 Statuses** using the searchable multiselects, check **Enable NDR Tab**, and Save.
 NDR starts disabled; both selections must contain at least one value to enable it.
+Then open each intended agent's **Vobiz User Mapping**, select **NDR** in
+**Queue Source**, and save. Only users with an enabled mapping containing NDR
+and Patient Encounter read permission can see the tab or use its list/Details
+APIs. Administrators also need an explicit NDR mapping. Existing encounter and
+Patient workdesk permissions still apply; mapping NDR does not grant record access.
+
+Disabling NDR globally hides the option and tab and blocks NDR API access.
+Existing NDR assignments are retained for re-enabling; editing other queue sources
+while NDR is disabled preserves that assignment. New assignments are rejected
+until NDR is enabled again. To remove an assignment using the picker, enable NDR
+and deselect it. Users can have NDR alone or alongside other queue sources. NDR
+does not enter the main lead/auto-dial queue or grant access to CRM leads.
 Choices come from existing, readable Patient Encounter shipment values. Previously
 selected values remain available even when no current encounters use them.
 
