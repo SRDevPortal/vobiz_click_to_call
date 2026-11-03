@@ -1,5 +1,6 @@
 frappe.ui.form.on('Vobiz Settings', {
 	refresh(frm) {
+        setup_ndr_pickers(frm);
         frm.add_custom_button(__('Configure Encounter Queue'), () => configure_encounter_queue(frm));
 		frm.add_custom_button(__('Sync AI Dispositions'), () => {
 			frappe.call({
@@ -18,6 +19,53 @@ frappe.ui.form.on('Vobiz Settings', {
 		});
 	}
 });
+
+function setup_ndr_pickers(frm) {
+    for (const [setting, field, label] of [
+        ['ndr_shipkia_stages', 'pe_shipkia_stage', 'Shipkia Stages'],
+        ['ndr_shipkia_statuses', 'pe_shipkia_status', 'Shipkia Statuses']
+    ]) {
+        const wrapper = frm.fields_dict[setting + '_picker'];
+        if (!wrapper) continue;
+        let selected;
+        try {
+            selected = JSON.parse(frm.doc[setting] || '[]');
+            if (!Array.isArray(selected) || selected.some(value => typeof value !== 'string')) throw new Error();
+        } catch (error) {
+            wrapper.$wrapper.text(__('Invalid NDR settings. Correct the saved stage/status JSON before editing.'));
+            continue;
+        }
+        wrapper.$wrapper.empty();
+        let initializing = true;
+        const option = value => ({value, label: frappe.utils.escape_html(value), description: ''});
+        const control = frappe.ui.form.make_control({
+            parent: wrapper.$wrapper,
+            render_input: true,
+            df: {
+                fieldname: setting + '_selection', fieldtype: 'MultiSelectList', label: __(label),
+                placeholder: __('Select values'),
+                description: __('Match any selected value. Both stage and status must match, along with Encounter Queue filters.'),
+                read_only: !frappe.user.has_role('System Manager') || !frm.perm.some(permission => permission.write),
+                get_data: async search => {
+                    const response = await frappe.call({
+                        method: 'vobiz_click_to_call.api.encounter_queue.get_ndr_options',
+                        args: {field, search}
+                    });
+                    return [...new Set([...selected, ...(response.message || [])])]
+                        .map(option);
+                },
+                onchange: () => {
+                    if (initializing) return;
+                    selected = control.get_value();
+                    return frm.set_value(setting, JSON.stringify(selected));
+                }
+            }
+        });
+        // MultiSelectList renders labels as HTML, including its initial status text.
+        control._options = selected.map(option);
+        Promise.resolve(control.set_value(selected)).finally(() => { initializing = false; });
+    }
+}
 
 async function configure_encounter_queue(frm) {
     const response = await frappe.call({

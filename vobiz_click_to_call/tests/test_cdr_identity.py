@@ -174,6 +174,81 @@ class CDRIdentityTests(unittest.TestCase):
         self.assertIn("cdr_synced_at asc", query.call_args.kwargs["order_by"])
         self.assertEqual(query.call_args.kwargs["filters"]["status"], ["in", cdr.TERMINAL_STATUSES])
 
+    def customer_call(self, **values):
+        self.doc.update(call_uuid="browser-parent", b_leg_uuid="customer-child", status="Completed",
+                        direction="Outgoing", request_json=json.dumps({
+                            "source": "vobiz_system_call", "call_device": "Browser Softphone"}))
+        self.doc.update(values)
+
+    def test_captured_customer_durations_and_utc_answer_times(self):
+        # Sanitized timing fields from the three real test calls on 2026-11-02.
+        from datetime import datetime
+        for seconds, duration, answer, end, local in [
+            (5, 13, "10:30:33", "10:30:38", "16:00:33"),
+            (42, 62, "10:30:45", "10:31:27", "16:00:45"),
+            (15, 32, "10:35:26", "10:35:41", "16:05:26"),
+        ]:
+            with self.subTest(seconds=seconds), patch.object(frappe.utils, "get_system_timezone", return_value="Asia/Kolkata"):
+                self.customer_call(billsec=0, answer_time=None)
+                self.provider.retrieve_cdr.return_value = {"data": {
+                    "uuid": "customer-child", "billsec": seconds, "duration": duration,
+                    "answer_time": f"2026-11-02T{answer}Z", "end_time": f"2026-11-02T{end}Z"}}
+                self.assertEqual(cdr.sync_call_log_cdr("CALL")["status"], "Synced")
+                self.assertEqual(self.doc.billsec, seconds)
+                self.assertEqual(self.doc.duration, duration)
+                self.assertEqual(self.doc.answer_time, datetime.fromisoformat(f"2026-11-02 {local}"))
+                self.assertEqual(self.doc.call_uuid, "browser-parent")
+                self.assertEqual(self.doc.status, "Completed")
+                self.provider.retrieve_cdr.assert_called_with("customer-child")
+        self.provider.search_cdrs.assert_not_called()
+
+    def test_customer_report_never_accepts_parent_even_if_it_mentions_child(self):
+        self.customer_call()
+        parent = {"uuid": "browser-parent", "b_leg_uuid": "customer-child", "billsec": 60}
+        self.provider.retrieve_cdr.return_value = {"data": parent}
+        self.assertEqual(cdr.sync_call_log_cdr("CALL")["status"], "Not Found")
+        with self.assertRaises(ValueError):
+            cdr.apply_cdr_to_call_log(self.doc, parent, {})
+        self.assertEqual(self.doc.billsec, 0)
+        self.doc.save.assert_not_called()
+        self.provider.search_cdrs.assert_not_called()
+
+    def test_customer_id_missing_never_falls_back_to_parent(self):
+        self.customer_call(b_leg_uuid=None)
+        self.assertEqual(cdr.sync_call_log_cdr("CALL")["status"], "Awaiting Customer ID")
+        self.assertIsNone(cdr.lookup_cdr(self.provider, self.doc))
+        self.provider.retrieve_cdr.assert_not_called()
+
+    def test_active_customer_call_waits_for_hangup_without_provider_io(self):
+        self.customer_call(status="Connected")
+        self.assertEqual(cdr.sync_call_log_cdr("CALL")["status"], "Awaiting Call End")
+        self.provider.retrieve_cdr.assert_not_called()
+
+    def test_missing_customer_cdr_is_retryable_without_erasing_callback_data(self):
+        self.customer_call(answer_time="2026-11-02 16:00:33", duration=5)
+        self.provider.retrieve_cdr.return_value = {"data": []}
+        self.assertEqual(cdr.sync_call_log_cdr("CALL")["status"], "Not Found")
+        self.assertEqual(self.db.set_value.call_args.args[2]["cdr_sync_status"], "Not Found")
+        self.assertEqual(self.doc.answer_time, "2026-11-02 16:00:33")
+        self.assertEqual(self.doc.duration, 5)
+        self.doc.save.assert_not_called()
+
+    def test_customer_id_changed_during_network_lookup_rejects_stale_result(self):
+        self.customer_call()
+        latest = frappe._dict(self.doc, b_leg_uuid="another-child")
+        self.provider.retrieve_cdr.return_value = {"data": {"uuid": "customer-child", "status": "completed", "billsec": 5}}
+        with patch.object(frappe, "get_doc", side_effect=[self.doc, latest]):
+            self.assertEqual(cdr.sync_call_log_cdr("CALL")["status"], "Identity Changed")
+        self.doc.save.assert_not_called()
+
+    def test_customer_no_answer_does_not_gain_agent_answer_time(self):
+        self.customer_call(status="No Answer", answer_time=None)
+        self.provider.retrieve_cdr.return_value = {"data": {"uuid": "customer-child", "status": "no-answer", "billsec": 0}}
+        self.assertEqual(cdr.sync_call_log_cdr("CALL")["status"], "Synced")
+        self.assertIsNone(self.doc.answer_time)
+        self.assertEqual(self.doc.billsec, 0)
+        self.assertEqual(self.doc.status, "No Answer")
+
 
 if __name__ == "__main__":
     unittest.main()

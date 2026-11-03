@@ -640,11 +640,18 @@ def set_my_availability(status: str) -> dict[str, Any]:
     if not mapping:
         frappe.throw(_("No active Vobiz user mapping found."))
 
+    _lock_user_mapping(mapping["name"])
+    mapping = frappe.db.get_value("Vobiz User Mapping", mapping["name"],
+        ["name", "user", "enabled", "availability_status", "current_call_log", "last_status_at"],
+        as_dict=True, for_update=True)
+    if not mapping or not mapping.enabled:
+        frappe.throw(_("No active Vobiz user mapping found."), frappe.PermissionError)
     current_call_log = mapping.get("current_call_log")
     if current_call_log and is_active_call_log(current_call_log):
         frappe.throw(_("You cannot change availability while a Vobiz call is active."))
 
     accept_calls = 1 if status == "Available" else 0
+    now = frappe.utils.now_datetime()
     frappe.db.set_value(
         "Vobiz User Mapping",
         mapping["name"],
@@ -652,10 +659,12 @@ def set_my_availability(status: str) -> dict[str, Any]:
             "availability_status": status,
             "accept_calls": accept_calls,
             "current_call_log": "",
-            "last_status_at": frappe.utils.now(),
+            "last_status_at": now,
         },
         update_modified=True,
     )
+    from vobiz_click_to_call.services.availability_recovery import record_transition
+    record_transition(mapping, status, now, "manual_availability", current_call_log)
     _record_availability_attendance(frappe.session.user, status)
     frappe.db.commit()
 

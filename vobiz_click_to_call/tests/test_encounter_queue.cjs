@@ -11,13 +11,16 @@ async function check(app) {
         if (!nodes.has(key)) nodes.set(key, {
             html(value) { this.content = value; return this; },
             empty() { this.content = ''; return this; },
-            prop() { return this; }, text() { return this; }, val() { return ''; },
+            prop() { return this; }, text(value) { this.content = value; return this; },
+            val(value) { if (value === undefined) return this.value || ''; this.value = value; return this; },
+            addClass() { return this; }, removeClass() { return this; },
+            toggleClass(name, hidden) { this.hidden = hidden; return this; },
             find(selector) { return node(key + ' ' + selector); }
         });
         return nodes.get(key);
     };
     const sandbox = {
-        __: s => s,
+        __: s => s, clearTimeout, document: {addEventListener() {}},
         frappe: {
             pages: {'vobiz-agent-console': {}},
             utils: {escape_html: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;')},
@@ -61,7 +64,67 @@ async function check(app) {
     await obj.load_encounters();
     assert.equal(obj.state.encounters.length, 0);
     assert.ok(node('[data-role="encounter-table"] tbody').content.includes('Unable to load'));
-    console.log(app + ': encounter rendering, paging, Details, escaping and request ordering passed');
+    // NDR uses the same workdesk, but carries its view to both server endpoints.
+    obj.state.console_view = 'encounters';
+    obj.state.encounter_page = 3;
+    node('[data-role="encounter-search"]').val('ordinary');
+    responses.push(Promise.resolve({message: {rows: [{name: 'NDR-1'}], columns: [
+        {fieldname: 'pe_shipkia_stage', label: 'Shipkia Stage'},
+        {fieldname: 'pe_shipkia_status', label: 'Shipkia Status'}
+    ]}}));
+    await obj.switch_console_view('ndr');
+    assert.equal(requests.at(-1).args.view, 'ndr');
+    assert.equal(requests.at(-1).args.limit_start, 0);
+    assert.equal(node('[data-role="encounter-search"]').val(), '');
+    assert.equal(node('[data-role="encounter-title"]').content, 'NDR');
+    assert.ok(node('[data-role="encounter-table"] thead').content.includes('data-encounter-sort="pe_shipkia_stage"'));
+    obj.state.encounter_sort_by = 'pe_shipkia_status';
+    obj.state.encounter_sort_order = 'desc';
+    obj.render_encounters();
+    assert.ok(node('[data-role="encounter-table"] thead').content.includes('aria-sort="descending"'));
+    responses.push(Promise.resolve({message: {reference: {name: 'PAT-2'}}}));
+    await obj.call_encounter_row(0);
+    assert.equal(requests.at(-1).args.view, 'ndr');
+    assert.equal(opened.row.encounter_name, 'NDR-1');
+    assert.equal(opened.row.name, 'PAT-2');
+    // A response from NDR cannot replace an Encounter page after switching tabs.
+    obj.state.encounter_page = 2;
+    node('[data-role="encounter-search"]').val('shipment');
+    let oldNdr;
+    responses.push(new Promise(resolve => {oldNdr = resolve;}));
+    const oldRequest = obj.load_encounters();
+    responses.push(Promise.resolve({message: {rows: [{name: 'ORDINARY'}], columns: []}}));
+    await obj.switch_console_view('encounters');
+    assert.equal(requests.at(-1).args.limit_start, 50);
+    assert.equal(requests.at(-1).args.search, 'ordinary');
+    assert.equal(requests.at(-1).args.sort_by, '');
+    oldNdr({message: {rows: [{name: 'STALE-NDR'}], columns: []}});
+    await oldRequest;
+    assert.equal(obj.state.encounters[0].name, 'ORDINARY');
+    responses.push(Promise.resolve({message: {rows: [{name: 'NDR-2'}], columns: []}}));
+    await obj.switch_console_view('ndr');
+    assert.equal(requests.at(-1).args.limit_start, 25);
+    assert.equal(requests.at(-1).args.search, 'shipment');
+    assert.equal(requests.at(-1).args.sort_by, 'pe_shipkia_status');
+    assert.equal(requests.at(-1).args.sort_order, 'desc');
+    let oldDetails;
+    opened = null;
+    responses.push(new Promise(resolve => {oldDetails = resolve;}));
+    const pendingDetails = obj.call_encounter_row(0);
+    obj.switch_console_view('queue');
+    oldDetails({message: {reference: {name: 'STALE-PATIENT'}}});
+    await pendingDetails;
+    assert.equal(opened, null);
+    responses.push(Promise.resolve({message: {ndr: true}}));
+    await obj.load_encounter_views();
+    assert.equal(node('[data-console-view="ndr"]').hidden, false);
+    obj.state.console_view = 'ndr';
+    responses.push(Promise.resolve({message: {ndr: false}}));
+    await obj.load_encounter_views();
+    assert.equal(node('[data-console-view="ndr"]').hidden, true);
+    assert.equal(obj.state.console_view, 'queue');
+    assert.ok(requests.every(r => !r.method.endsWith('start_call')));
+    console.log(app + ': Encounter/NDR rendering, paging, sorting, Details, tab isolation and stale requests passed');
 }
 
 async function checkSettingsEditor() {
@@ -95,8 +158,49 @@ async function checkSettingsEditor() {
     assert.deepEqual(JSON.parse(saved.encounter_queue_filters), [['Patient Encounter', 'pe_shipkia_status', '!=', 'Delivered']]);
     console.log('Settings editor: column order and native filter serialization passed');
 }
+
+async function checkNdrSettings() {
+    const controls = [], saved = {}, calls = [];
+    const sandbox = {__: value => value, frappe: {
+        ui: {form: {on() {}, make_control(options) {
+            const control = {df: options.df, values: [],
+                async set_value(values) { this.values = values; this.df.onchange(); },
+                get_value() { return this.values; }};
+            controls.push(control);
+            return control;
+        }}},
+        user: {has_role: () => true},
+        utils: {escape_html: value => value.replaceAll('<', '&lt;').replaceAll('>', '&gt;')},
+        call: async options => { calls.push(options); return {message: ['NDR', 'In Transit', '<script>']}; }
+    }};
+    vm.createContext(sandbox);
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../public/js/vobiz_settings.js'), 'utf8'), sandbox);
+    sandbox.setup_ndr_pickers({
+        doc: {ndr_shipkia_stages: '["Previously used"]', ndr_shipkia_statuses: '[]'},
+        perm: [{write: 1}],
+        fields_dict: Object.fromEntries(['ndr_shipkia_stages_picker', 'ndr_shipkia_statuses_picker'].map(key =>
+            [key, {$wrapper: {empty() {}}}])),
+        set_value: async (field, value) => {saved[field] = value;}
+    });
+    await Promise.resolve();
+    assert.equal(controls.length, 2);
+    assert.deepEqual(saved, {}); // Opening Settings must not clear or dirty saved selections.
+    const options = await controls[0].df.get_data('ND');
+    assert.ok(options.some(option => option.value === 'Previously used'));
+    assert.equal(options.find(option => option.value === '<script>').label, '&lt;script&gt;');
+    assert.equal(calls[0].args.field, 'pe_shipkia_stage');
+    assert.equal(calls[0].args.search, 'ND');
+    controls[0].values = ['NDR', 'In Transit'];
+    await controls[0].df.onchange();
+    assert.deepEqual(JSON.parse(saved.ndr_shipkia_stages), ['NDR', 'In Transit']);
+    controls[1].values = ['Undelivered'];
+    await controls[1].df.onchange();
+    assert.deepEqual(JSON.parse(saved.ndr_shipkia_statuses), ['Undelivered']);
+    console.log('NDR settings: multiselect persistence, dynamic options and saved values passed');
+}
 (async () => {
     await checkSettingsEditor();
+    await checkNdrSettings();
     await check('vobiz_click_to_call');
     await check('vobiz_system_call');
 })().catch(error => {console.error(error); process.exitCode = 1;});

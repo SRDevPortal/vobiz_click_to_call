@@ -55,7 +55,13 @@
   "encounter_queue_section",
   "enable_encounter_queue",
   "encounter_queue_fields",
-  "encounter_queue_filters"
+  "encounter_queue_filters",
+  "ndr_queue_section",
+  "enable_ndr_queue",
+  "ndr_shipkia_stages_picker",
+  "ndr_shipkia_statuses_picker",
+  "ndr_shipkia_stages",
+  "ndr_shipkia_statuses"
  ],
  "fields": [
   {
@@ -419,6 +425,45 @@
    "label": "Encounter Queue Filters",
    "default": "[]",
    "description": "All conditions must match. Use Configure Encounter Queue to choose filters. Example: Shipkia Status != Delivered includes records without a shipment status. Add Shipkia Order ID is set to show shipped orders only."
+  },
+  {
+   "fieldname": "ndr_queue_section",
+   "fieldtype": "Section Break",
+   "label": "NDR Queue",
+   "collapsible": 1,
+   "description": "NDR inherits Encounter Queue filters and columns, with Shipkia Stage and Status in columns 3 and 4. Select at least one value in each picker before enabling."
+  },
+  {
+   "fieldname": "enable_ndr_queue",
+   "fieldtype": "Check",
+   "label": "Enable NDR Tab",
+   "default": "0"
+  },
+  {
+   "fieldname": "ndr_shipkia_stages_picker",
+   "fieldtype": "HTML",
+   "label": "Shipkia Stages"
+  },
+  {
+   "fieldname": "ndr_shipkia_statuses_picker",
+   "fieldtype": "HTML",
+   "label": "Shipkia Statuses"
+  },
+  {
+   "fieldname": "ndr_shipkia_stages",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "label": "NDR Shipkia Stages",
+   "default": "[]",
+   "hidden": 1
+  },
+  {
+   "fieldname": "ndr_shipkia_statuses",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "label": "NDR Shipkia Statuses",
+   "default": "[]",
+   "hidden": 1
   }
  ],
  "issingle": 1,

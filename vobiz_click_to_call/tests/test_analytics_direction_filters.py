@@ -8,12 +8,30 @@ from vobiz_click_to_call.api.console import (
     _analytics_bucket_filter_sql,
     _analytics_status_filter,
     _summary_from_bucket_rows,
+    _performance_call_row,
 )
 import frappe
 from unittest.mock import patch
 
 
 class TestAnalyticsDirectionFilters(unittest.TestCase):
+    def test_analytics_call_response_excludes_phone_fields_without_changing_source(self):
+        row = {
+            "name": "CALL-TEST", "reference_doctype": "Patient", "reference_name": "PAT-TEST",
+            "customer_number": "+15550001001", "user_mobile": "+15550001002",
+            "caller_id": "+15550001003", "talk_seconds": 30, "attempt_count": 2,
+            "bucket": "connected", "recording_url": "",
+        }
+        original = dict(row)
+        result = _performance_call_row(row)
+        for field in ("customer_number", "user_mobile", "caller_id"):
+            self.assertNotIn(field, result)
+            self.assertNotIn(row[field], result.values())
+        self.assertEqual(result["reference_name"], "PAT-TEST")
+        self.assertEqual(result["talk_seconds"], 30)
+        self.assertEqual(result["attempt_count"], 2)
+        self.assertEqual(row, original)
+
     @patch("vobiz_click_to_call.api.console.frappe")
     def test_selected_teams_resolve_to_team_members_and_mapping_users(self, frappe_mock):
         frappe_mock.db.exists.return_value = True

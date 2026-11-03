@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 import unittest
 from contextlib import ExitStack, nullcontext
 from types import SimpleNamespace
@@ -20,6 +21,8 @@ class MappingRecoveryTests(unittest.TestCase):
         self.db = MagicMock()
         for obj, name, value in (
             (frappe, "db", self.db),
+            (frappe, "conf", frappe._dict()),
+            (frappe.utils, "now_datetime", lambda: datetime(2026, 11, 3, 12)),
             (recovery_policy, "attempt", lambda *a, **kw: nullcontext(True)),
             (frappe, "local", SimpleNamespace(flags=frappe._dict(in_test=False), request=None)),
             (frappe, "session", SimpleNamespace(user="test-agent")),
@@ -131,13 +134,13 @@ class MappingRecoveryTests(unittest.TestCase):
     def test_disabled_agent_does_not_become_available(self):
         self.rows(enabled=0)
         recovery._recover_locked("MAP", "CALL")
-        self.assertEqual(self.db.sql.call_args.args[1][:2], ("Away", 0))
+        self.assertEqual(self.db.sql.call_args.args[1][:2], ("Offline", 0))
 
     def test_browser_without_presence_is_not_made_available(self):
         self.rows(context={"source": "vobiz_system_call", "call_device": "Browser Softphone"})
         with patch("vobiz_system_call.api.lifecycle.presence", return_value=None):
             recovery._recover_locked("MAP", "CALL")
-        self.assertEqual(self.db.sql.call_args.args[1][:2], ("Away", 0))
+        self.assertEqual(self.db.sql.call_args.args[1][:2], ("Offline", 0))
 
     def test_missing_log_releases_only_its_current_pointer(self):
         self.rows()

@@ -88,22 +88,22 @@ def _recover_locked(mapping_name: str, call_log: str, *, terminal_only=False) ->
             )
         return
     browser = managed and context.get("call_device") == "Browser Softphone"
-    available = bool(mapping.enabled and mapping.auto_available_after_call)
+    present = True
     if browser:
         from vobiz_system_call.api.lifecycle import presence
-        available = available and bool(presence(mapping.user))
-    if mapping.availability_status in {"Offline", "Away"}:
-        status = mapping.availability_status
-        available = False
-    else:
-        status = "Available" if available else "Away"
+        present = bool(presence(mapping.user))
+    from vobiz_click_to_call.services.availability_recovery import after_call_state, record_transition
+    status, reason = after_call_state(mapping, browser=browser, present=present)
+    available = status == "Available"
+    now = frappe.utils.now_datetime()
     frappe.db.sql(
         """UPDATE `tabVobiz User Mapping`
            SET current_call_log='', availability_status=%s, accept_calls=%s,
-               last_status_at=NOW(6), modified=NOW(6), modified_by=%s
+               last_status_at=%s, modified=%s, modified_by=%s
            WHERE name=%s AND current_call_log=%s""",
-        (status, int(available), frappe.session.user, mapping_name, call_log),
+        (status, int(available), now, now, frappe.session.user, mapping_name, call_log),
     )
+    record_transition(mapping, status, now, reason, call_log)
     frappe.publish_realtime(
         "vobiz_mapping_recovered", {"call_log": call_log}, user=mapping.user, after_commit=True,
     )

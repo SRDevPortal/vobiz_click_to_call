@@ -14,6 +14,7 @@ from vobiz_click_to_call.services.call_status import status_from_provider
 from vobiz_click_to_call.services.disposition import update_reference_call_metrics
 from vobiz_click_to_call.services.numbers import normalize_phone_number
 from vobiz_click_to_call.services.settings import get_settings
+from vobiz_click_to_call.services.customer_reporting import direct_customer_call, matches_customer, provider_datetime
 
 CDR_BATCH_SIZE = 5
 TERMINAL_STATUSES = ("Completed", "Failed", "Busy", "No Answer", "Cancelled", "Canceled")
@@ -39,19 +40,31 @@ def sync_call_log_cdr(call_log: str, ignore_permissions: bool = False, *, strict
     if not ignore_permissions and "System Manager" not in frappe.get_roles() and doc.user != frappe.session.user:
         frappe.throw(_("Not permitted."))
 
+    if direct_customer_call(doc):
+        if doc.status not in TERMINAL_STATUSES:
+            return {"status": "Awaiting Call End", "call_log": doc.name}
+        if not doc.get("b_leg_uuid"):
+            return {"status": "Awaiting Customer ID", "call_log": doc.name}
+
     # Every sync path, including the hourly batch, requires provider identity.
     # The same customer can have several unrelated calls within the search window.
     if not _provider_ids(doc):
         return {"status": "Awaiting Provider ID", "call_log": doc.name}
 
     original_ids = _provider_ids(doc)
+    original_customer_id = doc.get("b_leg_uuid")
+    original_customer_scope = direct_customer_call(doc)
     frappe.db.commit()  # Provider I/O must not retain a transaction's row locks.
     cdr = lookup_cdr(VobizClient(settings), doc)
     response = {"data": [cdr]} if cdr else {"data": []}
     # Callback updates may have arrived during the request. Lock the latest row
     # instead of saving the stale document read before the network operation.
     doc = frappe.get_doc("Vobiz Call Log", call_log, for_update=True)
-    if original_ids != _provider_ids(doc) or (cdr and find_matching_cdr(doc, response) is None):
+    if (original_ids != _provider_ids(doc)
+            or original_customer_id != doc.get("b_leg_uuid")
+            or original_customer_scope != direct_customer_call(doc)
+            or (cdr and find_matching_cdr(doc, response) is None)
+            or (cdr and direct_customer_call(doc) and not matches_customer(doc, cdr))):
         frappe.db.rollback()
         return {"status": "Identity Changed", "call_log": call_log}
     if not cdr:
@@ -361,6 +374,17 @@ def build_cdr_search_params(doc) -> dict[str, Any]:
 
 def lookup_cdr(client, doc):
     """Prefer one exact lookup; bounded searches must still match provider IDs."""
+    if direct_customer_call(doc):
+        # Never fall back to the billed browser leg or an unrelated call to the
+        # same phone when the customer record has not arrived yet.
+        if not doc.get("b_leg_uuid"):
+            return None
+        response = client.retrieve_cdr(str(doc.b_leg_uuid))
+        if isinstance(response, dict):
+            data = response.get("data", response)
+            rows = [data] if isinstance(data, dict) and (data.get("uuid") or data.get("call_uuid")) else extract_cdr_rows(response)
+            return next((row for row in rows if matches_customer(doc, row)), None)
+        return None
     if not _provider_ids(doc):
         return None
     call_id = doc.get("call_uuid") or doc.get("recording_call_uuid")
@@ -441,7 +465,8 @@ def extract_cdr_rows(response: dict) -> list[dict]:
 
 
 def apply_cdr_to_call_log(doc, cdr: dict, raw_response: dict) -> None:
-    if find_matching_cdr(doc, {"data": [cdr]}) is None:
+    if (find_matching_cdr(doc, {"data": [cdr]}) is None
+            or (direct_customer_call(doc) and not matches_customer(doc, cdr))):
         frappe.throw(_("CDR does not match this call's provider identifiers."))
     doc.cdr_json = _bounded_json({"matched_cdr": cdr, "raw_response": raw_response})
     doc.cdr_sync_status = "Synced"
@@ -449,6 +474,11 @@ def apply_cdr_to_call_log(doc, cdr: dict, raw_response: dict) -> None:
 
     doc.duration = first_int(cdr, "duration", "call_duration", fallback=doc.duration)
     doc.billsec = first_int(cdr, "billsec", "bill_seconds", "billed_duration", fallback=doc.billsec)
+    if direct_customer_call(doc):
+        for field in ("answer_time", "end_time"):
+            value = provider_datetime(cdr.get(field))
+            if value is not None:
+                setattr(doc, field, value)
     doc.cost = first_float(cdr, "cost", "total_amount", "charge", fallback=doc.cost)
     doc.currency = cdr.get("currency") or doc.currency or "INR"
     # An A-leg CDR can carry billsec/NORMAL_CLEARING when the customer leg

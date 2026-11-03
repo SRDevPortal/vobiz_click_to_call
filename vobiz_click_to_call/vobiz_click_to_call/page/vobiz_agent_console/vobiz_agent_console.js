@@ -91,6 +91,7 @@ class VobizAgentConsole {
 		this.attendance_tab_id = this.get_attendance_tab_id();
 		this.render();
 		this.bind();
+        this.load_encounter_views();
 		this.bind_realtime();
 		this.start_console_heartbeat();
 		this.load();
@@ -142,10 +143,11 @@ class VobizAgentConsole {
                 <div class="vobiz-tabs">
                     <button class="active" data-console-view="queue">${__('Lead / Patient Queue')}</button>
                     <button data-console-view="encounters">${__('Patient Encounter List')}</button>
+                    <button class="hidden" data-console-view="ndr">${__('NDR')}</button>
                 </div>
                 <section class="vobiz-band hidden" data-role="encounter-panel">
                     <div class="vobiz-section-title">
-                        <h3>${__('Patient Encounter List')}</h3>
+                        <h3 data-role="encounter-title">${__('Patient Encounter List')}</h3>
                         <div class="vobiz-queue-tools">
                             <input class="form-control input-sm" data-role="encounter-search" placeholder="${__('Search encounter or patient')}">
                             <button class="btn btn-default btn-sm" data-action="refresh-encounters">${__('Refresh')}</button>
@@ -529,13 +531,15 @@ class VobizAgentConsole {
 	bind() {
 		const $main = this.page.main;
         $main.on('click', '[data-console-view]', (e) => {
-            this.state.console_view = $(e.currentTarget).attr('data-console-view');
-            const encounters = this.state.console_view === 'encounters';
-            $main.find('[data-console-view]').removeClass('active');
-            $(e.currentTarget).addClass('active');
-            $main.find('[data-role="encounter-panel"]').toggleClass('hidden', !encounters);
-            $main.find('.vobiz-layout, .vobiz-dialer-control').toggleClass('hidden', encounters);
-            if (encounters) this.load_encounters();
+            this.switch_console_view($(e.currentTarget).attr('data-console-view'));
+        });
+        $main.on('click', '[data-encounter-sort]', (e) => {
+            if (this.state.console_view !== 'ndr') return;
+            const field = $(e.currentTarget).attr('data-encounter-sort');
+            this.state.encounter_sort_order = this.state.encounter_sort_by === field && this.state.encounter_sort_order === 'asc' ? 'desc' : 'asc';
+            this.state.encounter_sort_by = field;
+            this.state.encounter_page = 1;
+            this.load_encounters();
         });
         $main.on('click', '[data-action="encounter-settings"]', () => frappe.set_route('Form', 'Vobiz Settings'));
         $main.on('click', '[data-action="refresh-encounters"]', () => this.load_encounters());
@@ -730,6 +734,7 @@ class VobizAgentConsole {
 	}
 
 	on_page_show() {
+        this.load_encounter_views();
 		this.schedule_whatsapp_sync(0);
 		this.state.restore_checked = false;
 		this.note_agent_activity();
@@ -1925,6 +1930,55 @@ class VobizAgentConsole {
 		`);
 	}
 
+    async load_encounter_views() {
+        const requestId = this.encounter_views_request_id = (this.encounter_views_request_id || 0) + 1;
+        try {
+            const response = await frappe.call({method: 'vobiz_click_to_call.api.encounter_queue.get_available_views'});
+            if (this.encounter_views_request_id !== requestId) return;
+            const enabled = Boolean((response.message || {}).ndr);
+            this.page.main.find('[data-console-view="ndr"]').toggleClass('hidden', !enabled);
+            if (!enabled && this.state.console_view === 'ndr') this.switch_console_view('queue');
+        } catch (error) {
+            if (this.encounter_views_request_id !== requestId) return;
+            this.page.main.find('[data-console-view="ndr"]').addClass('hidden');
+            if (this.state.console_view === 'ndr') this.switch_console_view('queue');
+        }
+    }
+
+    switch_console_view(view) {
+        if (!['queue', 'encounters', 'ndr'].includes(view)) return;
+        const main = this.page.main;
+        const previous = this.state.console_view;
+        this.encounter_view_state = this.encounter_view_state || {};
+        if (previous === 'encounters' || previous === 'ndr') {
+            this.encounter_view_state[previous] = {
+                page: this.state.encounter_page,
+                search: main.find('[data-role="encounter-search"]').val() || '',
+                sort_by: this.state.encounter_sort_by || '',
+                sort_order: this.state.encounter_sort_order || 'asc'
+            };
+        }
+        clearTimeout(this.encounter_search_timer);
+        this.encounter_request_id = (this.encounter_request_id || 0) + 1;
+        this.state.console_view = view;
+        const list = view !== 'queue';
+        main.find('[data-console-view]').removeClass('active');
+        main.find('[data-console-view="' + view + '"]').addClass('active');
+        main.find('[data-role="encounter-panel"]').toggleClass('hidden', !list);
+        main.find('.vobiz-layout, .vobiz-dialer-control').toggleClass('hidden', list);
+        if (!list) return;
+        const saved = this.encounter_view_state[view] || {};
+        this.state.encounter_page = saved.page || 1;
+        this.state.encounter_sort_by = saved.sort_by || '';
+        this.state.encounter_sort_order = saved.sort_order || 'asc';
+        this.state.encounters = [];
+        this.state.encounter_columns = [];
+        this.state.encounter_has_more = false;
+        main.find('[data-role="encounter-search"]').val(saved.search || '');
+        main.find('[data-role="encounter-title"]').text(view === 'ndr' ? __('NDR') : __('Patient Encounter List'));
+        return this.load_encounters();
+    }
+
     async load_encounters() {
         const requestId = this.encounter_request_id = (this.encounter_request_id || 0) + 1;
         const table = this.page.main.find('[data-role="encounter-table"]');
@@ -1936,7 +1990,10 @@ class VobizAgentConsole {
                 method: 'vobiz_click_to_call.api.encounter_queue.get_queue',
                 args: {
                     limit: 25, limit_start: (this.state.encounter_page - 1) * 25,
-                    search: this.page.main.find('[data-role="encounter-search"]').val() || ''
+                    search: this.page.main.find('[data-role="encounter-search"]').val() || '',
+                    view: this.state.console_view === 'ndr' ? 'ndr' : 'encounters',
+                    sort_by: this.state.encounter_sort_by || '',
+                    sort_order: this.state.encounter_sort_order || 'asc'
                 }
             });
             if (this.encounter_request_id !== requestId) return;
@@ -1957,9 +2014,16 @@ class VobizAgentConsole {
         const escape = frappe.utils.escape_html;
         const columns = this.state.encounter_columns;
         const table = this.page.main.find('[data-role="encounter-table"]');
-        table.find('thead').html('<tr>' + columns.map(c => '<th>' + escape(__(c.label)) + '</th>').join('') + '<th>' + __('Action') + '</th></tr>');
+        table.find('thead').html('<tr>' + columns.map(c => {
+            const sortable = this.state.console_view === 'ndr' && ['pe_shipkia_stage', 'pe_shipkia_status'].includes(c.fieldname);
+            const active = sortable && this.state.encounter_sort_by === c.fieldname;
+            const direction = this.state.encounter_sort_order === 'desc' ? 'descending' : 'ascending';
+            const label = escape(__(c.label));
+            if (!sortable) return '<th>' + label + '</th>';
+            return '<th aria-sort="' + (active ? direction : 'none') + '"><button type="button" class="btn btn-link btn-xs" data-encounter-sort="' + c.fieldname + '">' + label + (active ? (direction === 'ascending' ? ' &uarr;' : ' &darr;') : ' &#8597;') + '</button></th>';
+        }).join('') + '<th>' + __('Action') + '</th></tr>');
         table.find('tbody').html(this.state.encounters.map((row, index) => {
-            const loading = this.state.encounter_detail_loading === row.name;
+            const loading = this.state.encounter_detail_loading === row.name && this.state.encounter_detail_request_id === this.encounter_request_id;
             return '<tr data-index="' + index + '">' + columns.map(c =>
                 '<td>' + escape(String(row[c.fieldname] == null ? '' : row[c.fieldname])) + '</td>'
             ).join('') + '<td><button class="btn btn-xs btn-primary" data-action="call-row" ' +
@@ -1974,21 +2038,25 @@ class VobizAgentConsole {
     async call_encounter_row(index) {
         const encounter = this.state.encounters[index];
         if (!encounter || this.state.encounter_detail_loading || this.state.detail_loading_key) return;
+        const view = this.state.console_view === 'ndr' ? 'ndr' : 'encounters';
+        const requestId = this.encounter_request_id;
+        this.state.encounter_detail_request_id = requestId;
         this.state.encounter_detail_loading = encounter.name;
         this.render_encounters();
         try {
             const result = await frappe.call({
                 method: 'vobiz_click_to_call.api.encounter_queue.get_encounter_context',
-                args: { encounter: encounter.name }
+                args: { encounter: encounter.name, view }
             });
             const context = result.message || {};
+            if (this.encounter_request_id !== requestId) return;
             const row = Object.assign({}, context.reference, {doctype: 'Patient', encounter_name: encounter.name});
             this.state.context = context;
             this.apply_context_dispositions(context);
             this.open_detail_dialog(row, context);
         } finally {
             this.state.encounter_detail_loading = null;
-            this.render_encounters();
+            if (this.encounter_request_id === requestId) this.render_encounters();
         }
     }
 

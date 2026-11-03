@@ -36,3 +36,44 @@ The console source switcher offers the saved selections. Existing single-source
 and CRM Lead and Patient mappings are recognized without a bulk data update.
 Selecting Patient still requires its department and follow-up routing settings.
 The Patient Encounter List tab retains its configured columns and filters.
+
+## NDR tab
+
+In **Vobiz Settings → NDR Queue**, choose **Shipkia Stages** and **Shipkia
+Statuses** using the searchable multiselects, check **Enable NDR Tab**, and Save.
+NDR starts disabled; both selections must contain at least one value to enable it.
+Choices come from existing, readable Patient Encounter shipment values. Previously
+selected values remain available even when no current encounters use them.
+
+The third Agent Console tab, **NDR**, shows encounters matching the saved Encounter
+Queue filters **AND** any selected stage **AND** any selected status. Conflicting
+inherited filters can result in an empty list. NDR can be enabled independently of
+the Patient Encounter List. It uses the same document and field permissions.
+
+Shipkia Stage (`pe_shipkia_stage`) and Shipkia Status (`pe_shipkia_status`) occupy
+columns 3 and 4, after the first two other configured columns. For configurations
+with fewer than two other columns, Encounter ID/Patient supply the leading columns.
+Remaining columns keep their order, without duplicate Shipkia columns; field
+permissions still apply. Click either Shipkia header to sort ascending/descending
+across all matches. The initial order remains most recently updated first.
+
+Search, 25-record pagination, refresh and Details work like the Encounter list.
+Each tab retains its own search, page and sort state while switching tabs. Details
+rechecks the saved filters and current shipment values before opening the same
+Patient workdesk and calling controls. Opening Details does not start a call.
+NDR does not add encounters to auto-dial. Refresh the console after changing rules;
+returning from Settings updates tab visibility.
+
+Existing sites need a targeted settings schema reload and cache clear:
+
+```sh
+bench --site <site> reload-doc vobiz_click_to_call doctype vobiz_settings
+bench --site <site> clear-cache
+```
+
+Focused validation:
+
+```sh
+env/bin/python -m unittest vobiz_click_to_call.tests.test_encounter_queue -q
+node apps/vobiz_click_to_call/vobiz_click_to_call/tests/test_encounter_queue.cjs
+```

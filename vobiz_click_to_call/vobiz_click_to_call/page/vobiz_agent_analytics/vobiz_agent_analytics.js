@@ -151,7 +151,6 @@ class VobizAgentAnalytics {
 									<th>${__('Agent')}</th>
 									<th>${__('Queue')}</th>
 									<th>${__('Reference')}</th>
-									<th>${__('Customer')}</th>
 									<th>${__('Call Attempts')}</th>
 									<th>${__('Status')}</th>
 									<th>${__('Talk Time')}</th>
@@ -245,7 +244,6 @@ class VobizAgentAnalytics {
 									<th>${__('Agent')}</th>
 									<th>${__('Queue')}</th>
 									<th>${__('Reference')}</th>
-									<th>${__('Customer')}</th>
 									<th>${__('Status')}</th>
 									<th>${__('Talk Time')}</th>
 									<th>${__('Disposition')}</th>
@@ -971,7 +969,7 @@ class VobizAgentAnalytics {
 		this.page.main.find('[data-role="selected-call-title"]').text(__('{0} List', [label]));
 		this.page.main.find('[data-role="selected-calls"]').html(`
 			<tr>
-				<td colspan="11" class="text-muted text-center">${__('Loading {0}...', [label.toLowerCase()])}</td>
+				<td colspan="10" class="text-muted text-center">${__('Loading {0}...', [label.toLowerCase()])}</td>
 			</tr>
 		`);
 		this.page.main.find('[data-role="selected-calls-note"]').text(__('Loading...'));
@@ -1212,7 +1210,7 @@ class VobizAgentAnalytics {
 		this.page.main.find('[data-role="selected-call-pagination"]').html('');
 		this.page.main.find('[data-role="calls"]').html(`
 			<tr>
-				<td colspan="10" class="text-muted text-center">${__('Click Load Call Logs to fetch matching rows.')}</td>
+				<td colspan="9" class="text-muted text-center">${__('Click Load Call Logs to fetch matching rows.')}</td>
 			</tr>
 		`);
 		this.page.main.find('[data-role="calls-note"]').text(__('Call logs load on demand'));
@@ -1247,7 +1245,7 @@ class VobizAgentAnalytics {
 		if (append && html) {
 			$body.append(html);
 		} else {
-			$body.html(html || `<tr><td colspan="10" class="text-muted text-center">${__('No calls found for this filter.')}</td></tr>`);
+			$body.html(html || `<tr><td colspan="9" class="text-muted text-center">${__('No calls found for this filter.')}</td></tr>`);
 		}
 		const shown = this.calls_offset || calls.length || 0;
 		const total = data && data.matching_call_count != null ? data.matching_call_count : shown;
@@ -1260,7 +1258,7 @@ class VobizAgentAnalytics {
 		const label = this.call_list_label(status_filter);
 		const html = calls.map(row => this.call_row_html(row, true)).join('');
 		this.page.main.find('[data-role="selected-calls"]').html(
-			html || `<tr><td colspan="11" class="text-muted text-center">${__('No {0} found for this filter.', [label.toLowerCase()])}</td></tr>`
+			html || `<tr><td colspan="10" class="text-muted text-center">${__('No {0} found for this filter.', [label.toLowerCase()])}</td></tr>`
 		);
 		const total = data && data.matching_call_count != null ? data.matching_call_count : calls.length;
 		const start = total && calls.length ? (page * limit) + 1 : 0;
@@ -1299,7 +1297,6 @@ class VobizAgentAnalytics {
 				<td>${this.escape(row.user || '')}</td>
 				<td>${this.escape(row.reference_doctype || '')}</td>
 				<td>${route ? `<a href="${route}"><code>${this.escape(row.reference_name || '')}</code></a>` : ''}</td>
-				<td>${this.escape(row.customer_number || '')}</td>
 				${include_attempts ? `<td>${this.escape(String(row.attempt_count || 1))}</td>` : ''}
 				<td><span class="vobiz-status-pill" style="background:${this.bucket_fill(row.bucket)}; color:${this.bucket_color(row.bucket)}">${this.escape(row.bucket_label || row.status || '')}</span></td>
 				<td>${this.escape(row.duration_label || '0s')}</td>
@@ -1995,7 +1992,6 @@ class VobizAgentAnalytics {
 								<th>${__('Agent')}</th>
 								<th>${__('Queue')}</th>
 								<th>${__('Reference')}</th>
-								<th>${__('Customer')}</th>
 								<th>${__('Call Attempts')}</th>
 								<th>${__('Status')}</th>
 								<th>${__('Talk Time')}</th>
@@ -2007,7 +2003,7 @@ class VobizAgentAnalytics {
 						<tbody>
 							${calls.length
 								? calls.map((call, index) => this.call_row_html(call, true, (page * limit) + index + 1)).join('')
-								: `<tr><td colspan="12" class="text-muted text-center">${details.loading ? __('Loading calls...') : this.escape(details.error || __('No calls found for this agent.'))}</td></tr>`}
+								: `<tr><td colspan="11" class="text-muted text-center">${details.loading ? __('Loading calls...') : this.escape(details.error || __('No calls found for this agent.'))}</td></tr>`}
 						</tbody>
 					</table>
 				</div>

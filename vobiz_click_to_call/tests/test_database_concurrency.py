@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
+from datetime import datetime
 import json
 import os
 import threading
@@ -102,6 +103,9 @@ class DatabaseConcurrencyTests(unittest.TestCase):
         self.stack.enter_context(patch.object(frappe, "db", self.adapter))
         self.stack.enter_context(patch.object(frappe, "session", SimpleNamespace(user="test-agent")))
         self.stack.enter_context(patch.object(frappe.utils, "now", return_value="2026-09-11 14:00:00"))
+        self.stack.enter_context(patch.object(frappe.utils, "now_datetime", return_value=datetime(2026, 9, 11, 14)))
+        # This adapter exercises real row locks; commit/cache logging is tested separately.
+        self.stack.enter_context(patch("vobiz_click_to_call.services.availability_recovery.record_transition"))
         self.stack.enter_context(patch.object(frappe, "publish_realtime"))
 
     def transaction(self, work):

@@ -2799,6 +2799,7 @@ def _performance_by_user(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _performance_call_row(row) -> dict[str, Any]:
+    # Analytics displays call identities and metrics, without phone-number fields.
     return {
         "name": row.get("name"),
         "user": row.get("analytics_agent") if "analytics_agent" in row else row.get("user"),
@@ -2812,10 +2813,7 @@ def _performance_call_row(row) -> dict[str, Any]:
         "creation": row.get("creation"),
         "reference_doctype": row.get("reference_doctype"),
         "reference_name": row.get("reference_name"),
-        "customer_number": row.get("customer_number"),
         "attempt_count": frappe.utils.cint(row.get("attempt_count")) if row.get("attempt_count") is not None else None,
-        "user_mobile": row.get("user_mobile"),
-        "caller_id": row.get("caller_id"),
         "disposition": row.get("disposition"),
         "recording_status": row.get("recording_status"),
         "recording_download_url": recording_proxy_url(row.get("name")) if row.get("bucket") == "connected" and row.get("recording_url") else "",
