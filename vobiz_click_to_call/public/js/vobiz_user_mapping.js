@@ -227,10 +227,14 @@ async function setup_queue_source_picker(frm) {
     let options;
     try {
         const response = await frappe.call({
-            method: 'vobiz_click_to_call.vobiz_click_to_call.doctype.vobiz_user_mapping.vobiz_user_mapping.get_queue_source_options'
+            // Use an existing Frappe API so a freshly deployed form does not
+            // depend on workers having imported a newly added Python method.
+            method: 'frappe.client.get_value',
+            args: {doctype: 'Vobiz Settings', fieldname: 'enable_ndr_queue'}
         });
         if (frm.__queue_source_request_id !== requestId) return;
-        options = response.message || [];
+        options = ['CRM Lead', 'Patient', 'Patient Encounter', 'Issue', 'Discontinued'];
+        if (Number((response.message || {}).enable_ndr_queue) === 1) options.push('NDR');
     } catch (error) {
         if (frm.__queue_source_request_id === requestId) {
             wrapper.$wrapper.text(__('Unable to load queue sources. Reload this form to retry.'));

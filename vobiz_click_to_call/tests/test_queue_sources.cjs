@@ -4,10 +4,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 let control;
-let options = ['CRM Lead', 'Patient', 'Patient Encounter', 'Issue', 'Discontinued'];
+let enabled = '0';
+let responseError = false;
+const requests = [];
 const context = {
     __: x => x, $: () => ({length: 1}),
-    frappe: {provide() {}, call: async () => ({message: options}), ui: {form: {
+    frappe: {provide() {}, call: async request => {
+        requests.push(request);
+        if (responseError) throw new Error('Settings permission denied');
+        return {message: {enable_ndr_queue: enabled}};
+    }, ui: {form: {
         on() {},
         make_control({df}) {
             control = {df, value: [], set_value(value) {this.value = value; return df.onchange();}, get_value() {return this.value;}};
@@ -37,12 +43,15 @@ vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../public/js/vobiz_user
     control.set_value([]);
     assert.equal(frm.doc.queue_source, '');
     assert.ok(!control.df.options.includes('NDR'));
-    options = [...options, 'NDR'];
+    assert.equal(requests[0].method, 'frappe.client.get_value');
+    assert.equal(requests[0].args.doctype, 'Vobiz Settings');
+    assert.equal(requests[0].args.fieldname, 'enable_ndr_queue');
+    enabled = '1';
     await context.setup_queue_source_picker(frm);
     assert.ok(control.df.options.includes('NDR'));
     control.set_value(['NDR']);
     assert.equal(frm.doc.queue_source, 'NDR');
-    options = options.filter(option => option !== 'NDR');
+    enabled = 0;
     const changeCount = changes.length;
     await context.setup_queue_source_picker(frm);
     assert.equal(changes.length, changeCount);
@@ -50,5 +59,18 @@ vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../public/js/vobiz_user
     assert.ok(control.df.description.includes('retained'));
     control.set_value(['Issue']);
     assert.equal(frm.doc.queue_source, 'Issue\nNDR');
+    enabled = 1;
+    await context.setup_queue_source_picker(frm);
+    assert.ok(control.df.options.includes('NDR'));
+    control.set_value(['Issue']);
+    assert.equal(frm.doc.queue_source, 'Issue');
+    enabled = null;
+    await context.setup_queue_source_picker(frm);
+    assert.ok(!control.df.options.includes('NDR'));
+    responseError = true;
+    const savedBeforeError = frm.doc.queue_source;
+    await context.setup_queue_source_picker(frm);
+    assert.equal(frm.doc.queue_source, savedBeforeError);
+    assert.ok(requests.every(request => request.method === 'frappe.client.get_value'));
     console.log('Queue Source picker: legacy initialization, multi-selection and patient routing checks passed');
 })().catch(error => {console.error(error); process.exitCode = 1;});
