@@ -13,6 +13,17 @@ SCALAR_TYPES = {"Data", "Link", "Dynamic Link", "Select", "Date", "Datetime", "T
 OPERATORS = {"=", "!=", "in", "not in", "is", ">", "<", ">=", "<=", "like", "not like", "between", "timespan"}
 DEFAULT_FIELDS = ["name", "patient", "patient_name", "encounter_date", "status"]
 NDR_FIELDS = ("pe_shipkia_stage", "pe_shipkia_status")
+NDR_SORT_FIELDS = ("creation", "modified", "patient_name", "encounter_date")
+
+NDR_COLUMNS = {
+    "name": "Encounter ID",
+    "encounter_date": "Encounter Date",
+    "pe_shipkia_order_id": "Order ID",
+    "pe_shipkia_awb_number": "AWB Number",
+    "pe_shipkia_stage": "Stage",
+    "pe_shipkia_status": "Status",
+    "pe_delivery_partner": "Courier",
+}
 
 
 def _view(value):
@@ -82,14 +93,38 @@ def configuration(settings, view="encounters"):
     if view == "ndr":
         if any(field not in catalog for field in NDR_FIELDS):
             frappe.throw(_("Install the Patient Encounter Shipkia Stage and Status fields before enabling NDR."))
-        remaining = [field for field in columns if field not in NDR_FIELDS]
-        for field in ("name", "patient"):
-            if len(remaining) < 2 and field not in remaining:
-                remaining.append(field)
-        columns = remaining[:2] + list(NDR_FIELDS) + remaining[2:]
+        missing = [field for field in NDR_COLUMNS if field not in catalog]
+        if missing:
+            frappe.throw(_("Missing NDR encounter fields: {0}").format(", ".join(missing)))
+        columns = list(NDR_COLUMNS)
+        catalog = {name: dict(field, label=NDR_COLUMNS.get(name, field["label"]))
+                   for name, field in catalog.items()}
         for field, setting in zip(NDR_FIELDS, ("ndr_shipkia_stages", "ndr_shipkia_statuses")):
             normalized.append([DOCTYPE, field, "in", _ndr_values(settings, setting)])
     return columns, normalized, catalog
+
+
+
+def agent_filters(value, view):
+    items = _array(value, [])
+    if not items:
+        return []
+    if view != "ndr":
+        frappe.throw(_("Agent filters are only available in NDR."))
+    columns, filters, catalog = configuration({"encounter_queue_filters": items})
+    for doctype, field, operator, value in filters:
+        if operator in ("in", "not in") and (not isinstance(value, list) or not value or len(value) > 100):
+            frappe.throw(_("Select between 1 and 100 filter values."))
+        if operator == "between" and (not isinstance(value, list) or len(value) != 2):
+            frappe.throw(_("Between requires two values."))
+    return filters
+
+
+@frappe.whitelist()
+def get_ndr_filter_fields():
+    _settings("ndr")
+    permitted = set(get_permitted_fields(DOCTYPE, permission_type="read"))
+    return [field for name, field in field_catalog().items() if name in permitted]
 
 
 def validate_configuration(settings):
@@ -156,17 +191,20 @@ def get_ndr_options(field, search=None):
 
 
 @frappe.whitelist()
-def get_queue(limit=25, limit_start=0, search=None, view="encounters", sort_by=None, sort_order="asc"):
+def get_queue(limit=25, limit_start=0, search=None, view="encounters", sort_by=None, sort_order="asc", user_filters=None):
     settings = _settings(view)
     columns, filters, catalog = configuration(settings, view)
+    filters += agent_filters(user_filters, view)
     permitted = set(get_permitted_fields(DOCTYPE, permission_type="read"))
     columns = [field for field in columns if field in permitted]
     if any(item[1] not in permitted for item in filters):
         frappe.throw(_("You do not have access to the configured encounter filter fields."), frappe.PermissionError)
     order_by = "modified desc, name desc"
     if sort_by:
-        if view != "ndr" or sort_by not in NDR_FIELDS or sort_order not in ("asc", "desc"):
+        if view != "ndr" or sort_by not in NDR_SORT_FIELDS or sort_order not in ("asc", "desc"):
             frappe.throw(_("Invalid NDR sort field or direction."))
+        if sort_by not in permitted:
+            frappe.throw(_("Not permitted to sort this encounter field."), frappe.PermissionError)
         order_by = f"{sort_by} {sort_order}, modified desc, name desc"
     limit = max(1, min(frappe.utils.cint(limit) or 25, 100))
     limit_start = max(0, frappe.utils.cint(limit_start))
@@ -185,9 +223,10 @@ def get_queue(limit=25, limit_start=0, search=None, view="encounters", sort_by=N
 
 
 @frappe.whitelist()
-def get_encounter_context(encounter, view="encounters"):
+def get_encounter_context(encounter, view="encounters", user_filters=None):
     settings = _settings(view)
     columns, filters, catalog = configuration(settings, view)
+    filters += agent_filters(user_filters, view)
     permitted = set(get_permitted_fields(DOCTYPE, permission_type="read"))
     if any(item[1] not in permitted for item in filters):
         frappe.throw(_("You do not have access to the configured encounter filter fields."), frappe.PermissionError)

@@ -5,7 +5,7 @@ from vobiz_click_to_call.api import encounter_queue as queue
 
 
 CATALOG = {name: dict(fieldname=name, label=name, fieldtype="Data")
-           for name in ("name", "patient", "patient_name", "encounter_date", "status", "pe_shipkia_stage", "pe_shipkia_status")}
+           for name in ("name", "patient", "patient_name", "encounter_date", "status", "pe_shipkia_stage", "pe_shipkia_status", "pe_shipkia_order_id", "pe_shipkia_awb_number", "pe_delivery_partner")}
 
 
 def reject(message, *args):
@@ -29,6 +29,43 @@ class EncounterQueueTests(unittest.TestCase):
         self.permitted = patch.object(queue, "get_permitted_fields", return_value=list(CATALOG))
         self.permitted.start()
         self.addCleanup(self.permitted.stop)
+
+
+
+    def test_native_ndr_filter_group_tuples(self):
+        filters = [
+            ["Patient Encounter", "status", "in", ["Open", "Closed"], False],
+            ["Patient Encounter", "encounter_date", "between", ["2026-11-01", "2026-11-12"], False],
+        ]
+        self.assertEqual(queue.agent_filters(filters, "ndr"), [item[:4] for item in filters])
+        self.assertEqual(queue.agent_filters([], "ndr"), [])
+
+    def test_agent_filters_validate_view_and_shape(self):
+        self.assertEqual(queue.agent_filters([["status", "=", "Open"]], "ndr"),
+                         [["Patient Encounter", "status", "=", "Open"]])
+        for filters, view in [
+            ([["status", "=", "Open"]], "encounters"),
+            ([["unknown", "=", "Open"]], "ndr"),
+            ([["status", "in", "Open"]], "ndr"),
+            ([["encounter_date", "between", ["2026-11-01"]]], "ndr"),
+            ([["status", "=", {"unsafe": "value"}]], "ndr"),
+        ]:
+            with self.subTest(filters=filters, view=view), self.assertRaises(ValueError):
+                queue.agent_filters(filters, view)
+
+    def test_ndr_agent_filters_append_to_mandatory_filters(self):
+        with patch.object(queue, "_settings", return_value=self.ndr_settings()), patch.object(frappe, "get_list", return_value=[]) as query:
+            queue.get_queue.__wrapped__(view="ndr", user_filters=[["patient_name", "like", "%Sample%"]])
+        filters = query.call_args.kwargs["filters"]
+        self.assertIn(["Patient Encounter", "patient_name", "like", "%Sample%"], filters)
+        self.assertIn(["Patient Encounter", "pe_shipkia_stage", "in", ["NDR", "In Transit"]], filters)
+        self.assertIn(["Patient Encounter", "pe_shipkia_status", "in", ["Undelivered", "Reattempt"]], filters)
+
+    def test_agent_filter_field_permission_is_checked(self):
+        with patch.object(queue, "_settings", return_value=self.ndr_settings()), patch.object(queue, "get_permitted_fields", return_value=[f for f in CATALOG if f != "patient_name"]), patch.object(frappe, "get_list") as query:
+            with self.assertRaises(ValueError):
+                queue.get_queue.__wrapped__(view="ndr", user_filters=[["patient_name", "=", "Hidden"]])
+            query.assert_not_called()
 
     def test_configuration_normalizes_filters_and_retains_column_order(self):
         columns, filters, _ = queue.configuration(self.settings)
@@ -95,7 +132,7 @@ class EncounterQueueTests(unittest.TestCase):
 
     def test_ndr_inherits_filters_and_inserts_columns_without_duplicates(self):
         columns, filters, _ = queue.configuration(self.ndr_settings(), "ndr")
-        self.assertEqual(columns, ["name", "patient_name", "pe_shipkia_stage", "pe_shipkia_status"])
+        self.assertEqual(columns, list(queue.NDR_COLUMNS))
         self.assertEqual(filters, [
             ["Patient Encounter", "pe_shipkia_status", "!=", "Delivered"],
             ["Patient Encounter", "pe_shipkia_stage", "in", ["NDR", "In Transit"]],
@@ -103,9 +140,9 @@ class EncounterQueueTests(unittest.TestCase):
         ])
         self.assertEqual(queue.configuration(self.ndr_settings())[0], ["name", "patient_name", "pe_shipkia_status"])
 
-    def test_ndr_short_column_configuration_keeps_stage_status_third_fourth(self):
+    def test_ndr_columns_are_independent_of_encounter_column_configuration(self):
         columns, _, _ = queue.configuration(self.ndr_settings(encounter_queue_fields='["pe_shipkia_status"]'), "ndr")
-        self.assertEqual(columns, ["name", "patient", "pe_shipkia_stage", "pe_shipkia_status"])
+        self.assertEqual(columns, list(queue.NDR_COLUMNS))
 
     def test_ndr_requires_both_multiselects_and_shipkia_fields(self):
         for setting in ("ndr_shipkia_stages", "ndr_shipkia_statuses"):
@@ -126,9 +163,9 @@ class EncounterQueueTests(unittest.TestCase):
     def test_ndr_server_side_sort_preserves_pagination_search_and_permissions(self):
         with patch.object(queue, "_settings", return_value=self.ndr_settings()), \
              patch.object(frappe, "get_list", return_value=[{"name": "ENC-1"}, {"name": "ENC-2"}]) as query:
-            result = queue.get_queue.__wrapped__(view="ndr", sort_by="pe_shipkia_status", sort_order="desc", limit=1, limit_start=25, search="PAT")
+            result = queue.get_queue.__wrapped__(view="ndr", sort_by="patient_name", sort_order="desc", limit=1, limit_start=25, search="PAT")
         args = query.call_args.kwargs
-        self.assertEqual(args["order_by"], "pe_shipkia_status desc, modified desc, name desc")
+        self.assertEqual(args["order_by"], "patient_name desc, modified desc, name desc")
         self.assertEqual(args["limit_start"], 25)
         self.assertEqual(args["page_length"], 2)
         self.assertEqual(len(args["filters"]), 3)
@@ -136,8 +173,24 @@ class EncounterQueueTests(unittest.TestCase):
         self.assertTrue(result["has_more"])
         self.assertNotIn("ignore_permissions", args)
 
+
+    def test_ndr_dropdown_sorts_are_server_side(self):
+        with patch.object(queue, "_settings", return_value=self.ndr_settings()), patch.object(queue, "get_permitted_fields", return_value=list(CATALOG) + ["creation", "modified"]), patch.object(frappe, "get_list", return_value=[]) as query:
+            for field in queue.NDR_SORT_FIELDS:
+                for direction in ("asc", "desc"):
+                    with self.subTest(field=field, direction=direction):
+                        queue.get_queue.__wrapped__(view="ndr", sort_by=field, sort_order=direction, limit_start=25)
+                        self.assertEqual(query.call_args.kwargs["order_by"], f"{field} {direction}, modified desc, name desc")
+                        self.assertEqual(query.call_args.kwargs["limit_start"], 25)
+
+    def test_ndr_sort_respects_field_permissions(self):
+        with patch.object(queue, "_settings", return_value=self.ndr_settings()), patch.object(queue, "get_permitted_fields", return_value=[f for f in CATALOG if f != "patient_name"]), patch.object(frappe, "get_list") as query:
+            with self.assertRaises(ValueError):
+                queue.get_queue.__wrapped__(view="ndr", sort_by="patient_name")
+            query.assert_not_called()
+
     def test_ndr_rejects_unapproved_sort_fields_and_directions(self):
-        for view, field, direction in (("ndr", "name", "asc"), ("ndr", "pe_shipkia_stage", "desc; select 1"),
+        for view, field, direction in (("ndr", "pe_shipkia_stage", "asc"), ("ndr", "pe_shipkia_status", "desc"), ("ndr", "name", "asc"), ("ndr", "pe_shipkia_stage", "desc; select 1"),
                                        ("encounters", "pe_shipkia_status", "asc"), ("unknown", "", "asc")):
             with self.subTest(view=view, field=field), patch.object(queue, "_settings", return_value=self.ndr_settings()), \
                  patch.object(frappe, "get_list") as query, self.assertRaises(ValueError):

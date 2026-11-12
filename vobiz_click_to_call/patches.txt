@@ -16,3 +16,4 @@ vobiz_click_to_call.patches.v1_0.normalize_provider_confirmation
 
 vobiz_click_to_call.patches.v1_0.add_incoming_route_indexes
 vobiz_click_to_call.patches.v1_0.repair_callback_counter_expiry
+vobiz_click_to_call.patches.v1_0.add_ndr_encounter_indexes
