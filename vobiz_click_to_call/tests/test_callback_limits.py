@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import frappe
 from vobiz_click_to_call.services.callback_limits import callback_rate_limit
+from vobiz_click_to_call.services import callback_limits
 
 
 class CallbackLimitTests(unittest.TestCase):
@@ -14,13 +15,11 @@ class CallbackLimitTests(unittest.TestCase):
         self.counts = {}
         cache = MagicMock()
         cache.make_key.side_effect = lambda key: key
-        cache.get.side_effect = lambda key: self.counts.get(key, 0)
-        cache.setex.side_effect = lambda key, ttl, value: self.counts.__setitem__(key, value)
-        def increment(key, amount):
-            self.counts[key] = self.counts.get(key, 0) + amount
-            return self.counts[key]
-        cache.incrby.side_effect = increment
-        def reject(message, exc):
+        def increment(cache, key):
+            self.counts[key] = self.counts.get(key, 0) + 1
+            return self.counts[key], 60000, 0
+        self.stack.enter_context(patch.object(callback_limits, "_count_callback", side_effect=increment))
+        def reject(message, exc=ValueError):
             raise exc(message)
         for name, value in {
             "cache": cache, "request": SimpleNamespace(method="POST"),
@@ -29,8 +28,6 @@ class CallbackLimitTests(unittest.TestCase):
             "throw": reject, "_": lambda value: value, "logger": MagicMock(),
         }.items():
             self.stack.enter_context(patch.object(frappe, name, value))
-        # The limiter imports its translation helper directly.
-        self.stack.enter_context(patch("frappe.rate_limiter._", lambda value: value))
 
     def test_nested_handler_does_not_double_count_or_apply_lower_limit(self):
         @callback_rate_limit("event", default=1)
@@ -47,6 +44,8 @@ class CallbackLimitTests(unittest.TestCase):
         entry = frappe.logger.return_value.warning.call_args.args[0]
         self.assertEqual(entry["event"], "callback_rate_limited")
         self.assertEqual(entry["limit"], 2)
+        self.assertEqual(entry["counter"], 3)
+        self.assertEqual(entry["ttl_ms"], 60000)
         self.assertNotIn("token", entry)
 
     def test_direct_handler_is_still_limited_and_endpoints_are_independent(self):
@@ -87,3 +86,46 @@ class CallbackLimitTests(unittest.TestCase):
         handler()
         with self.assertRaises(frappe.RateLimitExceededError):
             handler()
+
+    def test_no_http_request_does_not_consume_callback_allowance(self):
+        with patch.object(frappe, "request", None):
+            self.assertEqual(callback_rate_limit("answer")(lambda: "OK")(), "OK")
+        self.assertEqual(self.counts, {})
+
+    def test_missing_ip_is_not_a_shared_global_bucket(self):
+        frappe.local.request_ip = None
+        with self.assertRaises(ValueError):
+            callback_rate_limit("answer")(lambda: "OK")()
+        self.assertEqual(self.counts, {})
+
+    def test_redis_failure_does_not_bypass_limiter(self):
+        handler = MagicMock()
+        with patch.object(callback_limits, "_count_callback", side_effect=ConnectionError("Redis down")):
+            with self.assertRaises(ConnectionError):
+                callback_rate_limit("answer")(handler)()
+        handler.assert_not_called()
+        self.assertFalse(callback_limits._active.get())
+
+    def test_logs_omit_tokens_urls_headers_and_payload(self):
+        frappe.form_dict.update(token="SECRET", url="https://example.invalid/?token=SECRET",
+                                payload="SECRET", CallUUID="safe-uuid", call_log="CTC-test")
+        handler = callback_rate_limit("answer", default=1)(lambda: "OK")
+        handler()
+        with self.assertRaises(frappe.RateLimitExceededError):
+            handler()
+        entry = frappe.logger.return_value.warning.call_args.args[0]
+        self.assertNotIn("SECRET", str(entry))
+        self.assertEqual(entry["call_log"], "CTC-test")
+        self.assertEqual(entry["CallUUID"], "safe-uuid")
+
+    def test_diagnostic_failure_does_not_change_rejection(self):
+        frappe.logger.side_effect = RuntimeError("log unavailable")
+        with patch.object(callback_limits, "_count_callback", return_value=(9, 60000, 1)):
+            with self.assertRaises(frappe.RateLimitExceededError):
+                callback_rate_limit("answer", default=1)(lambda: "OK")()
+
+    def test_configuration_validation_keeps_existing_fallback(self):
+        for value in (True, 0, -1, 60001, "1.5", "bad", None):
+            with self.subTest(value=value):
+                frappe.conf.vobiz_answer_requests_per_minute = value
+                self.assertEqual(callback_limits.callback_request_limit("answer", 600), 600)
