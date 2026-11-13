@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import Mock, patch
 import frappe
 from vobiz_click_to_call.api import encounter_queue as queue
+from vobiz_click_to_call.services import queue_sources
 
 
 CATALOG = {name: dict(fieldname=name, label=name, fieldtype="Data")
@@ -233,9 +234,9 @@ class EncounterQueueTests(unittest.TestCase):
             with self.subTest(enabled=enabled, mapped=mapped, readable=readable), \
                  patch.object(frappe, "session", frappe._dict(user="Administrator")), \
                  patch.object(frappe, "get_single", return_value=settings), \
-                 patch.object(queue, "has_ndr_mapping", return_value=mapped), \
+                 patch.object(queue_sources, "enabled_sources", return_value=["NDR"] if mapped else []), \
                  patch.object(frappe, "has_permission", return_value=readable):
-                self.assertEqual(queue.get_available_views.__wrapped__(), {"ndr": expected})
+                self.assertEqual(queue.get_available_views.__wrapped__(), {"queue": False, "encounters": False, "ndr": expected})
 
     def test_ndr_mapping_is_read_fresh_for_current_enabled_user(self):
         db = Mock()
@@ -268,13 +269,14 @@ class EncounterQueueTests(unittest.TestCase):
              patch.object(frappe, "has_permission", return_value=False), self.assertRaises(ValueError):
             queue._settings("ndr")
 
-    def test_encounter_list_does_not_require_ndr_mapping(self):
-        with patch.object(frappe, "session", frappe._dict(user="agent@example.com")), \
-             patch.object(frappe, "get_single", return_value=self.settings), \
-             patch.object(queue, "has_ndr_mapping") as mapped, \
-             patch.object(frappe, "has_permission", return_value=True):
-            self.assertEqual(queue._settings("encounters"), self.settings)
-        mapped.assert_not_called()
+    def test_encounter_list_requires_its_own_mapping(self):
+        for sources, allowed in [([], False), (["NDR"], False), (["Patient Encounter"], True)]:
+            with patch.object(frappe, "session", frappe._dict(user="agent@example.com")), patch.object(frappe, "get_single", return_value=self.settings), patch.object(queue, "enabled_sources", return_value=sources), patch.object(frappe, "has_permission", return_value=True):
+                if allowed:
+                    self.assertEqual(queue._settings("encounters"), self.settings)
+                else:
+                    with self.assertRaises(ValueError):
+                        queue._settings("encounters")
 
     def test_ndr_options_are_manager_only_and_permission_aware(self):
         with patch.object(frappe, "get_roles", return_value=["System Manager"]), \

@@ -15,7 +15,7 @@ class QueueSourcesTests(unittest.TestCase):
         source = console._agent_queue_source({"queue_source": "NDR"})
         self.assertEqual(source, "NDR")
         self.assertEqual(console._selected_queue_source(source, "CRM Lead"), "NDR")
-        with patch.object(console, "_queue_for_doctype") as query:
+        with patch.object(console, "available_main_sources", return_value=[]), patch.object(console, "_queue_for_doctype") as query:
             self.assertEqual(console._lead_queue(25, agent={"queue_source": "NDR"}), [])
         query.assert_not_called()
         self.assertEqual(queue_source_options("Patient\nNDR"), ["Patient"])

@@ -26,7 +26,7 @@ from vobiz_click_to_call.services.attendance import agent_attendance_enabled
 from vobiz_click_to_call.services.call_status import MISSED_STATUSES, is_inbound_missed_call, status_bucket, talk_seconds
 from vobiz_click_to_call.services.lead_disposition import get_lead_disposition_context
 from vobiz_click_to_call.services.patient_routing import patient_matches_mapping
-from vobiz_click_to_call.services.queue_sources import queue_source_options, queue_includes, parse_queue_sources, MAPPING_QUEUE_SOURCES
+from vobiz_click_to_call.services.queue_sources import available_main_sources, queue_source_options, queue_includes, parse_queue_sources, MAPPING_QUEUE_SOURCES
 from vobiz_click_to_call.services.settings import get_idle_auto_offline_config, get_settings
 
 
@@ -285,6 +285,7 @@ def get_agent_console_data(
     queue_source_filter: str | None = None,
     sort_by: str | None = None,
     filters: str | list | None = None,
+    include_queue: int | str = 1,
 ) -> dict[str, Any]:
     if frappe.session.user == "Guest":
         frappe.throw(_("Login required."))
@@ -292,7 +293,8 @@ def get_agent_console_data(
     limit = max(5, min(frappe.utils.cint(limit) or 25, CONSOLE_QUEUE_LIMIT_MAX))
     limit_start = max(0, frappe.utils.cint(limit_start))
     agent = _agent_context()
-    agent_queue_source = _agent_queue_source(agent)
+    allowed_sources = available_main_sources()
+    agent_queue_source = "\n".join(allowed_sources) or "NDR"
     queue_source = _selected_queue_source(agent_queue_source, queue_source_filter)
     queue_doctype = _queue_doctype_for_source(queue_source)
     static_context = _get_console_static_context(queue_source, queue_doctype, agent_queue_source)
@@ -305,7 +307,7 @@ def get_agent_console_data(
         sort_by=sort_by,
         user_filters=filters,
         limit_start=limit_start,
-    )
+    ) if allowed_sources and frappe.utils.cint(include_queue) else []
     return {
         "availability": get_call_capability(),
         "active_call": _active_call(),
@@ -3313,8 +3315,9 @@ def _lead_queue(
     user_filters: str | list | None = None,
     limit_start: int = 0,
 ) -> list[dict[str, Any]]:
-    queue_source = queue_source or _selected_queue_source(_agent_queue_source(agent))
-    if queue_source == "NDR":
+    allowed_sources = available_main_sources()
+    queue_source = queue_source or (allowed_sources[0] if allowed_sources else None)
+    if queue_source not in allowed_sources:
         return []
     preferred_doctype = _queue_doctype_for_source(queue_source)
     if preferred_doctype and frappe.db.exists("DocType", preferred_doctype):
