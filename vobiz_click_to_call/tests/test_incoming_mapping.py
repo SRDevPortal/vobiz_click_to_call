@@ -299,12 +299,12 @@ class TestIncomingMappingSource(unittest.TestCase):
         mappings = [frappe._dict(name="MAP-1", current_call_log="CALL-1")]
         with (
             patch.object(frappe, "cache", return_value=cache),
-            patch.object(frappe, "get_all", return_value=mappings) as get_all,
+            patch.object(frappe, "get_all", side_effect=[mappings, []]) as get_all,
             patch.object(mapping_recovery, "enqueue_recovery") as enqueue,
         ):
             self.assertEqual(mapping_recovery.enqueue_pending_recovery(), {"checked": 1, "queued": 1})
-        self.assertEqual(get_all.call_args.kwargs["filters"]["name"], [">", "MAP-0"])
-        self.assertEqual(get_all.call_args.kwargs["limit_page_length"], mapping_recovery.RECOVERY_BATCH_SIZE)
+        self.assertEqual(get_all.call_args_list[0].kwargs["filters"]["name"], [">", "MAP-0"])
+        self.assertEqual(get_all.call_args_list[0].kwargs["limit_page_length"], mapping_recovery.RECOVERY_BATCH_SIZE)
         enqueue.assert_called_once_with("CALL-1", "MAP-1")
         self.assertEqual(cache.set_value.call_args.args[1], "")
 
