@@ -57,6 +57,8 @@ def save_call_disposition(
 ) -> dict:
     doc = frappe.get_doc("Vobiz Call Log", call_log)
     assert_user_can_update_disposition(doc)
+    if doc.get("ndr_encounter"):
+        frappe.throw(_("Use Save NDR Outcome for this call; patient and encounter statuses are unchanged."))
 
     lead_status = (lead_status or "").strip()
     disposition = (disposition or "").strip()

@@ -97,6 +97,11 @@ def configuration(settings, view="encounters"):
         if missing:
             frappe.throw(_("Missing NDR encounter fields: {0}").format(", ".join(missing)))
         columns = list(NDR_COLUMNS)
+        if settings.get("enable_ndr_outcomes"):
+            for field, label in (("ndr_tag", "NDR Tag"), ("ndr_follow_up_at", "Follow-up At")):
+                if field in catalog:
+                    columns.append(field)
+                    catalog[field] = dict(catalog[field], label=label)
         catalog = {name: dict(field, label=NDR_COLUMNS.get(name, field["label"]))
                    for name, field in catalog.items()}
         for field, setting in zip(NDR_FIELDS, ("ndr_shipkia_stages", "ndr_shipkia_statuses")):

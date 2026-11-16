@@ -17,3 +17,8 @@ vobiz_click_to_call.patches.v1_0.normalize_provider_confirmation
 vobiz_click_to_call.patches.v1_0.add_incoming_route_indexes
 vobiz_click_to_call.patches.v1_0.repair_callback_counter_expiry
 vobiz_click_to_call.patches.v1_0.add_ndr_encounter_indexes
+vobiz_click_to_call.patches.v1_0.add_ndr_outcomes
+vobiz_click_to_call.patches.v1_0.ndr_tag_master
+vobiz_click_to_call.patches.v1_0.shorten_ndr_tags
+vobiz_click_to_call.patches.v1_0.organize_ndr_encounter_fields
+vobiz_click_to_call.patches.v1_0.compact_ndr_layout

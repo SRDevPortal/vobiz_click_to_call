@@ -172,7 +172,10 @@ def start_call(
     phone_field: str | None = None,
     phone_number: str | None = None,
     patient_phone_selected: int | str = 0,
+    ndr_encounter: str | None = None,
 ) -> dict[str, Any]:
+    from vobiz_click_to_call.api import ndr_outcomes
+    ndr_encounter = ndr_outcomes.validate_start(ndr_encounter, reference_doctype, reference_name)
     log_vobiz_event(
         "Start call requested",
         payload={
@@ -250,6 +253,7 @@ def start_call(
         caller_id=caller_id,
         call_flow=call_flow,
     )
+    ndr_outcomes.attach(call_log, ndr_encounter)
     log_vobiz_event(
         "Call log created",
         call_log=call_log.name,

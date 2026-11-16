@@ -17,6 +17,7 @@ app_include_js = [
 ]
 
 doctype_js = {
+    "Patient Encounter": "public/js/patient_encounter_ndr.js",
     "Vobiz Settings": "public/js/vobiz_settings.js",
     "Vobiz User Mapping": "public/js/vobiz_user_mapping.js",
 }

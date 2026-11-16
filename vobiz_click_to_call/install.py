@@ -8,6 +8,16 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 def after_install():
     ensure_dependencies()
     ensure_defaults()
+    from vobiz_click_to_call.patches.v1_0.add_ndr_outcomes import execute as setup_ndr_outcomes
+    setup_ndr_outcomes()
+    from vobiz_click_to_call.patches.v1_0.ndr_tag_master import execute as setup_ndr_tags
+    setup_ndr_tags()
+    from vobiz_click_to_call.patches.v1_0.shorten_ndr_tags import execute as shorten_ndr_tags
+    shorten_ndr_tags()
+    from vobiz_click_to_call.patches.v1_0.organize_ndr_encounter_fields import execute as organize_ndr_fields
+    organize_ndr_fields()
+    from vobiz_click_to_call.patches.v1_0.compact_ndr_layout import execute as compact_ndr_layout
+    compact_ndr_layout()
     from vobiz_click_to_call.patches.v1_0.add_incoming_route_indexes import execute
     execute()
 
@@ -15,6 +25,10 @@ def after_install():
 def after_migrate():
     ensure_dependencies()
     ensure_defaults()
+    from vobiz_click_to_call.patches.v1_0.organize_ndr_encounter_fields import execute as organize_ndr_fields
+    organize_ndr_fields()
+    from vobiz_click_to_call.patches.v1_0.compact_ndr_layout import execute as compact_ndr_layout
+    compact_ndr_layout()
 
 
 def ensure_dependencies():

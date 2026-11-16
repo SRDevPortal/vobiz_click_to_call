@@ -1,0 +1,81 @@
+{
+  "doctype": "DocType",
+  "name": "NDR Interaction Log",
+  "module": "Vobiz Click To Call",
+  "autoname": "hash",
+  "engine": "InnoDB",
+  "field_order": [
+    "call_log",
+    "patient_encounter",
+    "tag",
+    "notes",
+    "follow_up_at",
+    "agent",
+    "call_started_at",
+    "callback_at"
+  ],
+  "fields": [
+    {
+      "fieldname": "call_log",
+      "label": "Call Log",
+      "fieldtype": "Link",
+      "read_only": 1,
+      "options": "Vobiz Call Log",
+      "unique": 1,
+      "reqd": 1
+    },
+    {
+      "fieldname": "patient_encounter",
+      "label": "Patient Encounter",
+      "fieldtype": "Link",
+      "read_only": 1,
+      "options": "Patient Encounter"
+    },
+    {
+      "fieldname": "tag",
+      "label": "NDR Tag",
+      "fieldtype": "Link",
+      "read_only": 1,
+      "options": "NDR Tag"
+    },
+    {
+      "fieldname": "notes",
+      "label": "Note",
+      "fieldtype": "Small Text",
+      "read_only": 1
+    },
+    {
+      "fieldname": "follow_up_at",
+      "label": "Follow-up At",
+      "fieldtype": "Datetime",
+      "read_only": 1
+    },
+    {
+      "fieldname": "agent",
+      "label": "Agent",
+      "fieldtype": "Link",
+      "read_only": 1,
+      "options": "User"
+    },
+    {
+      "fieldname": "call_started_at",
+      "label": "Call Started At",
+      "fieldtype": "Datetime",
+      "read_only": 1
+    },
+    {
+      "fieldname": "callback_at",
+      "label": "Callback Scheduled At",
+      "fieldtype": "Datetime",
+      "read_only": 1
+    }
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "report": 1
+    }
+  ],
+  "track_changes": 1
+}

@@ -396,7 +396,7 @@ def apply_ai_result(call_log: str, result: dict[str, Any], settings=None) -> Non
         confidence = min(confidence, 0.49)
 
     review_required = confidence < threshold
-    auto_disposed = bool(settings.enable_ai_disposition and not review_required)
+    auto_disposed = bool(settings.enable_ai_disposition and not review_required and not doc.get("ndr_encounter"))
     lead_auto_applied = bool(auto_disposed)
     doc.ai_summary = result.get("summary") or ""
     doc.ai_disposition = disposition
@@ -440,6 +440,8 @@ def apply_ai_result(call_log: str, result: dict[str, Any], settings=None) -> Non
 
 
 def sync_ai_disposition_safely(doc, disposition: str) -> dict:
+    if doc.get("ndr_encounter"):
+        return {"synced": False, "reason": "NDR outcomes require agent input."}
     try:
         result = sync_call_disposition_to_lead(doc, disposition)
         if not result.get("synced"):
