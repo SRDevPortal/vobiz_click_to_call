@@ -4,6 +4,13 @@ TAGS = 'Customer Confirmed Delivery\nReattempt Requested\nCustomer Requested Cal
 def execute():
     frappe.reload_doc("vobiz_click_to_call", "doctype", "ndr_tag")
     frappe.reload_doc("vobiz_click_to_call", "doctype", "ndr_interaction_log")
+    # A later migration may already have converted this field on an existing
+    # site. Preserve its Link type instead of attempting an invalid downgrade.
+    tag = dict(fieldname="ndr_tag", label="Latest NDR Tag", fieldtype="Data", read_only=1, allow_on_submit=1)
+    existing = frappe.db.get_value("Custom Field", {"dt": "Patient Encounter", "fieldname": "ndr_tag"},
+                                   ["fieldtype", "options"], as_dict=True)
+    if existing and existing.fieldtype == "Link" and existing.options == "NDR Tag":
+        tag.update(fieldtype="Link", options="NDR Tag")
     create_custom_fields({
         "Vobiz Settings": [
             dict(fieldname="enable_ndr_outcomes", label="Enable NDR Outcomes", fieldtype="Check", default="0", insert_after="enable_ndr_queue"),
@@ -12,7 +19,7 @@ def execute():
             dict(fieldname="ndr_encounter", label="NDR Encounter", fieldtype="Link", options="Patient Encounter", read_only=1),
             dict(fieldname="ndr_outcome_state", label="NDR Outcome State", fieldtype="Select", options="\nPending\nSaved", read_only=1)],
         "Patient Encounter": [
-            dict(fieldname="ndr_tag", label="Latest NDR Tag", fieldtype="Data", read_only=1, allow_on_submit=1),
+            tag,
             dict(fieldname="ndr_note", label="Latest NDR Note", fieldtype="Small Text", read_only=1, allow_on_submit=1),
             dict(fieldname="ndr_follow_up_at", label="NDR Follow-up At", fieldtype="Datetime", read_only=1, allow_on_submit=1),
             dict(fieldname="ndr_updated_by", label="NDR Updated By", fieldtype="Link", options="User", read_only=1, allow_on_submit=1),

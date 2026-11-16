@@ -464,6 +464,8 @@ def get_call_status(call_log: str, sync_provider: int | str = 1) -> dict[str, An
         "ai_summary": doc.ai_summary,
         "ai_next_action": doc.ai_next_action,
         "disposition": doc.disposition,
+        "disposition_at": doc.disposition_at,
+        "disposition_by": doc.disposition_by,
         "disposition_notes": doc.disposition_notes,
         "recording_url": doc.recording_url,
         "recording_download_url": recording_proxy_url(doc.name) if doc.recording_url else "",
