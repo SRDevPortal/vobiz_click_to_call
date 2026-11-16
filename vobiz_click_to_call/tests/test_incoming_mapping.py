@@ -213,15 +213,34 @@ class TestIncomingMappingSource(unittest.TestCase):
         self.assertIn("assign_unknown_inbound_lead(lead.name, target.get(\"user\"))", source)
         self.assertIn("publish_callback_notification(call_log, None, customer_number, did_number, agent_mobile)", source)
 
-    def test_unknown_lead_defaults_follow_vobiz_ai_defaulting(self):
-        source = self.inbound_source
-        start = source.index("def unknown_inbound_lead_defaults")
-        end = source.index("def _first_doc", start)
-        defaults_source = source[start:end]
+    def test_unknown_lead_defaults_use_explicit_did_mapping(self):
+        import ast
 
-        self.assertIn('"status": mapping.get("default_lead_status") or "Select Option"', defaults_source)
-        self.assertIn('getattr(ai_settings, "default_pipeline", None) or _first_doc("SR Lead Pipeline")', defaults_source)
-        self.assertIn('getattr(ai_settings, "default_platform", None) or _first_doc("SR Lead Platform")', defaults_source)
+        module = ast.parse(self.inbound_source)
+        function = next(
+            node for node in module.body
+            if isinstance(node, ast.FunctionDef) and node.name == "unknown_inbound_lead_defaults"
+        )
+        namespace = {}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), str(INBOUND_API), "exec"), namespace)
+        defaults = namespace["unknown_inbound_lead_defaults"]
+
+        self.assertEqual(defaults({
+            "default_lead_status": "New",
+            "default_pipeline": "Inbound",
+            "default_platform": "Phone",
+            "default_source": "DID",
+        }), {
+            "status": "New", "pipeline": "Inbound", "platform": "Phone", "source": "DID",
+        })
+        # An unconfigured DID must not silently choose an unrelated pipeline.
+        self.assertEqual(defaults({}), {
+            "status": "Select Option", "pipeline": "", "platform": "", "source": "",
+        })
+        self.assertEqual(defaults({
+            "default_lead_status": None, "default_pipeline": None,
+            "default_platform": None, "default_source": None,
+        }), defaults({}))
 
     def test_lead_creation_bypasses_field_guards_without_skipping_other_hooks(self):
         source = self.inbound_source
