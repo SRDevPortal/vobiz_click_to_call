@@ -138,8 +138,20 @@ def enqueue_pending_recovery() -> dict:
         "Vobiz User Mapping", filters={"name": [">", cursor], "current_call_log": ["is", "set"]},
         fields=["name", "current_call_log"], order_by="name asc", limit_page_length=RECOVERY_BATCH_SIZE,
     )
+    calls = {}
+    if mappings:
+        calls = {row.name: row for row in frappe.get_all(
+            "Vobiz Call Log", filters={"name": ["in", list({m.current_call_log for m in mappings})]},
+            fields=["name", "status", "modified"], limit_page_length=len(mappings),
+        )}
+    queued = 0
     for mapping in mappings:
+        call = calls.get(mapping.current_call_log)
+        if call and call.status not in TERMINAL_STATUSES and call.modified:
+            if frappe.utils.time_diff_in_seconds(frappe.utils.now(), call.modified) < 60:
+                continue  # The worker would return immediately for this same state.
         enqueue_recovery(mapping.current_call_log, mapping.name)
+        queued += 1
     cache.set_value("vobiz:mapping-recovery-cursor",
                     mappings[-1].name if len(mappings) == RECOVERY_BATCH_SIZE else "", expires_in_sec=3600)
-    return {"checked": len(mappings), "queued": len(mappings)}
+    return {"checked": len(mappings), "queued": queued}
