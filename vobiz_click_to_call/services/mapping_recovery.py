@@ -24,11 +24,11 @@ def enqueue_recovery(call_log: str, mapping_name: str | None = None) -> None:
     )
 
 
-def recover_mapping(call_log: str, mapping_name: str | None = None) -> None:
-    """Background-job boundary: database conflicts retry this whole transaction."""
+def recover_mapping(call_log: str, mapping_name: str | None = None) -> dict | None:
+    """Defer contention to the periodic scanner without occupying a worker."""
     try:
         if mapping_name:
-            _recover_locked(mapping_name, call_log)
+            _recover_locked(mapping_name, call_log, nowait=True)
         else:
             names = frappe.get_all(
                 "Vobiz User Mapping", filters={"current_call_log": call_log},
@@ -36,8 +36,11 @@ def recover_mapping(call_log: str, mapping_name: str | None = None) -> None:
             )
             for name in names:
                 enqueue_recovery(call_log, name)
-    except (frappe.QueryDeadlockError, frappe.QueryTimeoutError) as exc:
-        raise frappe.RetryBackgroundJobError from exc
+    except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
+        frappe.db.rollback()
+        # current_call_log is the durable recovery marker. The minute scanner
+        # retries it; never clear the pointer or assume the provider call ended.
+        return {"status": "deferred", "reason": "database_busy"}
 
 
 def recover_final_mapping(mapping_name: str, call_log: str) -> bool:
@@ -49,19 +52,20 @@ def recover_final_mapping(mapping_name: str, call_log: str) -> bool:
     return changed
 
 
-def _recover_locked(mapping_name: str, call_log: str, *, terminal_only=False) -> bool:
+def _recover_locked(mapping_name: str, call_log: str, *, terminal_only=False, nowait=False) -> bool:
+    lock = "FOR UPDATE NOWAIT" if nowait else "FOR UPDATE"
     mappings = frappe.db.sql(
-        """SELECT name, user, enabled, availability_status, auto_available_after_call,
+        f"""SELECT name, user, enabled, availability_status, auto_available_after_call,
                   current_call_log
-           FROM `tabVobiz User Mapping` WHERE name=%s FOR UPDATE""",
+           FROM `tabVobiz User Mapping` WHERE name=%s {lock}""",
         (mapping_name,), as_dict=True,
     )
     if not mappings or mappings[0].current_call_log != call_log:
         return  # A delayed callback must never release a newer call.
     mapping = mappings[0]
     calls = frappe.db.sql(
-        """SELECT name, status, request_json, modified FROM `tabVobiz Call Log`
-           WHERE name=%s FOR UPDATE""", (call_log,), as_dict=True,
+        f"""SELECT name, status, request_json, modified FROM `tabVobiz Call Log`
+           WHERE name=%s {lock}""", (call_log,), as_dict=True,
     )
     call = calls[0] if calls else None
     if terminal_only and (not call or call.status not in TERMINAL_STATUSES):

@@ -162,11 +162,21 @@ class MappingRecoveryTests(unittest.TestCase):
             recovery.reconcile_legacy_call("CALL")
         enqueue.assert_not_called()
 
-    def test_deadlock_requests_whole_job_retry(self):
-        self.db.sql.side_effect = frappe.QueryDeadlockError("deadlock")
-        with self.assertRaises(frappe.RetryBackgroundJobError):
-            recovery.recover_mapping("CALL", "MAP")
-        self.db.commit.assert_not_called()
+    def test_background_contention_defers_without_changing_mapping(self):
+        for error in (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
+            self.db.reset_mock()
+            self.db.sql.side_effect = error("busy")
+            result = recovery.recover_mapping("CALL", "MAP")
+            self.assertEqual(result, {"status": "deferred", "reason": "database_busy"})
+            self.assertIn("FOR UPDATE NOWAIT", self.db.sql.call_args.args[0])
+            self.db.rollback.assert_called_once()
+            self.db.commit.assert_not_called()
+            self.db.set_value.assert_not_called()
+
+    def test_callback_worker_opts_in_without_changing_sync_default(self):
+        with patch.object(history, "append_callback") as append:
+            history.append_callback_job("CALL", "hangup", {"event": 1})
+        append.assert_called_once_with(call_log="CALL", event="hangup", payload={"event": 1}, nowait=True)
 
     def test_hook_does_not_swallow_database_failure(self):
         with patch.object(call, "restore_mapping_after_call", side_effect=frappe.QueryDeadlockError("deadlock")):
