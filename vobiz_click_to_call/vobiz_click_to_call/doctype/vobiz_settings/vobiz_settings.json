@@ -58,6 +58,7 @@
   "encounter_queue_filters",
   "ndr_queue_section",
   "enable_ndr_queue",
+  "enable_ndr_dialpad",
   "ndr_shipkia_stages_picker",
   "ndr_shipkia_statuses_picker",
   "ndr_shipkia_stages",
@@ -438,6 +439,13 @@
    "fieldtype": "Check",
    "label": "Enable NDR Tab",
    "default": "0"
+  },
+  {
+   "default": "0",
+   "description": "Allow agents with an enabled NDR user mapping to dial numbers directly from the Agent Console. Turning this off blocks new direct calls and retries; active calls can still be ended or completed.",
+   "fieldname": "enable_ndr_dialpad",
+   "fieldtype": "Check",
+   "label": "Enable NDR Dialpad"
   },
   {
    "fieldname": "ndr_shipkia_stages_picker",

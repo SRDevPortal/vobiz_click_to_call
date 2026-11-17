@@ -29,7 +29,10 @@ def assert_call_allowed(
             frappe.throw(reason)
 
     if settings.max_call_attempts_per_reference_per_day:
-        attempts = get_attempt_count_for_reference_today(reference_doctype, reference_name)
+        attempts = (get_attempt_count_for_reference_today(reference_doctype, reference_name)
+                    if reference_doctype and reference_name else frappe.db.count(
+                        "Vobiz Call Log", {"customer_number": customer_number,
+                                           "creation": ["between", today_bounds()]}))
         if attempts >= int(settings.max_call_attempts_per_reference_per_day):
             frappe.throw(_("Daily call attempt limit reached for this record."))
 

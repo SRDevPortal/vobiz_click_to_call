@@ -293,6 +293,7 @@ def get_agent_console_data(
     limit = max(5, min(frappe.utils.cint(limit) or 25, CONSOLE_QUEUE_LIMIT_MAX))
     limit_start = max(0, frappe.utils.cint(limit_start))
     agent = _agent_context()
+    from vobiz_click_to_call.services.direct_dial import allowed as direct_dial_allowed
     allowed_sources = available_main_sources()
     agent_queue_source = "\n".join(allowed_sources) or "NDR"
     queue_source = _selected_queue_source(agent_queue_source, queue_source_filter)
@@ -310,6 +311,7 @@ def get_agent_console_data(
     ) if allowed_sources and frappe.utils.cint(include_queue) else []
     return {
         "availability": get_call_capability(),
+        "direct_dial_allowed": direct_dial_allowed(agent),
         "active_call": _active_call(),
         "queue": [number_privacy.project_reference(row) for row in queue[:limit]],
         "queue_pagination": {"has_more": len(queue) > limit},

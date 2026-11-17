@@ -174,7 +174,30 @@ def start_call(
     patient_phone_selected: int | str = 0,
     ndr_encounter: str | None = None,
 ) -> dict[str, Any]:
+    return _start_call(
+        reference_doctype, reference_name, phone_field, phone_number, patient_phone_selected, ndr_encounter
+    )
+
+
+@frappe.whitelist(methods=["POST"])
+def start_direct_call(phone_number: str, client_context: str | None = None, tab_id: str | None = None):
+    from vobiz_click_to_call.services import direct_dial
+    return direct_dial.result(_start_call("", "", phone_number=phone_number, direct_dial=True))
+
+
+def _start_call(
+    reference_doctype: str,
+    reference_name: str,
+    phone_field: str | None = None,
+    phone_number: str | None = None,
+    patient_phone_selected: int | str = 0,
+    ndr_encounter: str | None = None,
+    *,
+    direct_dial: bool = False,
+) -> dict[str, Any]:
     from vobiz_click_to_call.api import ndr_outcomes
+    if direct_dial:
+        ndr_encounter = None
     ndr_encounter = ndr_outcomes.validate_start(ndr_encounter, reference_doctype, reference_name)
     log_vobiz_event(
         "Start call requested",
@@ -193,20 +216,26 @@ def start_call(
     if not settings.enabled:
         frappe.throw(_("Vobiz Click To Call is disabled."))
 
-    allowed_doctypes = get_allowed_doctypes(settings)
-    if reference_doctype not in allowed_doctypes:
-        frappe.throw(_("Calling is not enabled for {0}.").format(reference_doctype))
+    from vobiz_click_to_call.services import direct_dial as direct
+    if direct_dial:
+        customer_number, reference_doctype, reference_name, resolved_phone_field = direct.resolve_target(
+            phone_number, get_user_mapping(frappe.session.user), settings)
+        raw_customer_number = customer_number
+    else:
+        allowed_doctypes = get_allowed_doctypes(settings)
+        if reference_doctype not in allowed_doctypes:
+            frappe.throw(_("Calling is not enabled for {0}.").format(reference_doctype))
 
-    if not frappe.db.exists(reference_doctype, reference_name):
-        frappe.throw(_("{0} {1} was not found.").format(reference_doctype, reference_name))
+        if not frappe.db.exists(reference_doctype, reference_name):
+            frappe.throw(_("{0} {1} was not found.").format(reference_doctype, reference_name))
 
-    doc = frappe.get_doc(reference_doctype, reference_name)
-    if not doc.has_permission("read") and not has_mapped_patient_access(reference_doctype, reference_name):
-        frappe.throw(_("You do not have permission to call from this document."))
-    if reference_doctype == "Patient":
-        choices = _patient_primary_phone_candidates(doc, get_default_country_code(settings))
-        if len(choices) > 1 and not frappe.utils.cint(patient_phone_selected):
-            frappe.throw(_("Select the Patient number to call."))
+        doc = frappe.get_doc(reference_doctype, reference_name)
+        if not doc.has_permission("read") and not has_mapped_patient_access(reference_doctype, reference_name):
+            frappe.throw(_("You do not have permission to call from this document."))
+        if reference_doctype == "Patient":
+            choices = _patient_primary_phone_candidates(doc, get_default_country_code(settings))
+            if len(choices) > 1 and not frappe.utils.cint(patient_phone_selected):
+                frappe.throw(_("Select the Patient number to call."))
     mapping = get_user_mapping(frappe.session.user)
     if not mapping:
         frappe.throw(_("No active Vobiz user mapping found for your user."))
@@ -214,12 +243,19 @@ def start_call(
     mapping = get_user_mapping(frappe.session.user)
     if not mapping:
         frappe.throw(_("No active Vobiz user mapping found for your user."))
+    if direct_dial:
+        # Use a current locking read; a pre-lock snapshot can retain revoked access.
+        mapping = frappe.get_doc("Vobiz User Mapping", mapping["name"], for_update=True).as_dict()
+        if mapping.get("user") != frappe.session.user:
+            frappe.throw(_("Not permitted."), frappe.PermissionError)
+        direct.assert_allowed(mapping)
     unavailable_reason = get_mapping_unavailable_reason(mapping)
     if unavailable_reason:
         frappe.throw(unavailable_reason)
 
     default_country_code = get_default_country_code(settings)
-    raw_customer_number, resolved_phone_field = resolve_target_number(doc, phone_field, phone_number)
+    if not direct_dial:
+        raw_customer_number, resolved_phone_field = resolve_target_number(doc, phone_field, phone_number)
     customer_number = normalize_phone_number(raw_customer_number, default_country_code=default_country_code)
     user_mobile = normalize_phone_number(mapping["agent_mobile"], default_country_code=default_country_code)
     caller_id = get_caller_id(settings, mapping)
@@ -248,6 +284,7 @@ def start_call(
         reference_doctype=reference_doctype,
         reference_name=reference_name,
         phone_field=resolved_phone_field,
+        **({"direct_dial": True} if direct_dial else {}),
         customer_number=customer_number,
         user_mobile=user_mobile,
         caller_id=caller_id,
@@ -287,7 +324,7 @@ def start_call(
         payload["time_limit"] = int(settings.max_call_duration)
 
     before = snapshot_doc(call_log)
-    call_log.request_json = json.dumps(redact_callback_tokens(payload), indent=2)
+    call_log.request_json = json.dumps({**({"direct_dial": True} if direct_dial else {}), **redact_callback_tokens(payload)}, indent=2)
     call_log = save_doc_latest(call_log, before)
     log_vobiz_event("Provider make_call payload prepared", call_log=call_log.name, payload=redact_callback_tokens(payload))
     frappe.db.commit()
@@ -307,7 +344,7 @@ def start_call(
             call_log.caller_id = caller_id
             call_log.did_number = caller_id
             call_log.normalized_did = caller_id
-            call_log.request_json = json.dumps(redact_callback_tokens(payload), indent=2)
+            call_log.request_json = json.dumps({**({"direct_dial": True} if direct_dial else {}), **redact_callback_tokens(payload)}, indent=2)
             call_log.error_message = ""
             call_log = save_doc_latest(call_log, before)
             log_vobiz_event(
@@ -441,9 +478,12 @@ def get_call_status(call_log: str, sync_provider: int | str = 1) -> dict[str, An
     if frappe.utils.cint(sync_provider):
         sync_live_call_if_finished(doc)
 
+    from vobiz_click_to_call.services.direct_dial import is_direct_call
+
     return {
         "name": doc.name,
         "direction": doc.direction,
+        "direct_dial": is_direct_call(doc),
         "status": doc.status,
         "reference_doctype": doc.reference_doctype,
         "reference_name": doc.reference_name,
@@ -929,6 +969,7 @@ def create_call_log(
     user_mobile: str,
     caller_id: str,
     call_flow: str = "Customer First",
+    direct_dial: bool = False,
 ):
     call_log = create_outbound_call_log(
         reference_doctype=reference_doctype,
@@ -939,6 +980,7 @@ def create_call_log(
         caller_id=caller_id,
         call_flow=call_flow,
         user=frappe.session.user,
+        **({"direct_dial": True} if direct_dial else {}),
     )
     return call_log
 
