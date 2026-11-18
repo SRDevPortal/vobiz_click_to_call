@@ -19,6 +19,7 @@ from vobiz_click_to_call.api.console import is_agent_console_online
 from vobiz_click_to_call.services.call_log_update import save_doc_latest, snapshot_doc
 from vobiz_click_to_call.services.call_status import status_from_provider
 from vobiz_click_to_call.services.debug_log import log_vobiz_event
+from vobiz_click_to_call.services.direct_dial import outbound_only_callback
 from vobiz_click_to_call.services.numbers import normalize_phone_number, provider_phone_number
 from vobiz_click_to_call.services.patient_routing import patient_matches_mapping
 from vobiz_click_to_call.services.settings import (
@@ -70,7 +71,8 @@ def _route(payload):
         call_log = find_existing_inbound_call(payload)
         if call_log:
             update_inbound_call_event(call_log, payload)
-            if call_log.status in TERMINAL_STATUSES:
+            if (call_log.status in TERMINAL_STATUSES
+                    and not _request_flag(call_log, "direct_dial_callback_rejected")):
                 restore_mapping_after_call(call_log.name)
                 frappe.db.commit()
         else:
@@ -95,6 +97,8 @@ def _route(payload):
                                   (previous_route.did_number, did_number)):
             if stored and normalize_phone_number(stored, default_country_code=default_country_code) != supplied:
                 return _xml_response(_hangup_xml())
+        if _request_flag(previous_route, "direct_dial_callback_rejected"):
+            return _xml_response(_busy_xml())
         # A provider retry must reuse the committed decision, never select a
         # different agent, recreate a lead, or reopen a terminal call.
         if previous_route.status in TERMINAL_STATUSES or previous_route.call_status in {
@@ -116,6 +120,17 @@ def _route(payload):
         if str(agent or "").startswith("sip:"):
             agent = previous_route.user_mobile
         return _xml_response(_dial_agent_xml(previous_route, agent, settings))
+
+    # Decide before lead-owner, patient, fallback or unknown-caller routing.
+    # A shared DID is not globally outbound-only: match this caller's history.
+    direct_call = outbound_only_callback(customer_number, did_number, settings)
+    if direct_call:
+        create_inbound_call_log(
+            direct_call, customer_number, did_number, "", payload,
+            route_type="direct_dial_outbound_only", outbound_only=True,
+        )
+        frappe.db.commit()
+        return _xml_response(_busy_xml())
 
     existing = find_existing_reference(customer_number)
     reference_first = bool(
@@ -411,6 +426,7 @@ def create_inbound_call_log(
     target_user: str | None = None,
     route_type: str = "last_agent",
     origin_user: str | None = None,
+    outbound_only: bool = False,
 ):
     doc = frappe.get_doc(
         {
@@ -453,8 +469,23 @@ def create_inbound_call_log(
     doc.crm_lead = previous.crm_lead
     doc.patient = previous.patient
     sync_reference_links(doc)
+    if outbound_only:
+        _set_outbound_only_rejection(doc)
     doc.insert(ignore_permissions=True)
     return doc
+
+
+def _set_outbound_only_rejection(doc):
+    """Keep policy rejections distinct from an unavailable agent."""
+    _set_request_flag(doc, "direct_dial_callback_rejected", True)
+    _set_request_data(doc, "inbound_mapped_agent", False)
+    doc.status = "Busy"
+    doc.call_status = "busy"
+    doc.hangup_cause = "DIALPAD_OUTBOUND_ONLY"
+    doc.error_message = (
+        "Callback rejected: the latest outgoing call on this number was an outbound-only dialpad call."
+    )
+    doc.end_time = doc.end_time or frappe.utils.now()
 
 
 def route_unknown_inbound(
@@ -1486,6 +1517,7 @@ def find_existing_inbound_call(payload: dict[str, Any]):
 def update_inbound_call_event(doc, payload: dict[str, Any], *, commit: bool = True) -> None:
     doc = _lock_call_log(doc)
     before = snapshot_doc(doc)
+    outbound_only = _request_flag(doc, "direct_dial_callback_rejected")
     apply_provider_payload(doc, payload)
     event = _event_name(payload)
     status = str(_first_value(payload, "Status", "CallStatus", "status", "call_status") or "").strip().lower()
@@ -1518,6 +1550,10 @@ def update_inbound_call_event(doc, payload: dict[str, Any], *, commit: bool = Tr
         doc.start_time = _first_value(payload, "StartTime", "start_time") or doc.start_time or frappe.utils.now()
 
     _merge_request_payload(doc, payload)
+    if outbound_only:
+        # Late Ring/Hangup notifications cannot reopen the rejected call or
+        # turn it into an agent-offline failure. No mapping was reserved.
+        _set_outbound_only_rejection(doc)
     doc = save_doc_latest(doc, before)
     if commit:
         frappe.db.commit()
@@ -2074,6 +2110,11 @@ def _safe_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _hangup_xml() -> str:
     return "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response><Hangup /></Response>"
+
+
+def _busy_xml() -> str:
+    # https://www.vobiz.ai/docs/xml/hangup
+    return '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup reason="busy" /></Response>'
 
 
 def _xml_response(xml: str):

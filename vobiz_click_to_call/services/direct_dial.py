@@ -97,6 +97,31 @@ def is_direct_call(doc):
     return isinstance(context, dict) and context.get("direct_dial") is True
 
 
+def outbound_only_callback(customer_number, did_number, settings):
+    """Return the dialpad call responsible for this exact customer/DID callback.
+
+    Inspect the latest outgoing call, not the latest dialpad call: a subsequent
+    normal call on the same DID restores its normal callback policy. Inbound
+    retries and calls on another DID must not change that decision.
+    """
+    country = get_default_country_code(settings)
+    customer = normalize_phone_number(customer_number, default_country_code=country)
+    did = normalize_phone_number(did_number, default_country_code=country)
+    if not customer or not did:
+        return None
+    rows = frappe.get_all(
+        "Vobiz Call Log",
+        filters={
+            "source_app": "vobiz_click_to_call", "direction": "Outgoing",
+            "normalized_customer_number": customer, "normalized_did": did,
+        },
+        fields=["name", "request_json"], order_by="creation desc, name desc", limit=1,
+    )
+    if rows and is_direct_call(rows[0]):
+        return frappe.get_doc("Vobiz Call Log", rows[0].name)
+    return None
+
+
 def result(message):
     if message.get("call_log"):
         row = frappe.db.get_value("Vobiz Call Log", message["call_log"],
